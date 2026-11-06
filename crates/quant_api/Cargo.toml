@@ -1,0 +1,18 @@
+[package]
+name = "quant_api"
+description = "Request and response types of the Quant daemon's HTTP API."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+jiff = { workspace = true }
+quant_access = { workspace = true }
+quant_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

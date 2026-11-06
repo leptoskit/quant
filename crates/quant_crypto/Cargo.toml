@@ -1,0 +1,30 @@
+[package]
+name = "quant_crypto"
+description = "The vault key, how it is wrapped by a passphrase and the OS keychain, and sealing of media at rest."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["keychain"]
+# Keep the device copy of the vault key in the OS keychain (macOS Keychain,
+# Windows Credential Manager, Linux Secret Service). Mobile hosts keep it in
+# the platform keystore through the app instead.
+keychain = ["dep:keyring"]
+
+[dependencies]
+hex = { workspace = true }
+argon2 = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+getrandom = { workspace = true }
+keyring = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

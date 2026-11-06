@@ -1,0 +1,6 @@
+target/
+.DS_Store
+*.pending-snap
+*.snap.new
+/.quant-dev/
+/.claude/

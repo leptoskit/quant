@@ -1,0 +1,33 @@
+[package]
+name = "quant_store"
+description = "The encrypted vault: SQLCipher records and series, full-text search, sealed media, grants, and the audit chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["keychain"]
+keychain = ["quant_crypto/keychain"]
+
+[dependencies]
+blake3 = { workspace = true }
+jiff = { workspace = true }
+quant_access = { workspace = true }
+quant_core = { workspace = true }
+quant_crypto = { workspace = true, default-features = false }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

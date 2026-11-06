@@ -1,0 +1,31 @@
+[package]
+name = "quant_daemon"
+description = "quantd: holds the unlocked vault, runs capture, and serves the signed Quant API on a private socket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+blake3 = { workspace = true }
+getrandom = { workspace = true }
+hex = { workspace = true }
+jiff = { workspace = true }
+quant_access = { workspace = true }
+quant_api = { workspace = true }
+quant_core = { workspace = true }
+quant_store = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+quant_client = { workspace = true }
+quant_crypto = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "quant_mcp"
+description = "An MCP server that gives an AI agent access to a Quant vault, limited to the grant its owner approved."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+jiff = { workspace = true }
+quant_access = { workspace = true }
+quant_api = { workspace = true }
+quant_client = { workspace = true }
+quant_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+quant_crypto = { workspace = true }
+quant_daemon = { workspace = true }
+quant_store = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
