@@ -82,6 +82,22 @@ quant search "quarterly budget" --from -7d
 quant audit                # who read what, and whether the log was tampered with
 ```
 
+## Custom hardware
+
+Anything that can print numbers can feed Quant. Register the stream, give the device its own write-only grant, and pipe samples in:
+
+```sh
+quant stream add sensor.vest.accel --channel x:m/s2 --channel y:m/s2 --channel z:m/s2 \
+  --description "Chest vest accelerometer"
+quant derive posture --stream sensor.vest.accel --placement torso   # read posture from it
+
+quant --profile vest pair --kind device --scope sensor.vest:write
+quant approve <code>
+cat /dev/cu.usbmodem1101 | quant --profile vest ingest --stream sensor.vest.accel   # CSV: t,x,y,z
+```
+
+`quant ingest` reads CSV (`timestamp,value,…`, with an optional header naming the channels) or JSON lines, batches samples, and retries when the grant's rate limit is reached. Timestamps may be RFC 3339 or Unix seconds or milliseconds; an empty timestamp means now. With `--records`, each JSON line becomes an event record instead.
+
 ## Scopes
 
 A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a stream and its children (`sensor.vest`). Read permissions nest: `raw` includes `read`, which includes `summary`.

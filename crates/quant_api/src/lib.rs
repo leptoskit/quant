@@ -78,6 +78,9 @@ pub mod routes {
 	pub const OWNER_STATUS: &str = "/v1/owner/status";
 	/// `POST` [`StreamSpec`](quant_core::StreamSpec): register a custom stream.
 	pub const OWNER_STREAMS: &str = "/v1/owner/streams";
+	/// `GET` or `POST` the derivation settings (which accelerometers are
+	/// worn where).
+	pub const OWNER_DERIVE: &str = "/v1/owner/derive";
 	/// Header carrying an owner session token.
 	pub const OWNER_HEADER: &str = "x-quant-owner";
 }

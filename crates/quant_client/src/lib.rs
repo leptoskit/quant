@@ -562,6 +562,18 @@ impl OwnerSession {
 			.await
 	}
 
+	/// The derivation settings, as JSON.
+	pub async fn derive_config(&self) -> Result<serde_json::Value> {
+		self.call::<(), _>(Method::GET, routes::OWNER_DERIVE, None)
+			.await
+	}
+
+	/// Replace the derivation settings.
+	pub async fn set_derive_config(&self, config: &serde_json::Value) -> Result<serde_json::Value> {
+		self.call(Method::POST, routes::OWNER_DERIVE, Some(config))
+			.await
+	}
+
 	/// End the session.
 	pub async fn lock(self) -> Result<()> {
 		self.call::<(), _>(Method::POST, routes::OWNER_LOCK, None)

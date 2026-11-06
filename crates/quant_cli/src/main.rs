@@ -1,6 +1,7 @@
 //! `quant`: quantify your life, and decide which AI may read it.
 
 mod daemon;
+mod hardware;
 mod print;
 mod service;
 
@@ -104,7 +105,7 @@ enum Command {
 	/// Read the audit log and check its chain (asks for the passphrase).
 	Audit {
 		/// Entries since this time.
-		#[arg(long, default_value = "-24h")]
+		#[arg(long, default_value = "-24h", allow_hyphen_values = true)]
 		since: String,
 		/// Most entries.
 		#[arg(long, default_value_t = 100)]
@@ -116,10 +117,10 @@ enum Command {
 		#[arg(long = "stream", required = true)]
 		streams: Vec<String>,
 		/// Start.
-		#[arg(long)]
+		#[arg(long, allow_hyphen_values = true)]
 		from: String,
 		/// End.
-		#[arg(long, default_value = "now")]
+		#[arg(long, default_value = "now", allow_hyphen_values = true)]
 		to: String,
 	},
 	/// This client's grant.
@@ -183,6 +184,35 @@ enum Command {
 		/// The note.
 		text: Vec<String>,
 	},
+	/// Register custom streams for new hardware.
+	Stream {
+		#[command(subcommand)]
+		action: hardware::StreamAction,
+	},
+	/// Configure derived memory, such as where accelerometers are worn.
+	Derive {
+		#[command(subcommand)]
+		action: hardware::DeriveAction,
+	},
+	/// Send samples or records from stdin: pipe a serial port, a script, or
+	/// an export into the vault. Needs a profile with `<stream>:write`.
+	Ingest {
+		/// The stream, such as `sensor.vest.ecg`.
+		#[arg(long)]
+		stream: String,
+		/// Input format.
+		#[arg(long, value_enum, default_value_t = hardware::Format::Csv)]
+		format: hardware::Format,
+		/// Channel names in column order, unless a CSV header names them.
+		#[arg(long, value_delimiter = ',')]
+		channels: Vec<String>,
+		/// Lines are records (JSON), not samples.
+		#[arg(long)]
+		records: bool,
+		/// Seconds of samples per uploaded batch.
+		#[arg(long, default_value_t = 2)]
+		batch_seconds: u64,
+	},
 	/// Print the link (and QR code) a phone scans to reach this daemon over
 	/// the network. The daemon must be running with `--tcp`.
 	Link {
@@ -209,10 +239,10 @@ enum Command {
 #[derive(Args)]
 struct Window {
 	/// Start: RFC 3339, YYYY-MM-DD, today, yesterday, or -2h / -7d.
-	#[arg(long)]
+	#[arg(long, allow_hyphen_values = true)]
 	from: Option<String>,
 	/// End, in the same forms.
-	#[arg(long)]
+	#[arg(long, allow_hyphen_values = true)]
 	to: Option<String>,
 }
 
@@ -275,7 +305,7 @@ struct ApproveArgs {
 	unredacted: bool,
 }
 
-struct Ctx {
+pub(crate) struct Ctx {
 	paths: VaultPaths,
 	endpoint: Endpoint,
 	profile: String,
@@ -298,7 +328,7 @@ impl Ctx {
 		Ok(Client::new(self.endpoint.clone(), identity))
 	}
 
-	async fn owner(&self) -> Result<OwnerSession> {
+	pub(crate) async fn owner(&self) -> Result<OwnerSession> {
 		let passphrase =
 			rpassword::prompt_password("Vault passphrase: ").context("reading the passphrase")?;
 		Ok(OwnerSession::open(self.endpoint.clone(), &passphrase).await?)
@@ -471,6 +501,24 @@ async fn main() -> Result<()> {
 		Command::Note { text } => note(&cx, &text.join(" ")).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
 		Command::Link { host, port } => link(&cx, host, port).await,
+		Command::Stream { action } => hardware::stream(&cx, action).await,
+		Command::Derive { action } => hardware::derive(&cx, action).await,
+		Command::Ingest {
+			stream,
+			format,
+			channels,
+			records,
+			batch_seconds,
+		} => {
+			let options = hardware::Ingest {
+				stream,
+				format,
+				channels,
+				records,
+				batch_seconds,
+			};
+			hardware::ingest(&cx.client()?, options).await
+		}
 	}
 }
 

@@ -408,6 +408,37 @@ pub async fn register_stream(
 	Ok(Json(spec))
 }
 
+/// `GET /v1/owner/derive`
+pub async fn derive_config(
+	AxumState(state): Shared,
+	_owner: Owner,
+) -> ApiResult<Json<quant_derive::Config>> {
+	let config = state
+		.vault
+		.store
+		.meta("derive.config")?
+		.and_then(|json| serde_json::from_str(&json).ok())
+		.unwrap_or_default();
+	Ok(Json(config))
+}
+
+/// `POST /v1/owner/derive`
+pub async fn set_derive_config(
+	AxumState(state): Shared,
+	_owner: Owner,
+	Json(config): Json<quant_derive::Config>,
+) -> ApiResult<Json<quant_derive::Config>> {
+	let json = serde_json::to_string(&config).map_err(|e| Error::Invalid(e.to_string()))?;
+	state.vault.store.set_meta("derive.config", &json)?;
+	owner_audit(
+		&state,
+		"derive.configure",
+		"",
+		serde_json::to_value(&config).unwrap_or_default(),
+	)?;
+	Ok(Json(config))
+}
+
 /// `GET /v1/owner/status`
 pub async fn status(AxumState(state): Shared, _owner: Owner) -> ApiResult<Json<Status>> {
 	let clients = state.vault.store.clients()?;
