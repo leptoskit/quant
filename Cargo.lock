@@ -1184,12 +1184,27 @@ dependencies = [
  "quant_client",
  "quant_core",
  "quant_crypto",
+ "quant_derive",
  "quant_store",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "quant_derive"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "jiff",
+ "quant_core",
+ "quant_crypto",
+ "quant_store",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

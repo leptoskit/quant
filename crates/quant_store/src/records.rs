@@ -232,6 +232,92 @@ impl Store {
 		Ok(report)
 	}
 
+	/// Store records, replacing any with the same id. Derived records use
+	/// stable ids so recomputing them overwrites the old version.
+	pub fn replace_records(&self, records: &[Record]) -> Result<InsertReport> {
+		{
+			let mut conn = self.conn();
+			let tx = conn.transaction()?;
+			{
+				let mut delete = tx.prepare_cached("DELETE FROM records WHERE id = ?1")?;
+				for record in records {
+					delete.execute([record.id.0.as_bytes().as_slice()])?;
+				}
+			}
+			tx.commit()?;
+		}
+		self.insert_records(records)
+	}
+
+	/// Delete records Quant derived itself (from the nil device) in `stream`
+	/// starting at or after `from`, whose `derived_from` attribute is
+	/// `source`. Used before recomputing a stretch.
+	pub fn delete_derived(
+		&self,
+		stream: &StreamId,
+		source: &str,
+		from: Timestamp,
+	) -> Result<usize> {
+		Ok(self.conn().execute(
+			"DELETE FROM records WHERE stream = ?1 AND device = ?2 AND start_us >= ?3
+			 AND json_extract(data, '$.derived_from') = ?4",
+			params![
+				stream.as_str(),
+				Uuid::nil().as_bytes().as_slice(),
+				micros(from),
+				source
+			],
+		)?)
+	}
+
+	/// Read a value from the store's key/value state.
+	pub fn meta(&self, key: &str) -> Result<Option<String>> {
+		Ok(self
+			.conn()
+			.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+			.optional()?)
+	}
+
+	/// Write a value to the store's key/value state.
+	pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+		self.conn().execute(
+			"INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value \
+			 = excluded.value",
+			params![key, value],
+		)?;
+		Ok(())
+	}
+
+	/// Distinct devices that sent `stream` (or its children) in `range`.
+	pub fn series_devices(
+		&self,
+		stream: &StreamId,
+		range: TimeRange,
+	) -> Result<Vec<(StreamId, DeviceId)>> {
+		let conn = self.conn();
+		let mut statement = conn.prepare_cached(
+			"SELECT DISTINCT stream, device FROM series
+			 WHERE (stream = ?1 OR stream LIKE ?2) AND start_us < ?3 AND end_us >= ?4",
+		)?;
+		let rows = statement.query_map(
+			params![
+				stream.as_str(),
+				format!("{}.%", stream.as_str()),
+				micros(range.end),
+				micros(range.start)
+			],
+			|r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)),
+		)?;
+		rows.map(|row| {
+			let (stream, device) = row?;
+			Ok((
+				StreamId::new(stream).map_err(|_| StoreError::Corrupt("stream"))?,
+				DeviceId(Uuid::from_slice(&device).map_err(|_| StoreError::Corrupt("device"))?),
+			))
+		})
+		.collect()
+	}
+
 	/// One record by id.
 	pub fn record(&self, id: RecordId) -> Result<Option<Record>> {
 		let conn = self.conn();

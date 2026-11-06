@@ -42,10 +42,17 @@ Capture sources write to a `Sink`. In the daemon the sink writes straight into t
 - **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 
+## Derived memory
+
+The daemon recomputes derived records every ten minutes (`quant_derive`). Derived records come from the nil device, carry a `derived_from` attribute, and have ids computed from what they summarise, so recomputing replaces rather than duplicates them.
+
+- **Posture.** Each configured accelerometer is read in 5-second windows. The mean vector is gravity, so its angle to the sensor's "up" axis is the tilt; the RMS spread around it is movement. Movement above 0.8 m/s² is walking and above 3.5 m/s² running. Otherwise a torso sensor (chest strap, vest) reads upright under 35°, reclined under 60°, and lying beyond; a thigh sensor reads standing or sitting-or-lying; a loose sensor (a phone) only reads still. A torso and a thigh sensor together tell sitting from standing. Windows merge into `motion.posture` spans, and a blip shorter than 20 seconds between two spans of the same posture is absorbed.
+- **Daily summaries.** One `memory.daily` record per local day: screen time by app, steps, heart rate range with a resting estimate (the mean of the lowest tenth of minute averages), sleep by stage for the night ending that day (18:00 to 18:00), posture totals, and minutes of speech, with a one-paragraph text that search and agents can read.
+
 ## Roadmap
 
 1. macOS capture in the daemon, with a menu bar app (leptoskit) for status, pausing, and approving agents.
 2. Android collector app on leptoskit; upstream foreground service, Health Connect, and audio plugins.
 3. Encrypted sync from phone to desktop over the local network (TLS pinned at pairing), then through a relay.
-4. Derived memory: posture from motion, sleep and resting heart rate, activity episodes and daily summaries, each traceable to the records it came from and purged with them.
+4. More derived memory: hourly episodes joining screen, place, posture, and heart rate; gait from leg sensors; purging derived records with their sources.
 5. iOS collector (HealthKit, background modes).

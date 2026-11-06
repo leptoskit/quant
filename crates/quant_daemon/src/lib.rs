@@ -75,6 +75,37 @@ pub fn spawn_maintenance(state: Arc<State>) -> tokio::task::JoinHandle<()> {
 	})
 }
 
+/// Keep derived memory (posture spans, daily summaries) up to date, every
+/// ten minutes. The configuration lives in the vault under `derive.config`.
+pub fn spawn_derivation(state: Arc<State>) -> tokio::task::JoinHandle<()> {
+	tokio::spawn(async move {
+		let mut tick = tokio::time::interval(Duration::from_mins(10));
+		loop {
+			tick.tick().await;
+			let deriving = Arc::clone(&state);
+			let outcome = tokio::task::spawn_blocking(move || {
+				let store = &deriving.vault.store;
+				let config = store
+					.meta("derive.config")?
+					.and_then(|json| serde_json::from_str(&json).ok())
+					.unwrap_or_default();
+				quant_derive::run(
+					store,
+					&config,
+					Timestamp::now(),
+					&jiff::tz::TimeZone::system(),
+				)
+			})
+			.await;
+			match outcome {
+				Ok(Ok(report)) => tracing::debug!(?report, "derived"),
+				Ok(Err(error)) => tracing::warn!(%error, "derivation failed"),
+				Err(error) => tracing::warn!(%error, "derivation panicked"),
+			}
+		}
+	})
+}
+
 /// Serve on a Unix socket at `path`, readable and writable by the owner
 /// only. Returns when `shutdown` resolves.
 #[cfg(unix)]
