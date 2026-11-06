@@ -53,6 +53,10 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::OWNER_AUDIT, post(owner::audit))
 		.route(routes::OWNER_STATUS, get(owner::status))
 		.route(routes::OWNER_STREAMS, post(owner::register_stream))
+		.route(
+			routes::OWNER_DERIVE,
+			get(owner::derive_config).post(owner::set_derive_config),
+		)
 		.layer(DefaultBodyLimit::max(authn::MAX_BODY))
 		.with_state(state)
 }

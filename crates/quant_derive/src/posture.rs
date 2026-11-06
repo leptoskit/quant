@@ -118,19 +118,20 @@ fn tilt_degrees(gravity: [f64; 3], up: [f64; 3]) -> Option<f64> {
 	Some(cos.clamp(-1.0, 1.0).acos().to_degrees())
 }
 
-/// Classify one window of `[x, y, z]` rows.
-pub fn classify(rows: &[[f64; 3]], placement: Placement, up: [f64; 3]) -> Option<Posture> {
-	if rows.len() < 3 {
-		return None;
-	}
-	let n = rows.len() as f64;
+fn mean_of(rows: &[[f64; 3]]) -> [f64; 3] {
+	let n = rows.len().max(1) as f64;
 	let mut mean = [0.0; 3];
 	for row in rows {
 		for axis in 0..3 {
 			mean[axis] += row[axis] / n;
 		}
 	}
-	let movement = (rows
+	mean
+}
+
+fn rms_around(rows: &[[f64; 3]], mean: [f64; 3]) -> f64 {
+	let n = rows.len().max(1) as f64;
+	(rows
 		.iter()
 		.map(|row| {
 			(0..3)
@@ -139,7 +140,20 @@ pub fn classify(rows: &[[f64; 3]], placement: Placement, up: [f64; 3]) -> Option
 		})
 		.sum::<f64>()
 		/ n)
-		.sqrt();
+		.sqrt()
+}
+
+/// Classify one window of `[x, y, z]` rows.
+pub fn classify(rows: &[[f64; 3]], placement: Placement, up: [f64; 3]) -> Option<Posture> {
+	if rows.len() < 3 {
+		return None;
+	}
+	let mean = mean_of(rows);
+	// Movement is the spread around the mean in each half of the window, and
+	// the smaller of the two: walking shakes both halves, while a single
+	// change of orientation (sitting up) only moves the mean between them.
+	let (first, second) = rows.split_at(rows.len() / 2);
+	let movement = rms_around(first, mean_of(first)).min(rms_around(second, mean_of(second)));
 	if movement > RUNNING {
 		return Some(Posture::Running);
 	}
@@ -363,6 +377,17 @@ mod tests {
 		assert_eq!(
 			classify(&still([0.0, 0.0, G], 50), Placement::Loose, up),
 			Some(Posture::Still)
+		);
+	}
+
+	#[test]
+	fn sitting_up_is_not_movement() {
+		let mut rows = still([0.0, 0.0, G], 25);
+		rows.extend(still([0.0, G, 0.0], 25));
+		let posture = classify(&rows, Placement::Torso, default_up());
+		assert!(
+			!matches!(posture, Some(Posture::Walking | Posture::Running)),
+			"{posture:?}"
 		);
 	}
 
