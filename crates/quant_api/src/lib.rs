@@ -101,6 +101,10 @@ pub struct Hello {
 	pub version: String,
 	/// The vault's id.
 	pub vault_id: String,
+	/// SHA-256 fingerprint of the daemon's TLS certificate, for devices that
+	/// connect over the network.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tls_fingerprint: Option<String>,
 }
 
 /// What kind of client is pairing.

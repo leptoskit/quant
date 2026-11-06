@@ -95,6 +95,11 @@ pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
 		service: "quant".into(),
 		version: env!("CARGO_PKG_VERSION").into(),
 		vault_id: state.vault.manifest.vault_id.clone(),
+		tls_fingerprint: state
+			.tls_fingerprint
+			.read()
+			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			.clone(),
 	})
 }
 

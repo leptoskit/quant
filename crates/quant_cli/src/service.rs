@@ -11,7 +11,11 @@ use quant_store::VaultPaths;
 #[derive(Subcommand)]
 pub enum Action {
 	/// Start the daemon at login and keep it running.
-	Install,
+	Install {
+		/// Also serve phones over TLS on this address, such as `0.0.0.0:7717`.
+		#[arg(long)]
+		tcp: Option<std::net::SocketAddr>,
+	},
 	/// Stop it and remove it.
 	Uninstall,
 	/// Whether it is installed and running.
@@ -65,7 +69,7 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 	let plist = plist_path();
 	let domain = format!("gui/{}", uid());
 	match action {
-		Action::Install => {
+		Action::Install { tcp } => {
 			if !paths.exists() {
 				bail!(
 					"no vault at {}; run `quant init` first",
@@ -85,7 +89,7 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 		<string>{exe}</string>
 		<string>--vault</string>
 		<string>{vault}</string>
-		<string>daemon</string>
+		<string>daemon</string>{tcp}
 	</array>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -98,6 +102,9 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 </plist>
 "#,
 				exe = escape(&exe.display().to_string()),
+				tcp = tcp
+					.map(|a| format!("\n\t\t<string>--tcp</string>\n\t\t<string>{a}</string>"))
+					.unwrap_or_default(),
 				vault = escape(&paths.root.display().to_string()),
 				out = escape(&logs.join("quantd.out.log").display().to_string()),
 				err = escape(&logs.join("quantd.err.log").display().to_string()),
@@ -151,15 +158,16 @@ fn linux(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 	let unit = unit_path();
 	let systemctl = |args: &[&str]| Command::new("systemctl").arg("--user").args(args).status();
 	match action {
-		Action::Install => {
+		Action::Install { tcp } => {
 			std::fs::create_dir_all(unit.parent().context("unit dir")?)?;
 			std::fs::write(
 				&unit,
 				format!(
 					"[Unit]\nDescription=Quant daemon\n\n[Service]\nExecStart={} --vault {} \
-					 daemon\nRestart=on-failure\nNice=5\n\n[Install]\nWantedBy=default.target\n",
+					 daemon{}\nRestart=on-failure\nNice=5\n\n[Install]\nWantedBy=default.target\n",
 					exe.display(),
-					paths.root.display()
+					paths.root.display(),
+					tcp.map(|a| format!(" --tcp {a}")).unwrap_or_default(),
 				),
 			)?;
 			systemctl(&["daemon-reload"])?;

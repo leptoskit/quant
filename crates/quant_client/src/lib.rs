@@ -7,6 +7,8 @@
 //! opened with the passphrase.
 
 mod identity;
+mod pinned;
+pub use pinned::parse_fingerprint;
 pub mod when;
 
 use std::path::PathBuf;
@@ -62,8 +64,45 @@ use serde::de::DeserializeOwned;
 pub enum Endpoint {
 	/// A Unix socket path.
 	Unix(PathBuf),
-	/// `host:port` over TCP.
+	/// `host:port` over plain TCP (loopback only; requests are signed but
+	/// not encrypted).
 	Tcp(String),
+	/// `host:port` over TLS, trusting only the certificate with this
+	/// SHA-256 fingerprint.
+	Tls {
+		/// `host:port`.
+		address: String,
+		/// The pinned certificate fingerprint.
+		fingerprint: [u8; 32],
+	},
+}
+
+impl Endpoint {
+	/// Parse `unix:/path`, `tcp://host:port`, `tls://host:port#<hex
+	/// fingerprint>`, a bare path, or a bare `host:port`.
+	pub fn parse(s: &str) -> Result<Self, String> {
+		if let Some(rest) = s.strip_prefix("tls://") {
+			let (address, fingerprint) = rest
+				.split_once('#')
+				.ok_or("a tls:// address needs #<certificate fingerprint>")?;
+			let fingerprint =
+				parse_fingerprint(fingerprint).ok_or("bad certificate fingerprint")?;
+			return Ok(Endpoint::Tls {
+				address: address.to_owned(),
+				fingerprint,
+			});
+		}
+		if let Some(address) = s.strip_prefix("tcp://") {
+			return Ok(Endpoint::Tcp(address.to_owned()));
+		}
+		if let Some(path) = s.strip_prefix("unix:") {
+			return Ok(Endpoint::Unix(path.into()));
+		}
+		if s.contains('/') {
+			return Ok(Endpoint::Unix(s.into()));
+		}
+		Ok(Endpoint::Tcp(s.to_owned()))
+	}
 }
 
 /// A failed call.
@@ -120,7 +159,7 @@ async fn send_typed(
 ) -> Result<(StatusCode, Option<String>, Bytes)> {
 	let shown = match endpoint {
 		Endpoint::Unix(path) => path.display().to_string(),
-		Endpoint::Tcp(address) => address.clone(),
+		Endpoint::Tcp(address) | Endpoint::Tls { address, .. } => address.clone(),
 	};
 	let unreachable = |source| {
 		ClientError::Unreachable {
@@ -174,6 +213,19 @@ async fn send_typed(
 					.await
 					.map_err(unreachable)?
 			)
+		}
+		Endpoint::Tls {
+			address,
+			fingerprint,
+		} => {
+			let tcp = tokio::net::TcpStream::connect(address)
+				.await
+				.map_err(unreachable)?;
+			let connector =
+				pinned::connector(*fingerprint).map_err(|e| ClientError::Http(e.to_string()))?;
+			let name = rustls::pki_types::ServerName::try_from("quantd.local").expect("valid name");
+			let tls = connector.connect(name, tcp).await.map_err(unreachable)?;
+			exchange!(tls)
 		}
 	}
 }

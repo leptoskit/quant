@@ -38,6 +38,8 @@ pub struct State {
 	pub capture: Mutex<BTreeMap<String, CaptureStatus>>,
 	/// When the daemon started.
 	pub started_at: Timestamp,
+	/// The TLS certificate fingerprint, once a network listener is up.
+	pub tls_fingerprint: RwLock<Option<String>>,
 }
 
 /// Owner sessions, keyed by token hash, and the unlock throttle.
@@ -117,6 +119,7 @@ impl State {
 			owner: Mutex::new(OwnerGate::default()),
 			capture: Mutex::new(BTreeMap::new()),
 			started_at: Timestamp::now(),
+			tls_fingerprint: RwLock::new(None),
 		})
 	}
 

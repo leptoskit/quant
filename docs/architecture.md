@@ -24,6 +24,8 @@ A vault is a directory holding `vault.json` (the manifest), `quant.db` (SQLCiphe
 
 Nothing reads the vault directly except the daemon, `quantd`, which listens on a Unix socket readable only by the owner's account (inside the vault, or in a private `/tmp/quant-<uid>` directory when the vault path is too long for a socket).
 
+**Network.** `quant daemon --tcp 0.0.0.0:7717` also serves the API over TLS for phones and sensor bridges. The daemon makes a self-signed certificate once and keeps it in the vault; `quant link` prints a `quant://link?addr=…&fp=…&vault=…` link and QR code, and devices pin that SHA-256 fingerprint instead of trusting any certificate authority. Requests over the network are signed exactly as on the socket.
+
 **Clients.** Every client (the CLI, an MCP server instance, a phone, a sensor bridge) generates its own Ed25519 key and asks to pair. Pairing creates a pending client with no access; at most 16 may wait at once. Every later request is signed over its method, path, timestamp, nonce, and body hash. The daemon refuses stale timestamps (±60 s), altered requests, and replayed nonces. The daemon stores only public keys, so a copy of the database cannot impersonate anyone.
 
 **Owner.** Approving or refusing pairings, revoking grants, purging, registering streams, and reading the full audit log need an owner session, opened with the passphrase and lasting 15 minutes. Wrong guesses double the wait before the next attempt, up to an hour. The CLI reads the passphrase from the terminal, never from an argument or environment variable.
@@ -53,6 +55,6 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 
 1. macOS capture in the daemon, with a menu bar app (leptoskit) for status, pausing, and approving agents.
 2. Android collector app on leptoskit; upstream foreground service, Health Connect, and audio plugins.
-3. Encrypted sync from phone to desktop over the local network (TLS pinned at pairing), then through a relay.
+3. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
 4. More derived memory: hourly episodes joining screen, place, posture, and heart rate; gait from leg sensors; purging derived records with their sources.
 5. iOS collector (HealthKit, background modes).

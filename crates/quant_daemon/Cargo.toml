@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rcgen = { workspace = true }
+rustls = { workspace = true }
+sha2 = { workspace = true }
+tokio-rustls = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
 getrandom = { workspace = true }

@@ -42,7 +42,9 @@ struct Cli {
 	/// The vault directory. Defaults to $`QUANT_HOME` or the platform data dir.
 	#[arg(long, global = true, env = "QUANT_HOME")]
 	vault: Option<PathBuf>,
-	/// Reach the daemon over TCP (`host:port`) instead of the vault's socket.
+	/// Reach the daemon somewhere other than the vault's socket:
+	/// `tls://host:port#<fingerprint>`, `tcp://127.0.0.1:port`, or a socket
+	/// path.
 	#[arg(long, global = true, env = "QUANT_ADDR")]
 	addr: Option<String>,
 	/// Which client identity to use for queries.
@@ -181,6 +183,17 @@ enum Command {
 		/// The note.
 		text: Vec<String>,
 	},
+	/// Print the link (and QR code) a phone scans to reach this daemon over
+	/// the network. The daemon must be running with `--tcp`.
+	Link {
+		/// The address phones should use; defaults to this machine's LAN
+		/// address.
+		#[arg(long)]
+		host: Option<String>,
+		/// The port `quant daemon --tcp` listens on.
+		#[arg(long, default_value_t = 7717)]
+		port: u16,
+	},
 	/// Run the MCP server on stdio for an AI agent.
 	Mcp {
 		/// Scopes to ask for if this profile has not paired yet.
@@ -307,10 +320,10 @@ impl Ctx {
 async fn main() -> Result<()> {
 	let cli = Cli::parse();
 	let paths = VaultPaths::new(cli.vault.clone().unwrap_or_else(VaultPaths::default_root));
-	let endpoint = cli
-		.addr
-		.clone()
-		.map_or_else(|| Endpoint::Unix(paths.socket()), Endpoint::Tcp);
+	let endpoint = match &cli.addr {
+		Some(addr) => Endpoint::parse(addr).map_err(anyhow::Error::msg)?,
+		None => Endpoint::Unix(paths.socket()),
+	};
 	let connects = !matches!(
 		cli.command,
 		Command::Init { .. } | Command::Daemon(_) | Command::Service { .. }
@@ -457,6 +470,7 @@ async fn main() -> Result<()> {
 		}
 		Command::Note { text } => note(&cx, &text.join(" ")).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
+		Command::Link { host, port } => link(&cx, host, port).await,
 	}
 }
 
@@ -632,6 +646,43 @@ async fn mcp(cx: &Ctx, scopes: &[String], setup: bool) -> Result<()> {
 	};
 	quant_mcp::serve_stdio(client).await?;
 	Ok(())
+}
+
+async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
+	let hello = Client::new(cx.endpoint.clone(), Identity::generate("link"))
+		.hello()
+		.await?;
+	let fingerprint = hello.tls_fingerprint.context(
+		"the daemon is not listening on the network; start it with `quant daemon --tcp \
+		 0.0.0.0:7717`",
+	)?;
+	let host = match host {
+		Some(host) => host,
+		None => lan_address().context("could not find this machine's LAN address; pass --host")?,
+	};
+	let link = format!(
+		"quant://link?addr={host}:{port}&fp={fingerprint}&vault={}",
+		hello.vault_id
+	);
+	let code = qrcode::QrCode::new(link.as_bytes())?;
+	println!(
+		"{}",
+		code.render::<qrcode::render::unicode::Dense1x2>()
+			.quiet_zone(true)
+			.build()
+	);
+	println!("{link}\n");
+	println!("Scan this in the Quant app on your phone. It will ask to pair; approve it with");
+	println!("`quant approve <code>` and the scopes the phone should write, such as");
+	println!("--scope health:write --scope motion:write --scope location:write.");
+	Ok(())
+}
+
+/// The address this machine uses to reach the network (no packet is sent).
+fn lan_address() -> Option<String> {
+	let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+	socket.connect("192.0.2.1:9").ok()?;
+	Some(socket.local_addr().ok()?.ip().to_string())
 }
 
 fn hostname() -> String {
