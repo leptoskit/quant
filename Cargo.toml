@@ -19,11 +19,14 @@ quant_client = { path = "crates/quant_client" }
 quant_daemon = { path = "crates/quant_daemon" }
 quant_derive = { path = "crates/quant_derive" }
 quant_mcp = { path = "crates/quant_mcp" }
+quant_capture_macos = { path = "crates/quant_capture_macos" }
 
 anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 blake3 = "1"
+block2 = "0.6"
+cpal = "0.18"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
@@ -38,6 +41,15 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 jiff = { version = "0.2", features = ["serde"] }
 qrcode = { version = "0.14", default-features = false }
 rcgen = "0.14"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-av-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-foundation = "0.3"
+objc2-image-io = "0.3"
+objc2-screen-capture-kit = "0.3"
+objc2-vision = "0.3"
 regex = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 sha2 = "0.10"
@@ -52,6 +64,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+whisper-rs = "0.16"
 zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]

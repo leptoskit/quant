@@ -81,6 +81,10 @@ pub mod routes {
 	/// `GET` or `POST` the derivation settings (which accelerometers are
 	/// worn where).
 	pub const OWNER_DERIVE: &str = "/v1/owner/derive";
+	/// What this machine captures (owner).
+	pub const OWNER_CAPTURE: &str = "/v1/owner/capture";
+	/// Pause or resume this machine's capture (owner).
+	pub const OWNER_CAPTURE_PAUSE: &str = "/v1/owner/capture/pause";
 	/// Header carrying an owner session token.
 	pub const OWNER_HEADER: &str = "x-quant-owner";
 }
@@ -591,8 +595,31 @@ pub struct Status {
 	pub started_at: Timestamp,
 	/// Capture sources.
 	pub capture: Vec<CaptureStatus>,
+	/// Whether the owner paused capture.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub paused: Option<Paused>,
 	/// Clients waiting for approval.
 	pub pending_clients: usize,
 	/// Live grants.
 	pub active_grants: usize,
+}
+
+/// How long capture is paused for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Paused {
+	/// Until the owner resumes it.
+	UntilResumed,
+	/// Until then.
+	Until(Timestamp),
+}
+
+/// `POST /v1/owner/capture/pause`
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PauseRequest {
+	/// Pause (`true`) or resume (`false`).
+	pub paused: bool,
+	/// End the pause by itself after this many minutes.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub minutes: Option<u32>,
 }

@@ -19,6 +19,7 @@ hex = { workspace = true }
 jiff = { workspace = true }
 quant_access = { workspace = true }
 quant_api = { workspace = true }
+quant_capture_macos = { workspace = true }
 quant_core = { workspace = true }
 quant_derive = { workspace = true }
 quant_store = { workspace = true }

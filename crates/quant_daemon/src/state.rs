@@ -36,6 +36,8 @@ pub struct State {
 	pub owner: Mutex<OwnerGate>,
 	/// Capture sources by name.
 	pub capture: Mutex<BTreeMap<String, CaptureStatus>>,
+	/// This machine's capture sources.
+	pub capture_control: crate::capture::Control,
 	/// When the daemon started.
 	pub started_at: Timestamp,
 	/// The TLS certificate fingerprint, once a network listener is up.
@@ -118,6 +120,7 @@ impl State {
 			verifier: Mutex::new(RequestVerifier::new()),
 			owner: Mutex::new(OwnerGate::default()),
 			capture: Mutex::new(BTreeMap::new()),
+			capture_control: crate::capture::Control::default(),
 			started_at: Timestamp::now(),
 			tls_fingerprint: RwLock::new(None),
 		})
