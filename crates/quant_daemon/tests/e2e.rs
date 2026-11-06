@@ -481,3 +481,56 @@ async fn owner_can_purge() {
 		.unwrap();
 	assert_eq!(left.records, [] as [quant_api::ServedRecord; 0]);
 }
+
+#[tokio::test]
+async fn devices_connect_over_tls_only_to_the_pinned_certificate() {
+	let h = start().await;
+	let identity = quant_daemon::tls::TlsIdentity::load_or_create(&h.state.vault.store).unwrap();
+	let again = quant_daemon::tls::TlsIdentity::load_or_create(&h.state.vault.store).unwrap();
+	assert_eq!(identity.fingerprint(), again.fingerprint());
+
+	let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+	let address = probe.local_addr().unwrap();
+	drop(probe);
+	let serving = Arc::clone(&h.state);
+	tokio::spawn(async move {
+		quant_daemon::serve_tls(serving, address, &identity, std::future::pending())
+			.await
+			.unwrap();
+	});
+	tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+	let fingerprint = quant_client::parse_fingerprint(&again.fingerprint()).unwrap();
+	let pinned = Endpoint::Tls {
+		address: address.to_string(),
+		fingerprint,
+	};
+	let hello = Client::new(pinned.clone(), Identity::generate("phone"))
+		.hello()
+		.await
+		.unwrap();
+	assert_eq!(
+		hello.tls_fingerprint.as_deref(),
+		Some(again.fingerprint().as_str())
+	);
+
+	let mut phone = Client::new(pinned, Identity::generate("Pixel"));
+	let pairing = phone
+		.pair(ClientKind::Device, &["health:write".into()])
+		.await
+		.unwrap();
+	assert_eq!(pairing.status, ClientStatus::Pending);
+
+	let wrong = Endpoint::Tls {
+		address: address.to_string(),
+		fingerprint: [7; 32],
+	};
+	assert!(
+		Client::new(wrong, Identity::generate("mitm"))
+			.hello()
+			.await
+			.is_err()
+	);
+	assert!(Endpoint::parse(&format!("tls://{address}#{}", again.fingerprint())).is_ok());
+	assert!(Endpoint::parse(&format!("tls://{address}")).is_err());
+}

@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rustls = { workspace = true }
+sha2 = { workspace = true }
+tokio-rustls = { workspace = true }
 hex = { workspace = true }
 bytes = "1"
 http-body-util = { workspace = true }

@@ -12,8 +12,8 @@ use quant_store::VaultPaths;
 /// Options for `quant daemon`.
 #[derive(Args)]
 pub struct DaemonArgs {
-	/// Also listen on TCP, for phones on the local network. Requests are
-	/// still signed; only expose this on a network you trust.
+	/// Also listen on the network over TLS, for phones and sensor bridges,
+	/// such as `0.0.0.0:7717`. Run `quant link` to pair a phone.
 	#[arg(long)]
 	tcp: Option<SocketAddr>,
 }
@@ -75,7 +75,9 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	if let Some(address) = args.tcp {
 		let (serving, mut stopped) = (Arc::clone(&state), stop.subscribe());
 		tasks.push(tokio::spawn(async move {
-			quant_daemon::serve_tcp(serving, address, async move {
+			let identity = quant_daemon::tls::TlsIdentity::load_or_create(&serving.vault.store)
+				.map_err(std::io::Error::other)?;
+			quant_daemon::serve_tls(serving, address, &identity, async move {
 				let _ = stopped.recv().await;
 			})
 			.await

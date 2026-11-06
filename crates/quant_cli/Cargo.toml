@@ -23,6 +23,7 @@ quant_crypto = { workspace = true }
 quant_daemon = { workspace = true }
 quant_mcp = { workspace = true }
 quant_store = { workspace = true }
+qrcode = { workspace = true }
 rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

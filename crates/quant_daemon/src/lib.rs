@@ -11,6 +11,7 @@ mod ingest;
 mod owner;
 mod query;
 mod state;
+pub mod tls;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -136,16 +137,20 @@ pub async fn serve_socket(
 	result
 }
 
-/// Serve on TCP, for phones and other devices on the local network. Every
-/// request is still signed; pair devices before exposing this beyond
-/// loopback.
-pub async fn serve_tcp(
+/// Serve over TLS on TCP, for phones and other devices on the local
+/// network. Devices pin the certificate fingerprint from the pairing link.
+pub async fn serve_tls(
 	state: Arc<State>,
 	address: std::net::SocketAddr,
+	identity: &tls::TlsIdentity,
 	shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-	let listener = tokio::net::TcpListener::bind(address).await?;
-	tracing::info!(%address, "serving tcp");
+	let listener = tls::TlsListener::bind(address, identity).await?;
+	*state
+		.tls_fingerprint
+		.write()
+		.unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity.fingerprint());
+	tracing::info!(%address, fingerprint = identity.fingerprint(), "serving tls");
 	axum::serve(listener, router(state))
 		.with_graceful_shutdown(shutdown)
 		.await

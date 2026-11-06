@@ -63,6 +63,13 @@ claude mcp add quant -- quant mcp --profile claude --scope '*:summary'
 quant approve K7QD-M2XA --scope health:summary --scope apps:summary --lookback-hours 720
 ```
 
+Pair a phone over the local network (TLS, certificate pinned by the link):
+
+```sh
+quant service install --tcp 0.0.0.0:7717
+quant link                        # shows a QR code for the Quant app
+```
+
 Query from the terminal with your own, separately approved profile:
 
 ```sh
