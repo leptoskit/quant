@@ -17,6 +17,7 @@ quant_crypto = { path = "crates/quant_crypto" }
 quant_api = { path = "crates/quant_api" }
 quant_client = { path = "crates/quant_client" }
 quant_daemon = { path = "crates/quant_daemon" }
+quant_derive = { path = "crates/quant_derive" }
 quant_mcp = { path = "crates/quant_mcp" }
 
 anyhow = "1"

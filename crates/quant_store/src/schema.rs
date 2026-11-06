@@ -113,6 +113,13 @@ const MIGRATIONS: &[&str] = &[
 	) STRICT;
 	CREATE INDEX audit_by_time ON audit (at_us);
 	",
+	// 2: small key/value state, such as how far derivation has got.
+	"
+	CREATE TABLE meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	) STRICT;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

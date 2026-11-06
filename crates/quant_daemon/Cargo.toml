@@ -16,6 +16,7 @@ jiff = { workspace = true }
 quant_access = { workspace = true }
 quant_api = { workspace = true }
 quant_core = { workspace = true }
+quant_derive = { workspace = true }
 quant_store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

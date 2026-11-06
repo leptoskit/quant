@@ -42,6 +42,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_crypto`  | The vault key, its passphrase (Argon2id) and keychain copies, media sealing.                  |
 | `quant_store`   | The encrypted vault: SQLCipher records and series, full-text search, sealed media, retention. |
 | `quant_api`     | The daemon's wire types.                                                                       |
+| `quant_derive`  | Derived memory: posture spans from body-worn accelerometers, daily summaries.                 |
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
 | `quant_mcp`     | The MCP server agents talk to; its tool list follows the agent's grant.                        |

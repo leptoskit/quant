@@ -68,6 +68,7 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	let vault = open(paths)?;
 	let state = Arc::new(State::new(vault)?);
 	let maintenance = quant_daemon::spawn_maintenance(Arc::clone(&state));
+	let derivation = quant_daemon::spawn_derivation(Arc::clone(&state));
 
 	let (stop, _) = tokio::sync::broadcast::channel::<()>(1);
 	let mut tasks = Vec::new();
@@ -94,6 +95,7 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	tracing::info!("stopping");
 	let _ = stop.send(());
 	maintenance.abort();
+	derivation.abort();
 	for task in tasks {
 		task.await.context("server task")??;
 	}
