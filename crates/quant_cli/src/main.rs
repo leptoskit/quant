@@ -39,7 +39,7 @@ use quant_store::VaultPaths;
 	about = "Quantify your life, and decide which AI may read it."
 )]
 struct Cli {
-	/// The vault directory. Defaults to $`QUANT_HOME` or the platform data dir.
+	/// The vault directory. Defaults to the platform data dir.
 	#[arg(long, global = true, env = "QUANT_HOME")]
 	vault: Option<PathBuf>,
 	/// Reach the daemon somewhere other than the vault's socket:
