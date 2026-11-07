@@ -133,6 +133,26 @@ cat /dev/cu.usbmodem1101 | quant --profile vest ingest --stream sensor.vest.acce
 
 `quant ingest` reads CSV (`timestamp,value,…`, with an optional header naming the channels) or JSON lines, batches samples, and retries when the grant's rate limit is reached. Timestamps may be RFC 3339 or Unix seconds or milliseconds; an empty timestamp means now. With `--records`, each JSON line becomes an event record instead.
 
+## Who you are
+
+Quant also holds **claims** about you — preferences, values, routines, facts, relationships, goals, and commitments — each with evidence pointing at the records it came from, ranked by authority (your corrections, then what you wrote, then what Quant observed, then what an agent proposed).
+
+```sh
+quant tell "Prefers espresso after lunch" --topic coffee.timing   # states a claim
+quant profile                      # your own words first, then the rest by confidence
+quant claims list --status held    # what agents proposed, waiting for you
+quant claims approve clm_019a…     # accept a proposal (it stays marked "inferred")
+quant claims correct clm_019a… "Espresso, but never after 16:00"
+```
+
+Agents reach claims through the `memory.profile` scope: `memory.profile:summary` gives them your own words only, `:read` everything active with evidence, `:write` lets them propose (held until you approve, at most 20 per hour). Each claim carries sensitivity classes, and a grant can exclude classes outright:
+
+```sh
+quant approve K7QD-M2XA --scope memory.profile:read --scope health:summary --deny location
+```
+
+The MCP server offers `quant_profile`, `quant_propose`, and `quant_context` (a budgeted packet of claims, recent memory, and matching records sized to one task) only to grants that can use them.
+
 ## Scopes
 
 A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a stream and its children (`sensor.vest`). Read permissions nest: `raw` includes `read`, which includes `summary`.
@@ -158,7 +178,7 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `device`   | `device.battery`, `device.state`                                                            |
 | `comms`    | `comms.notification`                                                                        |
 | `sensor`   | Anything from custom hardware: `sensor.<vendor>.<channel>`                                   |
-| `memory`   | `memory.note`, `memory.episode`, `memory.daily`: what you or an agent wrote or derived      |
+| `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |
 
 ## Inspiration
 
