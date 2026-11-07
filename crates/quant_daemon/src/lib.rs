@@ -6,6 +6,7 @@
 //! approved; owner actions need the passphrase.
 
 mod authn;
+pub mod capture;
 mod error;
 mod ingest;
 mod owner;
@@ -57,6 +58,11 @@ pub fn router(state: Arc<State>) -> Router {
 			routes::OWNER_DERIVE,
 			get(owner::derive_config).post(owner::set_derive_config),
 		)
+		.route(
+			routes::OWNER_CAPTURE,
+			get(owner::capture_config).post(owner::set_capture_config),
+		)
+		.route(routes::OWNER_CAPTURE_PAUSE, post(owner::pause_capture))
 		.layer(DefaultBodyLimit::max(authn::MAX_BODY))
 		.with_state(state)
 }

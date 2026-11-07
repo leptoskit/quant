@@ -83,6 +83,11 @@ pub fn status(status: &Status) {
 		"{} active grants, {} pairings waiting",
 		status.active_grants, status.pending_clients
 	);
+	match status.paused {
+		Some(quant_api::Paused::Until(until)) => println!("capture paused until {}", local(until)),
+		Some(quant_api::Paused::UntilResumed) => println!("capture paused until resumed"),
+		None => {}
+	}
 	for source in &status.capture {
 		println!(
 			"  {:<9} {:<8} {:>8} captured{}{}",

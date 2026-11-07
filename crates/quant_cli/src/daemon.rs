@@ -16,6 +16,10 @@ pub struct DaemonArgs {
 	/// such as `0.0.0.0:7717`. Run `quant link` to pair a phone.
 	#[arg(long)]
 	tcp: Option<SocketAddr>,
+	/// Serve the vault without capturing this machine's screen, apps,
+	/// input, or microphone.
+	#[arg(long)]
+	no_capture: bool,
 }
 
 fn open(paths: &VaultPaths) -> Result<Vault> {
@@ -69,6 +73,9 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	let state = Arc::new(State::new(vault)?);
 	let maintenance = quant_daemon::spawn_maintenance(Arc::clone(&state));
 	let derivation = quant_daemon::spawn_derivation(Arc::clone(&state));
+	if !args.no_capture {
+		quant_daemon::capture::start(&state)?;
+	}
 
 	let (stop, _) = tokio::sync::broadcast::channel::<()>(1);
 	let mut tasks = Vec::new();
@@ -101,5 +108,7 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	for task in tasks {
 		task.await.context("server task")??;
 	}
+	let stopping = Arc::clone(&state);
+	tokio::task::spawn_blocking(move || quant_daemon::capture::stop(&stopping)).await?;
 	Ok(())
 }

@@ -574,6 +574,27 @@ impl OwnerSession {
 			.await
 	}
 
+	/// What this machine captures, as JSON.
+	pub async fn capture_config(&self) -> Result<serde_json::Value> {
+		self.call::<(), _>(Method::GET, routes::OWNER_CAPTURE, None)
+			.await
+	}
+
+	/// Replace what this machine captures; running sources restart.
+	pub async fn set_capture_config(
+		&self,
+		config: &serde_json::Value,
+	) -> Result<serde_json::Value> {
+		self.call(Method::POST, routes::OWNER_CAPTURE, Some(config))
+			.await
+	}
+
+	/// Pause capture, optionally for a number of minutes, or resume it.
+	pub async fn pause_capture(&self, request: &quant_api::PauseRequest) -> Result<Status> {
+		self.call(Method::POST, routes::OWNER_CAPTURE_PAUSE, Some(request))
+			.await
+	}
+
 	/// End the session.
 	pub async fn lock(self) -> Result<()> {
 		self.call::<(), _>(Method::POST, routes::OWNER_LOCK, None)

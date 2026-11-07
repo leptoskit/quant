@@ -40,7 +40,7 @@ Nothing reads the vault directly except the daemon, `quantd`, which listens on a
 
 Capture sources write to a `Sink`. In the daemon the sink writes straight into the vault; on a phone it queues for signed upload with a device grant (`health:write`, `motion:write`, …), which never implies read access.
 
-- **macOS** (in progress): focus spans and window titles, OCR of changed screen frames via Vision with ScreenCaptureKit screenshots, input activity counts, microphone speech segments with optional on-device Whisper transcription.
+- **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; and, when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription. Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything pauses while the machine is idle or locked. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
 - **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 

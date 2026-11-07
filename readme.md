@@ -4,7 +4,7 @@ Quantify your life, and decide exactly which AI may read it.
 
 Quant records what you do — what is on your screens, what you hear and say, which apps you use, and what your body is doing (heart rate, sleep, steps, posture, location, and any sensor you strap on later) — into an encrypted vault on your own machine. AI agents reach that vault through an MCP server, but only with a grant you approved, scoped like GitHub's fine-grained permissions, rate limited, redacted, and written to a tamper-evident audit log.
 
-> **Status: early.** The vault, access control, daemon, CLI, and MCP server work and are tested end to end. Desktop capture on macOS is in progress; the Android collector (built with [leptoskit](https://github.com/leptoskit/leptoskit)) comes next. Single user by design.
+> **Status: early.** The vault, access control, daemon, CLI, MCP server, and macOS capture work and are tested end to end. The Android collector (built with [leptoskit](https://github.com/leptoskit/leptoskit)) comes next. Single user by design.
 
 ## Why
 
@@ -43,6 +43,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_store`   | The encrypted vault: SQLCipher records and series, full-text search, sealed media, retention. |
 | `quant_api`     | The daemon's wire types.                                                                       |
 | `quant_derive`  | Derived memory: posture spans from body-worn accelerometers, daily summaries.                 |
+| `quant_capture_macos` | macOS capture: screen text (Vision OCR), focused apps and windows, input counts, microphone speech. |
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
 | `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault.   |
@@ -63,6 +64,17 @@ quant service install      # run the daemon at login
 claude mcp add quant -- quant mcp --profile claude --scope '*:summary'
 quant approve K7QD-M2XA --scope health:summary --scope apps:summary --lookback-hours 720
 ```
+
+The daemon captures this Mac as soon as it starts. macOS asks once for **Screen Recording** (screenshots and window titles); grant it to `quant` in System Settings → Privacy & Security. Microphone capture is off until you turn it on:
+
+```sh
+quant status                       # what each source is doing, and why one is stopped
+quant capture set --audio on       # also asks for Microphone access
+quant capture set --exclude-app com.apple.Notes --ocr accurate
+quant capture pause --minutes 30   # or `quant capture resume`
+```
+
+Password managers and private or incognito browser windows are never captured. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
 
 Pair a phone over the local network (TLS, certificate pinned by the link):
 

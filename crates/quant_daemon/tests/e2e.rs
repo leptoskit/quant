@@ -534,3 +534,52 @@ async fn devices_connect_over_tls_only_to_the_pinned_certificate() {
 	assert!(Endpoint::parse(&format!("tls://{address}#{}", again.fingerprint())).is_ok());
 	assert!(Endpoint::parse(&format!("tls://{address}")).is_err());
 }
+
+#[tokio::test]
+async fn only_the_owner_configures_and_pauses_capture() {
+	let h = start().await;
+	let owner = h.owner().await;
+	let mut config = owner.capture_config().await.unwrap();
+	assert_eq!(config["audio"]["enabled"], false);
+	config["audio"]["enabled"] = true.into();
+	config["screen"]["interval_secs"] = 30.into();
+	owner.set_capture_config(&config).await.unwrap();
+	let stored = quant_daemon::capture::config(&h.state).unwrap();
+	assert!(stored.audio.enabled);
+	assert_eq!(stored.screen.interval_secs, 30);
+
+	let paused = owner
+		.pause_capture(&quant_api::PauseRequest {
+			paused: true,
+			minutes: Some(30),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(paused.paused, Some(quant_api::Paused::Until(_))));
+	assert!(
+		paused
+			.capture
+			.iter()
+			.all(|s| !s.running && s.detail.as_deref() == Some("paused"))
+	);
+	let resumed = owner
+		.pause_capture(&quant_api::PauseRequest {
+			paused: false,
+			minutes: None,
+		})
+		.await
+		.unwrap();
+	assert_eq!(resumed.paused, None);
+
+	let actions: Vec<_> = owner
+		.audit(&quant_api::AuditRequest::default())
+		.await
+		.unwrap()
+		.entries
+		.into_iter()
+		.map(|e| e.action)
+		.collect();
+	for action in ["capture.configure", "capture.pause", "capture.resume"] {
+		assert!(actions.iter().any(|a| a == action), "{action} not audited");
+	}
+}

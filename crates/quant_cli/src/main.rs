@@ -1,5 +1,6 @@
 //! `quant`: quantify your life, and decide which AI may read it.
 
+mod capture;
 mod daemon;
 mod hardware;
 mod print;
@@ -188,6 +189,11 @@ enum Command {
 	Stream {
 		#[command(subcommand)]
 		action: hardware::StreamAction,
+	},
+	/// Choose what this machine captures, or pause it.
+	Capture {
+		#[command(subcommand)]
+		action: capture::CaptureAction,
 	},
 	/// Configure derived memory, such as where accelerometers are worn.
 	Derive {
@@ -502,6 +508,7 @@ async fn main() -> Result<()> {
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
 		Command::Link { host, port } => link(&cx, host, port).await,
 		Command::Stream { action } => hardware::stream(&cx, action).await,
+		Command::Capture { action } => capture::run(&cx, action).await,
 		Command::Derive { action } => hardware::derive(&cx, action).await,
 		Command::Ingest {
 			stream,

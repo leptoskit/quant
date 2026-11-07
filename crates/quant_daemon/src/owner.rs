@@ -23,6 +23,7 @@ use quant_api::Hello;
 use quant_api::OwnerSession;
 use quant_api::PairRequest;
 use quant_api::PairResponse;
+use quant_api::PauseRequest;
 use quant_api::PurgeRequest;
 use quant_api::Purged;
 use quant_api::RevokeRequest;
@@ -455,7 +456,80 @@ pub async fn status(AxumState(state): Shared, _owner: Owner) -> ApiResult<Json<S
 			.iter()
 			.filter(|c| c.status == ClientStatus::Active)
 			.count(),
+		paused: state.capture_control.paused(),
 	}))
+}
+
+/// `GET /v1/owner/capture`
+pub async fn capture_config(
+	AxumState(state): Shared,
+	_owner: Owner,
+) -> ApiResult<Json<quant_capture_macos::CaptureConfig>> {
+	Ok(Json(crate::capture::config(&state)?))
+}
+
+/// `POST /v1/owner/capture`
+pub async fn set_capture_config(
+	AxumState(state): Shared,
+	_owner: Owner,
+	Json(config): Json<quant_capture_macos::CaptureConfig>,
+) -> ApiResult<Json<quant_capture_macos::CaptureConfig>> {
+	let setting = Arc::clone(&state);
+	let stored = config.clone();
+	// Restarting waits for the sources to flush, which can take a moment.
+	tokio::task::spawn_blocking(move || crate::capture::set_config(&setting, &stored))
+		.await
+		.map_err(|e| Error::Internal(e.to_string()))??;
+	owner_audit(
+		&state,
+		"capture.configure",
+		"",
+		serde_json::to_value(&config).unwrap_or_default(),
+	)?;
+	Ok(Json(config))
+}
+
+/// `POST /v1/owner/capture/pause`
+pub async fn pause_capture(
+	AxumState(state): Shared,
+	owner: Owner,
+	Json(request): Json<PauseRequest>,
+) -> ApiResult<Json<Status>> {
+	let changing = Arc::clone(&state);
+	let until = request
+		.minutes
+		.map(|m| Timestamp::now() + SignedDuration::from_mins(i64::from(m)));
+	tokio::task::spawn_blocking(move || {
+		if request.paused {
+			crate::capture::pause(&changing, until);
+			Ok(())
+		} else {
+			crate::capture::resume(&changing)
+		}
+	})
+	.await
+	.map_err(|e| Error::Internal(e.to_string()))??;
+	if let (true, Some(minutes)) = (request.paused, request.minutes) {
+		let waking = Arc::clone(&state);
+		tokio::spawn(async move {
+			tokio::time::sleep(std::time::Duration::from_mins(u64::from(minutes))).await;
+			let _ = tokio::task::spawn_blocking(move || {
+				crate::capture::tick(&waking, Timestamp::now())
+			})
+			.await;
+		});
+	}
+	owner_audit(
+		&state,
+		if request.paused {
+			"capture.pause"
+		} else {
+			"capture.resume"
+		},
+		"",
+		serde_json::to_value(request).unwrap_or_default(),
+	)?;
+	status(AxumState(state), owner).await
 }
 
 /// `POST /v1/audit`: a client with `audit:read` sees its own entries.
