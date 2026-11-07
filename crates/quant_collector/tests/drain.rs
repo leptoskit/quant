@@ -62,6 +62,7 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 			expires_in_hours: None,
 			limits: None,
 			unredacted: false,
+			deny_classes: None,
 		})
 		.await
 		.unwrap();

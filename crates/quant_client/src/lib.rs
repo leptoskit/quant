@@ -28,8 +28,13 @@ use quant_api::ApproveRequest;
 use quant_api::Audit;
 use quant_api::AuditRequest;
 use quant_api::CaptureState;
+use quant_api::ClaimActionRequest;
+use quant_api::ClaimCorrectRequest;
+use quant_api::ClaimListRequest;
 use quant_api::ClientKind;
 use quant_api::ClientView;
+use quant_api::Context;
+use quant_api::ContextRequest;
 use quant_api::DenyRequest;
 use quant_api::Durations;
 use quant_api::DurationsRequest;
@@ -40,8 +45,12 @@ use quant_api::Ingested;
 use quant_api::Me;
 use quant_api::Overview;
 use quant_api::OverviewRequest;
+use quant_api::OwnerClaimRequest;
 use quant_api::PairRequest;
 use quant_api::PairResponse;
+use quant_api::ProfileClaims;
+use quant_api::ProposeRequest;
+use quant_api::Proposed;
 use quant_api::PurgeRequest;
 use quant_api::Purged;
 use quant_api::Records;
@@ -56,6 +65,7 @@ use quant_api::Status;
 use quant_api::StreamAccess;
 use quant_api::UnlockRequest;
 use quant_api::routes;
+use quant_core::Claim;
 use quant_core::ClientId;
 use quant_core::MediaRef;
 use quant_core::StreamId;
@@ -469,6 +479,25 @@ impl Client {
 			.await
 	}
 
+	/// The owner's profile claims, shaped by this grant's `memory.profile`
+	/// level.
+	pub async fn profile(&self) -> Result<ProfileClaims> {
+		self.signed::<(), _>(Method::GET, routes::MEMORY_PROFILE, None)
+			.await
+	}
+
+	/// Propose claims about the owner (needs `memory.profile:write`).
+	pub async fn propose(&self, request: &ProposeRequest) -> Result<Proposed> {
+		self.signed(Method::POST, routes::MEMORY_PROPOSALS, Some(request))
+			.await
+	}
+
+	/// A budgeted context packet assembled for one task.
+	pub async fn context(&self, request: &ContextRequest) -> Result<Context> {
+		self.signed(Method::POST, routes::CONTEXT, Some(request))
+			.await
+	}
+
 	/// Open an owner session with the passphrase.
 	pub async fn unlock(&self, passphrase: &str) -> Result<OwnerSession> {
 		OwnerSession::open(self.endpoint.clone(), passphrase).await
@@ -622,6 +651,54 @@ impl OwnerSession {
 	/// Save a moment from the rolling audio buffer.
 	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
 		self.call(Method::POST, routes::OWNER_AUDIO_SAVE, Some(request))
+			.await
+	}
+
+	/// State a claim about yourself.
+	pub async fn tell(&self, request: &OwnerClaimRequest) -> Result<Claim> {
+		self.call(Method::POST, routes::OWNER_CLAIMS, Some(request))
+			.await
+	}
+
+	/// List claims, optionally filtered.
+	pub async fn claims(&self, request: &ClaimListRequest) -> Result<Vec<Claim>> {
+		self.call(Method::POST, routes::OWNER_CLAIMS_LIST, Some(request))
+			.await
+	}
+
+	/// Approve a held proposal; it becomes active, still inferred.
+	pub async fn claim_approve(&self, id: quant_core::ClaimId) -> Result<Claim> {
+		self.call(
+			Method::POST,
+			routes::OWNER_CLAIM_APPROVE,
+			Some(&ClaimActionRequest { id }),
+		)
+		.await
+	}
+
+	/// Refuse a held proposal.
+	pub async fn claim_reject(&self, id: quant_core::ClaimId) -> Result<Claim> {
+		self.call(
+			Method::POST,
+			routes::OWNER_CLAIM_REJECT,
+			Some(&ClaimActionRequest { id }),
+		)
+		.await
+	}
+
+	/// Withdraw an active or held claim.
+	pub async fn claim_retract(&self, id: quant_core::ClaimId) -> Result<Claim> {
+		self.call(
+			Method::POST,
+			routes::OWNER_CLAIM_RETRACT,
+			Some(&ClaimActionRequest { id }),
+		)
+		.await
+	}
+
+	/// Correct a claim with a new owner claim that supersedes it.
+	pub async fn claim_correct(&self, request: &ClaimCorrectRequest) -> Result<Claim> {
+		self.call(Method::POST, routes::OWNER_CLAIM_CORRECT, Some(request))
 			.await
 	}
 
