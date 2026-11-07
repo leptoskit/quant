@@ -49,17 +49,7 @@ impl VaultPaths {
 
 	/// `$QUANT_HOME`, or the platform's per-user data directory.
 	pub fn default_root() -> PathBuf {
-		if let Some(home) = std::env::var_os("QUANT_HOME") {
-			return PathBuf::from(home);
-		}
-		let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-		if cfg!(target_os = "macos") {
-			home.join("Library/Application Support/Quant")
-		} else if let Some(data) = std::env::var_os("XDG_DATA_HOME") {
-			PathBuf::from(data).join("quant")
-		} else {
-			home.join(".local/share/quant")
-		}
+		quant_core::paths::default_vault_root()
 	}
 
 	/// `vault.json`.
@@ -77,16 +67,9 @@ impl VaultPaths {
 		self.root.join("media")
 	}
 
-	/// The daemon's socket: `quant.sock` in the vault, or, when that path is
-	/// too long for a Unix socket, a file in a private `/tmp/quant-<uid>`
-	/// directory named after the vault path.
+	/// The daemon's socket; see [`quant_core::paths::socket_path`].
 	pub fn socket(&self) -> PathBuf {
-		let beside = self.root.join("quant.sock");
-		if beside.as_os_str().len() < MAX_SOCKET_PATH {
-			return beside;
-		}
-		let name = blake3::hash(self.root.as_os_str().as_encoded_bytes()).to_hex();
-		short_socket_dir().join(format!("{}.sock", &name[..16]))
+		quant_core::paths::socket_path(&self.root)
 	}
 
 	/// Make sure the socket's directory exists and only this user can use it.
@@ -94,64 +77,19 @@ impl VaultPaths {
 	/// connecting, so nobody else can stand up a fake daemon to collect the
 	/// owner's passphrase.
 	pub fn secure_socket_dir(&self) -> Result<()> {
-		let socket = self.socket();
-		let dir = socket.parent().expect("sockets live in a directory");
-		if dir == self.root {
-			return Ok(());
-		}
-		check_private_dir(dir)
+		quant_core::paths::secure_socket_dir(&self.root).map_err(|error| {
+			if error.kind() == std::io::ErrorKind::PermissionDenied {
+				StoreError::Invalid(error.to_string())
+			} else {
+				StoreError::Io(error)
+			}
+		})
 	}
 
 	/// Whether a vault exists here.
 	pub fn exists(&self) -> bool {
 		self.manifest().exists()
 	}
-}
-
-/// Unix socket paths must fit in `sun_path` (104 bytes on macOS).
-const MAX_SOCKET_PATH: usize = 100;
-
-#[cfg(unix)]
-fn uid() -> u32 {
-	#[allow(unsafe_code)]
-	// SAFETY: getuid has no preconditions and cannot fail.
-	unsafe {
-		libc::getuid()
-	}
-}
-
-#[cfg(not(unix))]
-fn uid() -> u32 {
-	0
-}
-
-fn short_socket_dir() -> PathBuf {
-	PathBuf::from(format!("/tmp/quant-{}", uid()))
-}
-
-#[cfg(unix)]
-fn check_private_dir(dir: &Path) -> Result<()> {
-	use std::os::unix::fs::DirBuilderExt;
-	use std::os::unix::fs::MetadataExt;
-	use std::os::unix::fs::PermissionsExt;
-
-	if !dir.exists() {
-		fs::DirBuilder::new().mode(0o700).create(dir)?;
-	}
-	let meta = fs::symlink_metadata(dir)?;
-	if !meta.is_dir() || meta.uid() != uid() || meta.permissions().mode() & 0o077 != 0 {
-		return Err(StoreError::Invalid(format!(
-			"{} must be a directory owned by you with mode 0700",
-			dir.display()
-		)));
-	}
-	Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_private_dir(dir: &Path) -> Result<()> {
-	fs::create_dir_all(dir)?;
-	Ok(())
 }
 
 /// An open vault: its database, its media, and its key.
@@ -356,16 +294,14 @@ mod tests {
 		assert_eq!(short.socket(), PathBuf::from("/v/quant.sock"));
 		let long = VaultPaths::new(format!("/{}", "deep/".repeat(30)));
 		let socket = long.socket();
-		assert!(socket.as_os_str().len() < MAX_SOCKET_PATH);
-		assert!(socket.starts_with(short_socket_dir()));
+		assert_eq!(socket, quant_core::paths::socket_path(&long.root));
+		let dir = socket.parent().unwrap();
+		assert_ne!(dir, long.root);
 		long.secure_socket_dir().unwrap();
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::PermissionsExt;
-			let mode = fs::metadata(short_socket_dir())
-				.unwrap()
-				.permissions()
-				.mode();
+			let mode = fs::metadata(dir).unwrap().permissions().mode();
 			assert_eq!(mode & 0o777, 0o700);
 		}
 	}
