@@ -549,6 +549,11 @@ impl Worker {
 			.await
 			.map_err(|e| {
 				match &e {
+					// The daemon answers `not_found` when the buffer holds
+					// nothing in the window; a bare 404 means no such route.
+					ClientError::Api { error, .. } if error.code == "not_found" => {
+						"Nothing recorded in that window".to_owned()
+					}
 					ClientError::Api { status: 404, .. } => {
 						"This version of Quant can't save audio yet".to_owned()
 					}

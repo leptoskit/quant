@@ -855,3 +855,60 @@ async fn the_owner_can_read_the_newest_audit_entries() {
 	assert_eq!(seqs, vec![last - 1, last]);
 	assert_eq!(newest.chain_ok, Some(true));
 }
+
+#[tokio::test]
+async fn clips_are_renamed_with_audio_write_and_keep_their_transcript() {
+	let h = start().await;
+	let device = DeviceId::new();
+	let clip = Record::new("audio.clip".parse().unwrap(), device)
+		.with("title", "Moment at 14:02")
+		.with_text("Moment at 14:02\n\nwe agreed to ship on Friday");
+	let note = Record::new("memory.note".parse().unwrap(), device).with_text("a note");
+	h.state
+		.vault
+		.store
+		.insert_records(&[clip.clone(), note.clone()])
+		.unwrap();
+
+	let reader = h
+		.paired("Reader", ClientKind::Agent, approve(&["audio:read"]))
+		.await;
+	let refused = reader
+		.rename_clip(&quant_api::RenameClip {
+			id: clip.id,
+			title: "Mine now".into(),
+		})
+		.await
+		.unwrap_err();
+	assert_eq!(refused.code(), Some("forbidden"));
+
+	let app = h
+		.paired(
+			"Desktop",
+			ClientKind::Device,
+			approve(&["audio:write", "memory:write"]),
+		)
+		.await;
+	app.rename_clip(&quant_api::RenameClip {
+		id: clip.id,
+		title: "Release planning".into(),
+	})
+	.await
+	.unwrap();
+	let renamed = h.state.vault.store.record(clip.id).unwrap().unwrap();
+	assert_eq!(renamed.data["title"], "Release planning");
+	assert_eq!(
+		renamed.text.as_deref(),
+		Some("Release planning\n\nwe agreed to ship on Friday")
+	);
+
+	// Only clips can be renamed, whatever else the grant may write.
+	let other = app
+		.rename_clip(&quant_api::RenameClip {
+			id: note.id,
+			title: "Nope".into(),
+		})
+		.await
+		.unwrap_err();
+	assert_eq!(other.code(), Some("not_found"));
+}
