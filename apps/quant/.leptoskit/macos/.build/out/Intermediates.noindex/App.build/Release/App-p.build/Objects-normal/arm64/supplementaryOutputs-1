@@ -1,0 +1,11 @@
+{
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/App.swift" : {
+    "abi-baseline-json" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App.abi.json",
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App-primary.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App-primary.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App-primary.dia",
+    "swiftdoc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App.swiftdoc",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App.swiftmodule",
+    "swiftsourceinfo" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Release/App-p.build/Objects-normal/arm64/App.swiftsourceinfo"
+  }
+}

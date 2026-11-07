@@ -46,6 +46,7 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::AUDIT, post(owner::client_audit))
 		.route(routes::AUDIO_SAVE, post(audio_save::save))
 		.route(routes::OWNER_AUDIO_SAVE, post(audio_save::owner_save))
+		.route(routes::CAPTURE_STATUS, get(query::capture_status))
 		.route(routes::OWNER_UNLOCK, post(owner::unlock))
 		.route(routes::OWNER_LOCK, post(owner::lock))
 		.route(routes::OWNER_CLIENTS, get(owner::clients))

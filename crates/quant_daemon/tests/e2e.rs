@@ -765,3 +765,93 @@ fn swept_removed(state: &State, hash: &str) -> bool {
 		Err(quant_store::StoreError::NotFound)
 	)
 }
+
+#[tokio::test]
+async fn any_approved_client_sees_capture_state_but_nothing_captured() {
+	let h = start().await;
+	h.state.status(
+		"screen",
+		false,
+		Some("screen recording permission not granted".into()),
+	);
+	h.state.status(
+		"audio",
+		false,
+		Some("microphone permission not granted".into()),
+	);
+	h.state.status("apps", true, None);
+	seed(&h.state);
+
+	let mut pending = Client::new(h.endpoint.clone(), Identity::generate("pending"));
+	pending.pair(ClientKind::Device, &[]).await.unwrap();
+	assert_eq!(
+		pending.capture_status().await.unwrap_err().code(),
+		Some("unauthenticated")
+	);
+
+	let desktop = h
+		.paired("desktop", ClientKind::Device, approve(&["audio:write"]))
+		.await;
+	let state = desktop.capture_status().await.unwrap();
+	assert_eq!(state.paused, None);
+	let source = |name: &str| state.sources.iter().find(|s| s.source == name).unwrap();
+	assert_eq!(
+		source("screen").needs,
+		Some(quant_api::Permission::ScreenRecording)
+	);
+	assert_eq!(
+		source("audio").needs,
+		Some(quant_api::Permission::Microphone)
+	);
+	assert!(source("apps").running);
+
+	// The raw answer carries no counts, capture times, details, or text.
+	let json = serde_json::to_string(&state).unwrap();
+	for leak in ["captured", "last", "detail", "Budget", "Numbers"] {
+		assert!(!json.contains(leak), "capture state leaks {leak}: {json}");
+	}
+
+	h.owner()
+		.await
+		.pause_capture(&quant_api::PauseRequest {
+			paused: true,
+			minutes: Some(30),
+		})
+		.await
+		.unwrap();
+	let paused = desktop.capture_status().await.unwrap();
+	assert!(matches!(paused.paused, Some(quant_api::Paused::Until(_))));
+	assert!(
+		paused
+			.sources
+			.iter()
+			.filter(|s| quant_capture_macos::SOURCES.contains(&s.source.as_str()))
+			.all(|s| !s.running && s.needs.is_none())
+	);
+}
+
+#[tokio::test]
+async fn the_owner_can_read_the_newest_audit_entries() {
+	let h = start().await;
+	for name in ["one", "two", "three"] {
+		h.paired(name, ClientKind::Agent, approve(&["health:summary"]))
+			.await;
+	}
+	let owner = h.owner().await;
+	let all = owner
+		.audit(&quant_api::AuditRequest::default())
+		.await
+		.unwrap();
+	let newest = owner
+		.audit(&quant_api::AuditRequest {
+			limit: Some(2),
+			newest: true,
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	let seqs: Vec<u64> = newest.entries.iter().map(|e| e.seq).collect();
+	let last = all.chain_len.unwrap();
+	assert_eq!(seqs, vec![last - 1, last]);
+	assert_eq!(newest.chain_ok, Some(true));
+}

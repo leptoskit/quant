@@ -27,6 +27,7 @@ use quant_api::ApiError;
 use quant_api::ApproveRequest;
 use quant_api::Audit;
 use quant_api::AuditRequest;
+use quant_api::CaptureState;
 use quant_api::ClientKind;
 use quant_api::ClientView;
 use quant_api::DenyRequest;
@@ -45,6 +46,7 @@ use quant_api::PurgeRequest;
 use quant_api::Purged;
 use quant_api::Records;
 use quant_api::RecordsRequest;
+use quant_api::RenameClip;
 use quant_api::RevokeRequest;
 use quant_api::SaveAudio;
 use quant_api::SavedClip;
@@ -447,9 +449,23 @@ impl Client {
 			.await
 	}
 
-	/// Save a moment from the rolling audio buffer (needs `audio:write`).
+	/// Which capture sources run, and whether capture is paused. Any
+	/// approved client may ask; it reveals nothing captured.
+	pub async fn capture_status(&self) -> Result<CaptureState> {
+		self.signed::<(), _>(Method::GET, routes::CAPTURE_STATUS, None)
+			.await
+	}
+
+	/// Keep a stretch of the rolling audio buffer as a clip (needs
+	/// `audio:write`).
 	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
 		self.signed(Method::POST, routes::AUDIO_SAVE, Some(request))
+			.await
+	}
+
+	/// Give a saved clip a new title (needs `audio:write`).
+	pub async fn rename_clip(&self, request: &RenameClip) -> Result<()> {
+		self.signed(Method::POST, routes::AUDIO_RENAME, Some(request))
 			.await
 	}
 

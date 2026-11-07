@@ -414,6 +414,7 @@ async fn main() -> Result<()> {
 				.audit(&AuditRequest {
 					since: Some(since),
 					limit: Some(limit),
+					newest: false,
 				})
 				.await?;
 			cx.show(&audit, print::audit);
