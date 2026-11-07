@@ -390,6 +390,12 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		StreamSpec::event("memory.daily", "A derived summary of one day.")
 			.sensitive(&[Class::Health, Class::Location]),
 		StreamSpec::event(
+			"memory.weekly",
+			"A derived summary of one local week: sleep, heart rate, steps, focus, and plain \
+			 correlations between body and behaviour.",
+		)
+		.sensitive(&[Class::Health, Class::Location]),
+		StreamSpec::event(
 			"memory.note",
 			"A note written by the owner or an authorised agent.",
 		),
