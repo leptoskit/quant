@@ -1,0 +1,45 @@
+[package]
+name = "quant_relay"
+description = "The Quant relay protocol: rendezvous ids, signed challenges, and the wire both ends speak."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+data-encoding = { workspace = true }
+ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
+jiff = { workspace = true }
+quant_access = { workspace = true }
+quant_crypto = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+# Speaking to a relay: the daemon's listener and clients dial WebSockets.
+tokio-tungstenite = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+# Being a relay: the in-process server used by tests and `apps/relay`.
+axum = { workspace = true, optional = true, features = ["ws"] }
+
+[features]
+default = ["dial", "server"]
+# Dialing a relay and carrying a byte stream over WebSocket frames.
+dial = ["dep:tokio-tungstenite", "dep:tokio", "dep:futures-util"]
+# Serving the relay's three WebSocket routes over a pluggable store.
+server = ["dial", "dep:axum", "dep:tracing"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

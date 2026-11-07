@@ -98,6 +98,11 @@ impl fmt::Debug for ClientKey {
 pub struct PublicKey(VerifyingKey);
 
 impl PublicKey {
+	/// Wrap raw key bytes.
+	pub fn from_bytes(bytes: &[u8; 32]) -> Self {
+		Self(VerifyingKey::from_bytes(bytes).expect("a public key of 32 bytes is valid"))
+	}
+
 	/// A short code people compare when approving a pairing, such as
 	/// `K7QD-M2XA`. Both sides derive it from the key, so a mismatch means
 	/// someone else's request.

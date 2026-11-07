@@ -21,6 +21,7 @@ quant_client = { path = "crates/quant_client" }
 quant_daemon = { path = "crates/quant_daemon" }
 quant_derive = { path = "crates/quant_derive" }
 quant_mcp = { path = "crates/quant_mcp" }
+quant_relay = { path = "crates/quant_relay" }
 quant_capture_macos = { path = "crates/quant_capture_macos" }
 
 anyhow = "1"
@@ -29,6 +30,8 @@ base64 = "0.22"
 blake3 = "1"
 block2 = "0.6"
 cpal = "0.18"
+data-encoding = "2"
+futures-util = "0.3"
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
@@ -67,6 +70,7 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7", "serde"] }
