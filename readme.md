@@ -45,6 +45,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_derive`  | Derived memory: posture spans from body-worn accelerometers, daily summaries.                 |
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
+| `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault.   |
 | `quant_mcp`     | The MCP server agents talk to; its tool list follows the agent's grant.                        |
 | `quant_cli`     | The `quant` command.                                                                           |
 
