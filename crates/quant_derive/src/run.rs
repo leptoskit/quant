@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::daily;
+use crate::episode;
 use crate::posture;
 use crate::posture::Placement;
 use crate::posture::Source;
@@ -44,6 +45,8 @@ pub struct Report {
 	pub posture_spans: usize,
 	/// Daily summaries written.
 	pub days: usize,
+	/// Hourly episodes written.
+	pub episodes: usize,
 }
 
 const MAX_ROWS: usize = 2_000_000;
@@ -103,5 +106,6 @@ pub fn run(
 		let record = daily::summarize(store, date, tz)?;
 		report.days += store.replace_records(&[record])?.stored;
 	}
+	report.episodes = episode::update(store, now, config.first_run_days, tz)?;
 	Ok(report)
 }
