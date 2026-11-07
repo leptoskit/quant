@@ -1,6 +1,6 @@
 [package]
 name = "quant_derive"
-description = "Turns raw Quant streams into understanding: posture from motion, and daily summaries of screen, body, and sleep."
+description = "Turns raw Quant streams into understanding: posture and gait from motion, and daily summaries of screen, body, and sleep."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

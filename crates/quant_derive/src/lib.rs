@@ -2,13 +2,15 @@
 //!
 //! Raw streams answer "what was the accelerometer doing at 14:02"; people
 //! ask "was I lying down all afternoon?". This crate turns one into the
-//! other, writing `motion.posture` spans, `memory.episode` hours, and
+//! other, writing `motion.posture` spans, `motion.gait` bouts,
+//! `memory.episode` hours, and
 //! `memory.daily` summaries back into the vault. Derived records get stable
 //! ids, so recomputing replaces them, and each names the streams it came
 //! from.
 
 pub mod daily;
 pub mod episode;
+pub mod gait;
 pub mod posture;
 mod run;
 

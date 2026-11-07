@@ -17,6 +17,44 @@ use quant_store::Store;
 
 const G: f64 = 9.81;
 
+/// A tiny deterministic PRNG, so the tests need no new dependency.
+struct Lcg(u64);
+
+impl Lcg {
+	fn noise(&mut self) -> f64 {
+		self.0 = self
+			.0
+			.wrapping_mul(6_364_136_223_846_793_005)
+			.wrapping_add(1_442_695_040_888_963_407);
+		((self.0 >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+	}
+}
+
+/// A 50 Hz walk on a vest: `step_hz` is the step frequency; each sample
+/// carries gravity on the up axis, a step sinusoid, and a little noise.
+fn walk(device: DeviceId, start: Timestamp, seconds: u32, step_hz: f64) -> SeriesBatch {
+	let hz = 50;
+	let n = seconds * hz;
+	let mut rng = Lcg(0x2545_F491_4F6C_DD1D);
+	let mut values = Vec::with_capacity(n as usize * 3);
+	for i in 0..n {
+		let t = f64::from(i) / f64::from(hz);
+		values.extend([
+			rng.noise() * 0.05,
+			G + 1.5 * (2.0 * std::f64::consts::PI * step_hz * t).sin() + rng.noise() * 0.05,
+			rng.noise() * 0.05,
+		]);
+	}
+	SeriesBatch {
+		stream: "sensor.vest.accel".parse().unwrap(),
+		device,
+		start,
+		channels: vec!["x".into(), "y".into(), "z".into()],
+		offsets_ms: (0..n).map(|i| i * 1000 / hz).collect(),
+		values,
+	}
+}
+
 fn accel(
 	device: DeviceId,
 	start: Timestamp,
@@ -165,4 +203,97 @@ fn a_day_becomes_posture_spans_and_a_summary() {
 	assert!(text.contains("Slept 7h 00m (deep 1h 30m)"), "{text}");
 	assert!(text.contains("lying 30m"), "{text}");
 	assert_eq!(today.data["heart_rate"]["min"], 54.0);
+}
+
+#[test]
+fn walking_becomes_gait_bouts_and_a_slow_down() {
+	let store = Store::open_in_memory(&VaultKey::generate()).unwrap();
+	let tz = TimeZone::UTC;
+	let day: Timestamp = "2026-11-06T00:00:00Z".parse().unwrap();
+	let at = |h: i64, m: i64| day + SignedDuration::from_hours(h) + SignedDuration::from_mins(m);
+	let vest = DeviceId::new();
+
+	// Still over lunch, a brisk walk at 108 steps/min, still again, then a
+	// slower walk at 84 steps/min.
+	store
+		.insert_series(&accel(vest, at(13, 0), 300, [0.0, G, 0.0], 0.02))
+		.unwrap();
+	store
+		.insert_series(&walk(vest, at(13, 5), 60, 1.8))
+		.unwrap();
+	store
+		.insert_series(&accel(vest, at(13, 6), 840, [0.0, G, 0.0], 0.02))
+		.unwrap();
+	store
+		.insert_series(&walk(vest, at(13, 20), 60, 1.4))
+		.unwrap();
+	store
+		.insert_series(&accel(vest, at(13, 21), 540, [0.0, G, 0.0], 0.02))
+		.unwrap();
+
+	let config = Config {
+		posture_sources: vec![Source {
+			stream: "sensor.vest.accel".parse().unwrap(),
+			placement: Placement::Torso,
+			up: [0.0, 1.0, 0.0],
+		}],
+		first_run_days: 1,
+	};
+	let now = at(13, 30);
+	let report = quant_derive::run(&store, &config, now, &tz).unwrap();
+	assert_eq!(report.gait_bouts, 2);
+
+	let range = TimeRange::new(at(12, 0), at(14, 0)).unwrap();
+	let gaits = |store: &Store| {
+		store
+			.records(
+				&RecordQuery::new(Selector::stream("motion.gait".parse().unwrap()), range)
+					.oldest_first(),
+			)
+			.unwrap()
+	};
+	let bouts = gaits(&store);
+	assert_eq!(bouts.len(), 2);
+
+	let brisk = &bouts[0];
+	assert!(
+		(brisk.data["cadence"].as_f64().unwrap() - 108.0).abs() < 3.0,
+		"{:?}",
+		brisk.data
+	);
+	assert!(brisk.data["regularity"].as_f64().unwrap() > 0.7);
+	assert_eq!(brisk.data["steps"].as_u64(), Some(108));
+	assert_eq!(brisk.data["placement"], "torso");
+	let text = brisk.text.as_deref().unwrap();
+	assert!(
+		text.contains("Walked 1 min, 108 steps/min, regular stride"),
+		"{text}"
+	);
+	assert!(brisk.data.get("slowed").is_none());
+
+	let slow = &bouts[1];
+	assert!(
+		(slow.data["cadence"].as_f64().unwrap() - 84.0).abs() < 3.0,
+		"{:?}",
+		slow.data
+	);
+	assert_eq!(slow.data["slowed"], true);
+	let text = slow.text.as_deref().unwrap();
+	assert!(
+		text.contains("Cadence fell from 108 to 84 steps/min after 13:20"),
+		"{text}"
+	);
+
+	// Running again rewrites only the open bout, and the trend survives:
+	// the earlier bout is read back from what the last run wrote.
+	let again = quant_derive::run(&store, &config, now, &tz).unwrap();
+	assert_eq!(again.gait_bouts, 1);
+	let bouts = gaits(&store);
+	assert_eq!(bouts.len(), 2);
+	assert_eq!(bouts[1].data["slowed"], true);
+	let text = bouts[1].text.as_deref().unwrap();
+	assert!(
+		text.contains("Cadence fell from 108 to 84 steps/min after 13:20"),
+		"{text}"
+	);
 }
