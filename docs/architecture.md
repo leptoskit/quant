@@ -58,5 +58,5 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 1. macOS capture in the daemon, with a menu bar app (leptoskit) for status, pausing, and approving agents.
 2. Android collector app on leptoskit; upstream foreground service, Health Connect, and audio plugins.
 3. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
-4. More derived memory: hourly episodes joining screen, place, posture, and heart rate; purging derived records with their sources.
+4. More derived memory: purging derived records with their sources.
 5. iOS collector (HealthKit, background modes).
