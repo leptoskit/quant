@@ -140,6 +140,14 @@ pub fn fts_query(terms: &str) -> Option<String> {
 	(!quoted.is_empty()).then(|| quoted.join(" "))
 }
 
+/// Turn free text into an FTS5 query that matches any of its terms, each
+/// quoted exactly the way [`fts_query`] quotes one, so nothing the caller
+/// writes is interpreted as FTS syntax.
+pub fn fts_any(terms: &str) -> Option<String> {
+	let quoted: Vec<String> = terms.split_whitespace().filter_map(fts_query).collect();
+	(!quoted.is_empty()).then(|| quoted.join(" OR "))
+}
+
 const COLUMNS: &str = "r.id, r.stream, r.device, r.start_us, r.end_us, r.text, r.data, \
                        r.media_hash, r.media_mime, r.media_size";
 
@@ -478,6 +486,15 @@ impl Store {
 		}
 		let mut conn = self.conn();
 		let tx = conn.transaction()?;
+		// Claims whose evidence is about to go: Observed and Inferred claims
+		// that cited purged records are deleted with them, owner claims are
+		// not.
+		let had_evidence: Vec<i64> = {
+			let mut statement = tx.prepare("SELECT DISTINCT claim FROM claim_evidence")?;
+			let rows = statement.query_map([], |r| r.get(0))?;
+			rows.map(|row| row.map_err(Into::into))
+				.collect::<Result<_>>()?
+		};
 		let mut params: Vec<Value> = vec![micros(range.start).into(), micros(range.end).into()];
 		let condition = selector.sql("", &mut params);
 		let records = tx.execute(
@@ -493,6 +510,7 @@ impl Store {
 			 WHERE hash NOT IN (SELECT media_hash FROM records WHERE media_hash IS NOT NULL)",
 			[],
 		)?;
+		Self::prune_claims_after_purge(&tx, &had_evidence)?;
 		tx.commit()?;
 		Ok((records, series))
 	}

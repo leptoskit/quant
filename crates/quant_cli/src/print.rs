@@ -260,3 +260,38 @@ pub fn durations(durations: &Durations) {
 		);
 	}
 }
+
+/// One claim, for the owner.
+pub fn claim(claim: &quant_core::Claim) {
+	let classes: Vec<String> = claim
+		.classes
+		.iter()
+		.map(|class| format!("[{class}]"))
+		.collect();
+	println!(
+		"{}  {:<11} {:<16} {:<10} {:>4} {}\"{}\"",
+		claim.id,
+		claim.status.as_str(),
+		claim.authority.as_str(),
+		claim.kind.as_str(),
+		format!("{:.0}%", claim.confidence * 100.0),
+		classes.join(" "),
+		short(&claim.statement, 90)
+	);
+	if let Some(topic) = &claim.topic {
+		println!("    topic: {topic}");
+	}
+	if let Some(by) = claim.superseded_by {
+		println!("    superseded by {by}");
+	}
+}
+
+/// Claims, for the owner's list and profile.
+pub fn claims(claims: &[quant_core::Claim]) {
+	if claims.is_empty() {
+		println!("No claims yet. `quant tell \"…\"` states one.");
+	}
+	for claim in claims {
+		self::claim(claim);
+	}
+}

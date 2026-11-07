@@ -14,6 +14,7 @@
 
 mod access;
 mod audit;
+mod claims;
 mod media;
 mod records;
 mod schema;
@@ -25,6 +26,7 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 pub use access::*;
+pub use claims::*;
 use jiff::Timestamp;
 pub use media::*;
 use quant_core::Family;

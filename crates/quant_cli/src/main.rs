@@ -19,10 +19,13 @@ use jiff::Timestamp;
 use quant_access::Limits;
 use quant_api::ApproveRequest;
 use quant_api::AuditRequest;
+use quant_api::ClaimCorrectRequest;
+use quant_api::ClaimListRequest;
 use quant_api::ClientKind;
 use quant_api::DurationsRequest;
 use quant_api::IngestRecords;
 use quant_api::OverviewRequest;
+use quant_api::OwnerClaimRequest;
 use quant_api::PurgeRequest;
 use quant_api::RecordsRequest;
 use quant_api::SeriesRequest;
@@ -31,6 +34,10 @@ use quant_client::Endpoint;
 use quant_client::Identity;
 use quant_client::OwnerSession;
 use quant_client::when;
+use quant_core::ClaimId;
+use quant_core::ClaimKind;
+use quant_core::ClaimStatus;
+use quant_core::Class;
 use quant_core::DeviceId;
 use quant_core::Record;
 use quant_store::VaultPaths;
@@ -186,6 +193,33 @@ enum Command {
 		/// The note.
 		text: Vec<String>,
 	},
+	/// State something about yourself (asks for the passphrase).
+	Tell {
+		/// The statement, in your own words.
+		statement: Vec<String>,
+		/// What sort of claim.
+		#[arg(long, value_enum, default_value_t = ClaimKindArg::Preference)]
+		kind: ClaimKindArg,
+		/// A short dotted key such as `coffee.timing`. Active claims with the
+		/// same subject and topic and a lower authority are superseded.
+		#[arg(long)]
+		topic: Option<String>,
+		/// Who it is about; `me` by default.
+		#[arg(long, default_value = "me")]
+		subject: String,
+		/// Sensitivity classes, such as `health`.
+		#[arg(long = "class", value_enum, value_delimiter = ',')]
+		classes: Vec<ClassArg>,
+	},
+	/// See and manage the claims Quant holds about you (asks for the
+	/// passphrase).
+	Claims {
+		#[command(subcommand)]
+		action: ClaimsAction,
+	},
+	/// Your profile: what you told Quant about yourself, then the rest by
+	/// confidence (asks for the passphrase).
+	Profile,
 	/// Register custom streams for new hardware.
 	Stream {
 		#[command(subcommand)]
@@ -287,6 +321,112 @@ impl From<Kind> for ClientKind {
 	}
 }
 
+/// A claim kind, on the command line.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ClaimKindArg {
+	Preference,
+	Value,
+	Routine,
+	Fact,
+	Relationship,
+	Goal,
+	Commitment,
+}
+
+impl From<ClaimKindArg> for ClaimKind {
+	fn from(kind: ClaimKindArg) -> Self {
+		match kind {
+			ClaimKindArg::Preference => ClaimKind::Preference,
+			ClaimKindArg::Value => ClaimKind::Value,
+			ClaimKindArg::Routine => ClaimKind::Routine,
+			ClaimKindArg::Fact => ClaimKind::Fact,
+			ClaimKindArg::Relationship => ClaimKind::Relationship,
+			ClaimKindArg::Goal => ClaimKind::Goal,
+			ClaimKindArg::Commitment => ClaimKind::Commitment,
+		}
+	}
+}
+
+/// A sensitivity class, on the command line.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ClassArg {
+	Health,
+	Intimate,
+	Location,
+	Others,
+	Financial,
+}
+
+impl From<ClassArg> for Class {
+	fn from(class: ClassArg) -> Self {
+		match class {
+			ClassArg::Health => Class::Health,
+			ClassArg::Intimate => Class::Intimate,
+			ClassArg::Location => Class::Location,
+			ClassArg::Others => Class::Others,
+			ClassArg::Financial => Class::Financial,
+		}
+	}
+}
+
+/// A claim status, on the command line.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum StatusArg {
+	Active,
+	Held,
+	Rejected,
+	Retracted,
+	Superseded,
+}
+
+impl From<StatusArg> for ClaimStatus {
+	fn from(status: StatusArg) -> Self {
+		match status {
+			StatusArg::Active => ClaimStatus::Active,
+			StatusArg::Held => ClaimStatus::Held,
+			StatusArg::Rejected => ClaimStatus::Rejected,
+			StatusArg::Retracted => ClaimStatus::Retracted,
+			StatusArg::Superseded => ClaimStatus::Superseded,
+		}
+	}
+}
+
+/// What to do with claims.
+#[derive(Subcommand)]
+enum ClaimsAction {
+	/// List claims.
+	List {
+		/// Only this status.
+		#[arg(long, value_enum)]
+		status: Option<StatusArg>,
+		/// Most claims.
+		#[arg(long)]
+		limit: Option<usize>,
+	},
+	/// Approve a held proposal; it becomes active.
+	Approve {
+		/// The claim id.
+		id: ClaimId,
+	},
+	/// Refuse a held proposal.
+	Reject {
+		/// The claim id.
+		id: ClaimId,
+	},
+	/// Withdraw a claim.
+	Retract {
+		/// The claim id.
+		id: ClaimId,
+	},
+	/// Correct a claim; a new owner claim supersedes it.
+	Correct {
+		/// The claim id.
+		id: ClaimId,
+		/// The corrected statement, in your own words.
+		statement: Vec<String>,
+	},
+}
+
 #[derive(Args)]
 struct ApproveArgs {
 	/// Pairing code or client id.
@@ -315,6 +455,9 @@ struct ApproveArgs {
 	/// Serve text without redacting secrets.
 	#[arg(long)]
 	unredacted: bool,
+	/// Sensitivity classes the grant never sees.
+	#[arg(long = "deny", value_enum, value_delimiter = ',')]
+	deny_classes: Vec<ClassArg>,
 }
 
 pub(crate) struct Ctx {
@@ -512,6 +655,29 @@ async fn main() -> Result<()> {
 			Ok(())
 		}
 		Command::Note { text } => note(&cx, &text.join(" ")).await,
+		Command::Tell {
+			statement,
+			kind,
+			topic,
+			subject,
+			classes,
+		} => {
+			let claim = cx
+				.owner()
+				.await?
+				.tell(&OwnerClaimRequest {
+					statement: statement.join(" "),
+					kind: Some(kind.into()),
+					topic,
+					subject: Some(subject),
+					classes: classes.into_iter().map(Class::from).collect(),
+				})
+				.await?;
+			cx.show(&claim, print::claim);
+			Ok(())
+		}
+		Command::Claims { action } => claims(&cx, action).await,
+		Command::Profile => profile(&cx).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
 		Command::Link { host, port } => link(&cx, host, port).await,
 		Command::Stream { action } => hardware::stream(&cx, action).await,
@@ -624,6 +790,8 @@ async fn approve(cx: &Ctx, args: ApproveArgs) -> Result<()> {
 		expires_in_hours: args.expires_in_hours,
 		limits,
 		unredacted: args.unredacted,
+		deny_classes: (!args.deny_classes.is_empty())
+			.then(|| args.deny_classes.into_iter().map(Class::from).collect()),
 	};
 	let view = owner.approve(&request).await?;
 	cx.show(&view, |v| print::clients(std::slice::from_ref(v)));
@@ -664,6 +832,73 @@ async fn note(cx: &Ctx, text: &str) -> Result<()> {
 		})
 		.await?;
 	println!("Stored {} note.", stored.stored);
+	Ok(())
+}
+
+async fn claims(cx: &Ctx, action: ClaimsAction) -> Result<()> {
+	match action {
+		ClaimsAction::List { status, limit } => {
+			let claims = cx
+				.owner()
+				.await?
+				.claims(&ClaimListRequest {
+					status: status.map(ClaimStatus::from),
+					authority: None,
+					kind: None,
+					subject: None,
+					topic: None,
+					limit,
+				})
+				.await?;
+			cx.show(&claims, |c| print::claims(c));
+		}
+		ClaimsAction::Approve { id } => {
+			let claim = cx.owner().await?.claim_approve(id).await?;
+			cx.show(&claim, print::claim);
+		}
+		ClaimsAction::Reject { id } => {
+			let claim = cx.owner().await?.claim_reject(id).await?;
+			cx.show(&claim, print::claim);
+		}
+		ClaimsAction::Retract { id } => {
+			let claim = cx.owner().await?.claim_retract(id).await?;
+			cx.show(&claim, print::claim);
+		}
+		ClaimsAction::Correct { id, statement } => {
+			let claim = cx
+				.owner()
+				.await?
+				.claim_correct(&ClaimCorrectRequest {
+					id,
+					statement: statement.join(" "),
+				})
+				.await?;
+			cx.show(&claim, print::claim);
+		}
+	}
+	Ok(())
+}
+
+async fn profile(cx: &Ctx) -> Result<()> {
+	let mut claims = cx
+		.owner()
+		.await?
+		.claims(&ClaimListRequest::default())
+		.await?;
+	// The owner's view: their own words first, then the rest by confidence.
+	claims.sort_by(|a, b| {
+		let own = |c: &quant_core::Claim| {
+			matches!(
+				c.authority,
+				quant_core::Authority::Owner | quant_core::Authority::OwnerAuthored
+			)
+		};
+		own(b)
+			.cmp(&own(a))
+			.then(b.confidence.total_cmp(&a.confidence))
+			.then(b.updated_at.cmp(&a.updated_at))
+	});
+	cx.show(&claims, |c| print::claims(c));
 	Ok(())
 }
 

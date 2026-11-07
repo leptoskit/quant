@@ -66,6 +66,11 @@ uuid_id!(
 	GrantId,
 	"grt"
 );
+uuid_id!(
+	/// Identifies one claim about the owner.
+	ClaimId,
+	"clm"
+);
 
 #[cfg(test)]
 mod tests {

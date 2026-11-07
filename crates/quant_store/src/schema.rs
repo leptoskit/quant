@@ -120,6 +120,56 @@ const MIGRATIONS: &[&str] = &[
 		value TEXT NOT NULL
 	) STRICT;
 	",
+	// 3: claims about the owner, their evidence, and full-text search over
+	// their statements.
+	"
+	CREATE TABLE claims (
+		rowid INTEGER PRIMARY KEY,
+		id BLOB NOT NULL UNIQUE,
+		subject TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		statement TEXT NOT NULL,
+		topic TEXT,
+		authority TEXT NOT NULL,
+		confidence REAL NOT NULL,
+		classes TEXT NOT NULL,
+		status TEXT NOT NULL,
+		valid_from_us INTEGER,
+		valid_to_us INTEGER,
+		proposed_by BLOB,
+		created_at_us INTEGER NOT NULL,
+		updated_at_us INTEGER NOT NULL,
+		superseded_by BLOB
+	) STRICT;
+	CREATE INDEX claims_by_status ON claims (status);
+	CREATE INDEX claims_by_subject_topic ON claims (subject, topic) WHERE status = 'active';
+
+	CREATE TABLE claim_evidence (
+		claim INTEGER NOT NULL REFERENCES claims (rowid) ON DELETE CASCADE,
+		record INTEGER NOT NULL REFERENCES records (rowid) ON DELETE CASCADE,
+		PRIMARY KEY (claim, record)
+	) STRICT, WITHOUT ROWID;
+
+	CREATE VIRTUAL TABLE claims_fts USING fts5 (
+		statement,
+		content = 'claims',
+		content_rowid = 'rowid',
+		tokenize = 'unicode61 remove_diacritics 2'
+	);
+	CREATE TRIGGER claims_fts_insert AFTER INSERT ON claims WHEN new.statement IS NOT NULL BEGIN
+		INSERT INTO claims_fts (rowid, statement) VALUES (new.rowid, new.statement);
+	END;
+	CREATE TRIGGER claims_fts_delete AFTER DELETE ON claims WHEN old.statement IS NOT NULL BEGIN
+		INSERT INTO claims_fts (claims_fts, rowid, statement) VALUES ('delete', old.rowid, \
+	 old.statement);
+	END;
+	CREATE TRIGGER claims_fts_update AFTER UPDATE OF statement ON claims BEGIN
+		INSERT INTO claims_fts (claims_fts, rowid, statement)
+			SELECT 'delete', old.rowid, old.statement WHERE old.statement IS NOT NULL;
+		INSERT INTO claims_fts (rowid, statement)
+			SELECT new.rowid, new.statement WHERE new.statement IS NOT NULL;
+	END;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

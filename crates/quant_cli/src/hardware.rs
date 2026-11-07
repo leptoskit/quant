@@ -119,6 +119,7 @@ pub async fn stream(cx: &Ctx, action: StreamAction) -> Result<()> {
 		description,
 		media_retention_hours: None,
 		summary_keys: Vec::new(),
+		classes: Vec::new(),
 	};
 	let stored = cx.owner().await?.register_stream(&spec).await?;
 	println!(

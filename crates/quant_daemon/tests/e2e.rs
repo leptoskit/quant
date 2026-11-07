@@ -19,6 +19,7 @@ use quant_client::Client;
 use quant_client::Endpoint;
 use quant_client::Identity;
 use quant_client::OwnerSession;
+use quant_core::Class;
 use quant_core::DeviceId;
 use quant_core::Record;
 use quant_core::SeriesBatch;
@@ -98,6 +99,7 @@ fn approve(scopes: &[&str]) -> ApproveRequest {
 		expires_in_hours: None,
 		limits: None,
 		unredacted: false,
+		deny_classes: None,
 	}
 }
 
@@ -911,4 +913,517 @@ async fn clips_are_renamed_with_audio_write_and_keep_their_transcript() {
 		.await
 		.unwrap_err();
 	assert_eq!(other.code(), Some("not_found"));
+}
+
+async fn tell(
+	owner: &OwnerSession,
+	statement: &str,
+	topic: Option<&str>,
+	classes: &[Class],
+) -> quant_core::Claim {
+	owner
+		.tell(&quant_api::OwnerClaimRequest {
+			statement: statement.to_owned(),
+			kind: Some(quant_core::ClaimKind::Preference),
+			topic: topic.map(str::to_owned),
+			subject: Some("me".into()),
+			classes: classes.to_vec(),
+		})
+		.await
+		.unwrap()
+}
+
+async fn propose(
+	client: &Client,
+	statement: &str,
+	evidence: Vec<quant_core::RecordId>,
+	topic: Option<&str>,
+) -> Result<quant_api::Proposed, quant_client::ClientError> {
+	client
+		.propose(&quant_api::ProposeRequest {
+			claims: vec![quant_api::ClaimProposal {
+				statement: statement.to_owned(),
+				kind: Some(quant_core::ClaimKind::Routine),
+				topic: topic.map(str::to_owned),
+				subject: None,
+				classes: Vec::new(),
+				confidence: Some(0.7),
+				evidence,
+			}],
+		})
+		.await
+}
+
+#[tokio::test]
+async fn summary_profiles_serve_only_the_owners_own_words() {
+	let h = start().await;
+	seed(&h.state);
+	let owner = h.owner().await;
+	let coffee = tell(
+		&owner,
+		"Prefers espresso after lunch",
+		Some("coffee.timing"),
+		&[],
+	)
+	.await;
+
+	let writer = h
+		.paired(
+			"Scout",
+			ClientKind::Agent,
+			approve(&["memory.profile:read", "memory.profile:write", "screen:read"]),
+		)
+		.await;
+	let seen = writer
+		.records(&RecordsRequest {
+			streams: vec!["screen".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	let evidence = vec![seen.records[0].id];
+	let proposed = propose(&writer, "Writes best before noon", evidence.clone(), None)
+		.await
+		.unwrap();
+	let held = proposed.claims[0];
+
+	// The summary agent sees only what the owner stated: no evidence, no
+	// proposer, and the held proposal is invisible.
+	let summary = h
+		.paired(
+			"Assistant",
+			ClientKind::Agent,
+			approve(&["memory.profile:summary"]),
+		)
+		.await;
+	let profile = summary.profile().await.unwrap();
+	assert_eq!(profile.level, quant_access::Level::Summary);
+	assert_eq!(profile.claims.len(), 1);
+	assert_eq!(profile.claims[0].id, coffee.id);
+	assert!(profile.claims[0].evidence.is_empty());
+
+	// A reader sees the owner's claim too, but still not the held proposal.
+	let reader = h
+		.paired(
+			"Reader",
+			ClientKind::Agent,
+			approve(&["memory.profile:read"]),
+		)
+		.await;
+	assert_eq!(reader.profile().await.unwrap().claims.len(), 1);
+
+	// The owner sees both, and approves the proposal.
+	let all = owner
+		.claims(&quant_api::ClaimListRequest::default())
+		.await
+		.unwrap();
+	assert_eq!(all.len(), 2);
+	assert!(
+		all.iter()
+			.any(|c| c.status == quant_core::ClaimStatus::Held)
+	);
+	let approved = owner.claim_approve(held).await.unwrap();
+	assert_eq!(approved.status, quant_core::ClaimStatus::Active);
+	assert_eq!(approved.authority, quant_core::Authority::Inferred);
+	assert_eq!(
+		approved.proposed_by,
+		Some(writer.identity().client.unwrap())
+	);
+
+	// Now the reader sees it, with confidence; the evidence ids are dropped
+	// for this grant, because it cannot read the screen records they point
+	// at. The writer, which can, sees the ids. The summary agent still sees
+	// only the owner's words.
+	let full = reader.profile().await.unwrap();
+	assert_eq!(full.level, quant_access::Level::Read);
+	assert_eq!(full.claims.len(), 2);
+	let inferred = full.claims.iter().find(|c| c.id == held).unwrap();
+	assert_eq!(inferred.confidence, 0.7);
+	assert!(inferred.evidence.is_empty());
+	let writers_view = writer.profile().await.unwrap();
+	let inferred = writers_view.claims.iter().find(|c| c.id == held).unwrap();
+	assert_eq!(inferred.evidence, evidence);
+	assert_eq!(summary.profile().await.unwrap().claims.len(), 1);
+
+	// Both reads were audited with their shape.
+	let audit = owner
+		.audit(&quant_api::AuditRequest::default())
+		.await
+		.unwrap();
+	let actions: Vec<_> = audit.entries.iter().map(|e| e.action.as_str()).collect();
+	assert!(actions.contains(&"claims.read"));
+	assert!(actions.contains(&"claims.propose"));
+	assert!(actions.contains(&"claims.tell"));
+	assert!(actions.contains(&"claims.approve"));
+}
+
+#[tokio::test]
+async fn proposals_with_unreadable_evidence_fail_as_not_found() {
+	let h = start().await;
+	let device = DeviceId::new();
+	let record = Record::new("screen.frame".parse().unwrap(), device).with_text("hidden");
+	h.state
+		.vault
+		.store
+		.insert_records(std::slice::from_ref(&record))
+		.unwrap();
+
+	// A write-only agent may propose, but it cannot read the evidence it
+	// cites; the whole request fails as not found, never saying which id.
+	let writer = h
+		.paired(
+			"Blind",
+			ClientKind::Agent,
+			approve(&["memory.profile:write"]),
+		)
+		.await;
+	let refused = propose(&writer, "A guess", vec![record.id], None)
+		.await
+		.unwrap_err();
+	assert_eq!(refused.code(), Some("not_found"));
+
+	// A missing record id fails the same way.
+	let missing = propose(
+		&writer,
+		"Another guess",
+		vec![quant_core::RecordId::new()],
+		None,
+	)
+	.await
+	.unwrap_err();
+	assert_eq!(missing.code(), Some("not_found"));
+
+	// Nothing was stored either way.
+	assert!(
+		h.owner()
+			.await
+			.claims(&quant_api::ClaimListRequest::default())
+			.await
+			.unwrap()
+			.is_empty()
+	);
+}
+
+#[tokio::test]
+async fn held_proposals_are_invisible_until_the_owner_approves() {
+	let h = start().await;
+	seed(&h.state);
+	let agent = h
+		.paired(
+			"Agent",
+			ClientKind::Agent,
+			approve(&["memory.profile:read", "memory.profile:write", "*:read"]),
+		)
+		.await;
+	let seen = agent.records(&RecordsRequest::default()).await.unwrap();
+	let proposed = propose(&agent, "Ships on Fridays", vec![seen.records[0].id], None)
+		.await
+		.unwrap();
+	let held = proposed.claims[0];
+
+	// No client but the owner can see a held proposal, whatever its level.
+	let profile = agent.profile().await.unwrap();
+	assert!(profile.claims.iter().all(|c| c.id != held));
+	let search = agent
+		.search(&RecordsRequest {
+			search: Some("Ships on Fridays".into()),
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(search.records, [] as [quant_api::ServedRecord; 0]);
+
+	let owner = h.owner().await;
+	let listed = owner
+		.claims(&quant_api::ClaimListRequest {
+			status: Some(quant_core::ClaimStatus::Held),
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(listed.len(), 1);
+	assert_eq!(listed[0].id, held);
+
+	// Rejecting keeps it hidden.
+	owner.claim_reject(held).await.unwrap();
+	assert!(
+		agent
+			.profile()
+			.await
+			.unwrap()
+			.claims
+			.iter()
+			.all(|c| c.id != held)
+	);
+	let listed = owner
+		.claims(&quant_api::ClaimListRequest {
+			status: Some(quant_core::ClaimStatus::Rejected),
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(listed.len(), 1);
+
+	// A second proposal, approved this time, appears.
+	let proposed = propose(&agent, "Ships on Fridays", vec![seen.records[0].id], None)
+		.await
+		.unwrap();
+	owner.claim_approve(proposed.claims[0]).await.unwrap();
+	let profile = agent.profile().await.unwrap();
+	assert_eq!(profile.claims.len(), 1);
+	assert_eq!(profile.claims[0].id, proposed.claims[0]);
+}
+
+#[tokio::test]
+async fn deny_classes_hide_health_records_and_health_claims() {
+	let h = start().await;
+	seed(&h.state);
+	let owner = h.owner().await;
+	tell(&owner, "Prefers espresso after lunch", None, &[]).await;
+	tell(
+		&owner,
+		"Takes blood pressure medicine each morning",
+		None,
+		&[Class::Health],
+	)
+	.await;
+
+	let mut request = approve(&["*:read", "memory.profile:read"]);
+	request.deny_classes = Some(vec![Class::Health]);
+	let agent = h.paired("Cautious", ClientKind::Agent, request).await;
+
+	// Records: the health stream is out of scope everywhere.
+	let records = agent.records(&RecordsRequest::default()).await.unwrap();
+	assert!(
+		records
+			.records
+			.iter()
+			.all(|r| r.stream.as_str() != "health.heart_rate")
+	);
+	let withheld = agent
+		.records(&RecordsRequest {
+			streams: vec!["health.heart_rate".into(), "screen".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(withheld.withheld, vec!["health.heart_rate"]);
+	assert!(!withheld.records.is_empty());
+
+	// Derived summaries quote heart rate and sleep, so they are withheld too.
+	h.state
+		.record(
+			Record::new("memory.daily".parse().unwrap(), DeviceId::new())
+				.starting(Timestamp::now() - SignedDuration::from_hours(2))
+				.with_text("Resting heart rate 52 bpm; slept 7 h 10 min."),
+		)
+		.unwrap();
+	let daily = agent
+		.records(&RecordsRequest {
+			streams: vec!["memory.daily".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(daily.withheld, vec!["memory.daily"]);
+	assert!(daily.records.is_empty());
+
+	// Series and durations treat it exactly like an out-of-scope stream.
+	assert_eq!(
+		agent
+			.series(&SeriesRequest {
+				stream: "health.heart_rate".into(),
+				from: None,
+				to: None,
+				bucket_seconds: None,
+				raw: false,
+				max_rows: None,
+			})
+			.await
+			.unwrap_err()
+			.code(),
+		Some("forbidden")
+	);
+	assert_eq!(
+		agent
+			.durations(&DurationsRequest {
+				stream: "health.sleep".into(),
+				from: None,
+				to: None,
+				group_by: None,
+				bucket_seconds: None,
+			})
+			.await
+			.unwrap_err()
+			.code(),
+		Some("forbidden")
+	);
+
+	// The stream listing never mentions health streams.
+	let streams = agent.streams().await.unwrap();
+	assert!(
+		streams
+			.iter()
+			.all(|s| s.spec.id.as_str() != "health.heart_rate")
+	);
+
+	// Claims: only the non-health claim is served.
+	let profile = agent.profile().await.unwrap();
+	assert_eq!(profile.claims.len(), 1);
+	assert_eq!(profile.claims[0].statement, "Prefers espresso after lunch");
+}
+
+#[tokio::test]
+async fn context_packets_respect_budget_and_scopes() {
+	let h = start().await;
+	let device = DeviceId::new();
+	let now = Timestamp::now();
+	h.state
+		.vault
+		.store
+		.insert_records(&[
+			Record::new("memory.daily".parse().unwrap(), device)
+				.starting(now - SignedDuration::from_hours(20))
+				.with_text("Yesterday: mostly writing, an espresso at 14:02."),
+			Record::new("memory.episode".parse().unwrap(), device)
+				.starting(now - SignedDuration::from_hours(2))
+				.ending(now - SignedDuration::from_hours(1))
+				.with_text("Hour 22: writing in Zed, calm and focused."),
+			Record::new("screen.frame".parse().unwrap(), device)
+				.starting(now - SignedDuration::from_mins(30))
+				.with_text("Reviewing the espresso order for tomorrow."),
+		])
+		.unwrap();
+	let owner = h.owner().await;
+	for statement in [
+		"Prefers espresso after lunch, and a second one is fine when the afternoon is long",
+		"Values focus over meetings, and reschedules a meeting rather than break a writing block",
+		"Runs on Tuesday mornings along the river path, rain or shine, for about an hour",
+		"Wants to read more fiction than news this year, and keeps a reading list in the vault",
+		"Keeps a paper notebook for ideas that matter, and types them into notes on Fridays",
+		"Prefers quiet workspaces over open plan offices, and books rooms for long calls",
+		"Tracks spending in a spreadsheet every Sunday evening before the week starts",
+		"Learns languages best by listening to podcasts at 1.5x on the morning walk",
+	] {
+		tell(&owner, statement, None, &[]).await;
+	}
+
+	// A grant that can read the profile, memory, and records gets every
+	// section within a generous budget.
+	let full = h
+		.paired(
+			"Full",
+			ClientKind::Agent,
+			approve(&["memory.profile:read", "memory:read", "screen:read"]),
+		)
+		.await;
+	let packet = full
+		.context(&quant_api::ContextRequest {
+			task: "espresso".into(),
+			budget_tokens: Some(1500),
+		})
+		.await
+		.unwrap();
+	assert!(packet.profile.included && !packet.profile.withheld && !packet.profile.cut);
+	// The claim matching the task's terms comes first.
+	assert_eq!(
+		packet.profile.items[0].statement,
+		"Prefers espresso after lunch, and a second one is fine when the afternoon is long"
+	);
+	assert!(packet.memory.included && !packet.memory.withheld);
+	assert!(packet.records.included && !packet.records.withheld);
+	assert!(packet.used_tokens <= packet.budget_tokens);
+
+	// A tight budget stops before later sections are complete and says so.
+	let tight = full
+		.context(&quant_api::ContextRequest {
+			task: "espresso".into(),
+			budget_tokens: Some(200),
+		})
+		.await
+		.unwrap();
+	assert!(tight.used_tokens <= tight.budget_tokens);
+	assert!(tight.profile.cut || tight.memory.cut || tight.records.cut);
+
+	// A grant that can read none of the sections gets only withheld flags.
+	let blind = h
+		.paired("Blind", ClientKind::Agent, approve(&["health:summary"]))
+		.await;
+	let packet = blind
+		.context(&quant_api::ContextRequest {
+			task: "anything".into(),
+			budget_tokens: None,
+		})
+		.await
+		.unwrap();
+	assert!(packet.profile.withheld && !packet.profile.included);
+	assert!(packet.memory.withheld && !packet.memory.included);
+	assert!(packet.records.withheld && !packet.records.included);
+}
+
+#[tokio::test]
+async fn tell_with_a_topic_supersedes_earlier_claims_on_it() {
+	let h = start().await;
+	seed(&h.state);
+	let owner = h.owner().await;
+	tell(
+		&owner,
+		"Drinks espresso after lunch",
+		Some("coffee.timing"),
+		&[],
+	)
+	.await;
+
+	// An agent proposes the opposite; the owner approves it.
+	let agent = h
+		.paired(
+			"Agent",
+			ClientKind::Agent,
+			approve(&["memory.profile:read", "memory.profile:write", "*:read"]),
+		)
+		.await;
+	let seen = agent.records(&RecordsRequest::default()).await.unwrap();
+	let proposed = propose(
+		&agent,
+		"Drinks decaf after lunch",
+		vec![seen.records[0].id],
+		Some("coffee.timing"),
+	)
+	.await
+	.unwrap();
+	let held = proposed.claims[0];
+	owner.claim_approve(held).await.unwrap();
+
+	// The owner states it again with the same topic: everything earlier on
+	// it, the owner's own first statement included, is superseded.
+	let correction = tell(
+		&owner,
+		"Espresso, but never after 16:00",
+		Some("coffee.timing"),
+		&[],
+	)
+	.await;
+	let claims = owner
+		.claims(&quant_api::ClaimListRequest {
+			topic: Some("coffee.timing".into()),
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(claims.len(), 3);
+	let old = claims.iter().find(|c| c.id == held).unwrap();
+	assert_eq!(old.status, quant_core::ClaimStatus::Superseded);
+	assert_eq!(old.superseded_by, Some(correction.id));
+	for claim in &claims {
+		let expected = if claim.id == correction.id {
+			quant_core::ClaimStatus::Active
+		} else {
+			quant_core::ClaimStatus::Superseded
+		};
+		assert_eq!(claim.status, expected, "{}", claim.statement);
+	}
+
+	// Serving skips superseded claims entirely.
+	let profile = agent.profile().await.unwrap();
+	assert!(profile.claims.iter().all(|c| c.id != held));
 }

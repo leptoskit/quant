@@ -1,5 +1,6 @@
 //! Read routes: what a client may see, filtered by its grant.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -33,8 +34,11 @@ use quant_api::SeriesRequest;
 use quant_api::ServedRecord;
 use quant_api::SourceState;
 use quant_api::StreamAccess;
+use quant_core::Class;
+use quant_core::Family;
 use quant_core::Record;
 use quant_core::StreamId;
+use quant_core::StreamSpec;
 use quant_core::TimeRange;
 use quant_store::RecordQuery;
 use quant_store::Selector;
@@ -52,7 +56,11 @@ type Shared = AxumState<Arc<State>>;
 const DEFAULT_SPAN: SignedDuration = SignedDuration::from_hours(24);
 
 /// Resolve `from`/`to` defaults and clip to the grant's lookback.
-fn window(grant: &Grant, from: Option<Timestamp>, to: Option<Timestamp>) -> ApiResult<TimeRange> {
+pub(crate) fn window(
+	grant: &Grant,
+	from: Option<Timestamp>,
+	to: Option<Timestamp>,
+) -> ApiResult<TimeRange> {
 	let now = Timestamp::now();
 	let to = to.unwrap_or(now).min(now + SignedDuration::from_mins(5));
 	let from = from.unwrap_or_else(|| to.checked_sub(DEFAULT_SPAN).unwrap_or(Timestamp::MIN));
@@ -62,9 +70,11 @@ fn window(grant: &Grant, from: Option<Timestamp>, to: Option<Timestamp>) -> ApiR
 
 /// The selector of streams a grant may read at `min` level or above,
 /// narrowed to what was asked for. Requested items the grant can see only
-/// below `min` come back in the second list.
+/// below `min`, or whose streams carry a class the grant denies, come back
+/// in the second list.
 pub(crate) fn resolve(
 	grant: &Grant,
+	specs: &BTreeMap<StreamId, StreamSpec>,
 	requested: &[String],
 	min: Level,
 ) -> ApiResult<(Selector, Vec<String>)> {
@@ -79,16 +89,64 @@ pub(crate) fn resolve(
 			}
 		})
 		.collect();
+	let denied_classes = &grant.deny_classes;
+	let intersects = |classes: &[Class]| classes.iter().any(|class| denied_classes.contains(class));
+	let family_denied = |family: Family| {
+		specs
+			.values()
+			.any(|spec| spec.id.family() == family && intersects(&spec.classes))
+	};
+	let stream_denied = |stream: &StreamId| {
+		let mut name = stream.as_str();
+		loop {
+			if let Some(spec) = StreamId::new(name).ok().and_then(|id| specs.get(&id)) {
+				return intersects(&spec.classes);
+			}
+			let Some((parent, _)) = name.rsplit_once('.') else {
+				return false;
+			};
+			name = parent;
+		}
+	};
+	let target_denied = |target: &Target| {
+		match target {
+			Target::All => false,
+			Target::Family(family) => family_denied(*family),
+			Target::Stream(stream) => stream_denied(stream),
+		}
+	};
 	let add = |selector: &mut Selector, target: &Target| {
 		match target {
-			Target::All => selector.all = true,
+			// Everything readable, minus streams with a denied class.
+			Target::All => {
+				for family in Family::ALL {
+					if !family_denied(family) && !selector.families.contains(&family) {
+						selector.families.push(family);
+					}
+				}
+				for spec in specs.values() {
+					if intersects(&spec.classes) {
+						continue;
+					}
+					let family = spec.id.family();
+					if selector.families.contains(&family)
+						|| selector
+							.streams
+							.iter()
+							.any(|s| Target::Stream(s.clone()).covers(&spec.id))
+					{
+						continue;
+					}
+					selector.streams.push(spec.id.clone());
+				}
+			}
 			Target::Family(family) => {
-				if !selector.families.contains(family) {
+				if !family_denied(*family) && !selector.families.contains(family) {
 					selector.families.push(*family);
 				}
 			}
 			Target::Stream(stream) => {
-				if !selector.streams.contains(stream) {
+				if !stream_denied(stream) && !selector.streams.contains(stream) {
 					selector.streams.push(stream.clone());
 				}
 			}
@@ -129,7 +187,9 @@ pub(crate) fn resolve(
 					}
 				}
 			};
-			if let Some(target) = narrower {
+			if let Some(target) = narrower
+				&& !target_denied(&target)
+			{
 				add(&mut selector, &target);
 				matched = true;
 			}
@@ -150,7 +210,7 @@ fn clean_value(value: &mut serde_json::Value, redact: bool) {
 	}
 }
 
-fn serve(record: Record, snippet: Option<String>, grant: &Grant) -> ServedRecord {
+pub(crate) fn serve(record: Record, snippet: Option<String>, grant: &Grant) -> ServedRecord {
 	let redact = !grant.unredacted;
 	let raw = grant.scopes.read_level(&record.stream) == Some(Level::Raw);
 	let mut data = serde_json::Value::Object(record.data);
@@ -172,7 +232,7 @@ fn serve(record: Record, snippet: Option<String>, grant: &Grant) -> ServedRecord
 }
 
 /// Charge the response to the grant, audit it, and send it.
-fn respond<T: Serialize>(
+pub(crate) fn respond<T: Serialize>(
 	state: &State,
 	caller: &Caller,
 	action: &str,
@@ -205,7 +265,13 @@ fn respond<T: Serialize>(
 	Ok(Json(value))
 }
 
-fn deny(state: &State, caller: &Caller, action: &str, target: &str, error: Error) -> Error {
+pub(crate) fn deny(
+	state: &State,
+	caller: &Caller,
+	action: &str,
+	target: &str,
+	error: Error,
+) -> Error {
 	if let Error::Forbidden(reason) = &error {
 		let _ = state.vault.store.audit(AuditEvent::new(
 			caller.actor(),
@@ -267,6 +333,7 @@ pub async fn streams(
 			grant
 				.scopes
 				.read_level(&spec.id)
+				.filter(|_| !grant.denies(&spec.classes))
 				.map(|level| StreamAccess { spec, level })
 		})
 		.collect();
@@ -281,7 +348,9 @@ pub async fn overview(
 	let caller = &request.caller;
 	let body = request.body.unwrap_or_default();
 	let range = window(&caller.grant, body.from, body.to)?;
-	let (selector, _) = resolve(&caller.grant, &[], Level::Summary)?;
+	let specs = state.specs_lock();
+	let (selector, _) = resolve(&caller.grant, &specs, &[], Level::Summary)?;
+	drop(specs);
 	let streams = state.vault.store.overview(&selector, range)?;
 	let items: Vec<OverviewItem> = streams
 		.into_iter()
@@ -325,7 +394,9 @@ fn records_or_search(
 		return Err(Error::Invalid("search needs terms".into()));
 	}
 	let range = window(&caller.grant, body.from, body.to)?;
-	let (selector, withheld) = resolve(&caller.grant, &body.streams, Level::Read)?;
+	let specs = state.specs_lock();
+	let (selector, withheld) = resolve(&caller.grant, &specs, &body.streams, Level::Read)?;
+	drop(specs);
 
 	let allowance =
 		state
@@ -432,6 +503,15 @@ pub async fn series(
 		.grant
 		.authorize_read(&stream, wanted, range, Timestamp::now())
 		.map_err(|denied| deny(&state, caller, "series", stream.as_str(), denied.into()))?;
+	if state.class_denied(&stream, &caller.grant.deny_classes) {
+		return Err(deny(
+			&state,
+			caller,
+			"series",
+			stream.as_str(),
+			Error::Forbidden(quant_access::Denied::OutOfScope),
+		));
+	}
 	let range = permit.range;
 	let detail = serde_json::json!({ "from": range.start, "to": range.end, "raw": body.raw });
 
@@ -547,6 +627,15 @@ pub async fn durations(
 		.grant
 		.authorize_read(&stream, Level::Read, range, Timestamp::now())
 		.map_err(|denied| deny(&state, caller, "durations", stream.as_str(), denied.into()))?;
+	if state.class_denied(&stream, &caller.grant.deny_classes) {
+		return Err(deny(
+			&state,
+			caller,
+			"durations",
+			stream.as_str(),
+			Error::Forbidden(quant_access::Denied::OutOfScope),
+		));
+	}
 	if let Some(key) = &body.group_by
 		&& permit.level < Level::Read
 	{
@@ -617,7 +706,8 @@ pub async fn media(
 	};
 	let allowed = caller.grant.check_live(now).is_ok()
 		&& caller.grant.scopes.read_level(&stream) == Some(Level::Raw)
-		&& at >= caller.grant.floor(now);
+		&& at >= caller.grant.floor(now)
+		&& !state.class_denied(&stream, &caller.grant.deny_classes);
 	if !allowed {
 		let _ = state.vault.store.audit(AuditEvent::new(
 			caller.actor(),
@@ -674,11 +764,19 @@ mod tests {
 	use quant_access::Scopes;
 	use quant_core::ClientId;
 	use quant_core::Family;
+	use quant_core::builtin_streams;
 
 	use super::*;
 
 	fn grant(scopes: &[&str]) -> Grant {
 		Grant::new(ClientId::new(), "t", Scopes::parse(scopes).unwrap())
+	}
+
+	fn specs() -> BTreeMap<StreamId, StreamSpec> {
+		builtin_streams()
+			.into_iter()
+			.map(|spec| (spec.id.clone(), spec))
+			.collect()
 	}
 
 	fn strings(items: &[&str]) -> Vec<String> {
@@ -687,8 +785,14 @@ mod tests {
 
 	#[test]
 	fn empty_request_selects_everything_readable() {
-		let (selector, withheld) =
-			resolve(&grant(&["health:read", "*:summary"]), &[], Level::Read).unwrap();
+		let specs = specs();
+		let (selector, withheld) = resolve(
+			&grant(&["health:read", "*:summary"]),
+			&specs,
+			&[],
+			Level::Read,
+		)
+		.unwrap();
 		assert_eq!(selector.families, vec![Family::Health]);
 		assert!(!selector.all);
 		assert_eq!(withheld, [] as [std::string::String; 0]);
@@ -696,9 +800,11 @@ mod tests {
 
 	#[test]
 	fn requests_are_narrowed_to_the_grant() {
+		let specs = specs();
 		let g = grant(&["sensor.vest:read", "apps:summary"]);
 		let (selector, withheld) = resolve(
 			&g,
+			&specs,
 			&strings(&["sensor", "apps", "screen.frame"]),
 			Level::Read,
 		)
@@ -713,8 +819,10 @@ mod tests {
 
 	#[test]
 	fn a_wildcard_grant_takes_the_request() {
+		let specs = specs();
 		let (selector, _) = resolve(
 			&grant(&["*:raw"]),
+			&specs,
 			&strings(&["health.heart_rate"]),
 			Level::Read,
 		)
@@ -727,7 +835,56 @@ mod tests {
 
 	#[test]
 	fn unknown_names_are_invalid() {
-		assert!(resolve(&grant(&["*:raw"]), &strings(&["bogus"]), Level::Read).is_err());
+		let specs = specs();
+		assert!(
+			resolve(
+				&grant(&["*:raw"]),
+				&specs,
+				&strings(&["bogus"]),
+				Level::Read
+			)
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn denied_classes_leave_streams_out_and_listed_as_withheld() {
+		let specs = specs();
+		let mut g = grant(&["*:read"]);
+		g.deny_classes = vec![Class::Health, Class::Others];
+
+		// Nothing asked: everything readable except the denied families.
+		let (selector, _) = resolve(&g, &specs, &[], Level::Read).unwrap();
+		assert!(!selector.families.contains(&Family::Health));
+		assert!(!selector.families.contains(&Family::Audio));
+		assert!(!selector.families.contains(&Family::Comms));
+		assert!(selector.families.contains(&Family::Apps));
+
+		// Asked for denied streams: withheld, never selected.
+		let (selector, withheld) = resolve(
+			&g,
+			&specs,
+			&strings(&["health", "audio.transcript", "apps"]),
+			Level::Read,
+		)
+		.unwrap();
+		assert_eq!(selector.families, vec![Family::Apps]);
+		assert_eq!(withheld, strings(&["health", "audio.transcript"]));
+
+		// A grant without denials sees them.
+		let clean = grant(&["*:read"]);
+		let (selector, withheld) = resolve(
+			&clean,
+			&specs,
+			&strings(&["health.heart_rate"]),
+			Level::Read,
+		)
+		.unwrap();
+		assert_eq!(
+			selector.streams,
+			vec!["health.heart_rate".parse::<StreamId>().unwrap()]
+		);
+		assert!(withheld.is_empty());
 	}
 
 	#[test]

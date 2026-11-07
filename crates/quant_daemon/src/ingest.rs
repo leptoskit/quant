@@ -64,6 +64,15 @@ pub async fn records(
 	}
 	let streams: Vec<&StreamId> = body.records.iter().map(|r| &r.stream).collect();
 	authorize(&state, caller, &streams, "ingest.records")?;
+	// Claims are not records: nothing may ingest into the stream that
+	// serves them.
+	if body
+		.records
+		.iter()
+		.any(|record| record.stream.as_str() == crate::memory::PROFILE)
+	{
+		return Err(Error::Forbidden(quant_access::Denied::OutOfScope));
+	}
 	for record in &body.records {
 		if let Some(media) = &record.media
 			&& !state.vault.store.has_media(&media.hash)?

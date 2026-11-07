@@ -75,7 +75,8 @@ impl Server {
 			"ping" => Ok(json!({})),
 			"tools/list" => Ok(self.list_tools().await),
 			"tools/call" => self.call_tool(&params).await,
-			"resources/list" => Ok(json!({ "resources": [] })),
+			"resources/list" => Ok(self.list_resources().await),
+			"resources/read" => self.read_resource(&params).await,
 			"prompts/list" => Ok(json!({ "prompts": [] })),
 			other => Err((-32601, format!("method not found: {other}"))),
 		};
@@ -94,7 +95,7 @@ impl Server {
 			.unwrap_or(PROTOCOL_VERSIONS[0]);
 		json!({
 			"protocolVersion": version,
-			"capabilities": { "tools": { "listChanged": false } },
+			"capabilities": { "tools": { "listChanged": false }, "resources": {} },
 			"serverInfo": { "name": "quant", "version": env!("CARGO_PKG_VERSION") },
 			"instructions": INSTRUCTIONS,
 		})
@@ -104,6 +105,50 @@ impl Server {
 		let me = self.me().await;
 		let tools: Vec<Value> = tools_for(me.as_ref()).iter().map(Tool::describe).collect();
 		json!({ "tools": tools })
+	}
+
+	async fn list_resources(&mut self) -> Value {
+		let me = self.me().await;
+		// The profile resource exists only when the grant can read
+		// `memory.profile`; otherwise the vault looks resource-less.
+		let resources = if tools_for(me.as_ref()).contains(&Tool::Profile) {
+			json!([{
+				"uri": "quant://profile",
+				"name": "Owner profile",
+				"description": "What the owner has stated about themselves: preferences, values, routines, facts, relationships, goals, and commitments.",
+				"mimeType": "application/json",
+			}])
+		} else {
+			json!([])
+		};
+		json!({ "resources": resources })
+	}
+
+	async fn read_resource(&mut self, params: &Value) -> Result<Value, (i64, String)> {
+		let uri = params
+			.get("uri")
+			.and_then(Value::as_str)
+			.ok_or((-32602, "missing resource uri".to_owned()))?;
+		let me = self.me().await;
+		let available = tools_for(me.as_ref()).contains(&Tool::Profile);
+		if uri != "quant://profile" || !available {
+			return Err((-32002, "Resource not found".to_owned()));
+		}
+		let outcome = Tool::Profile
+			.call(&self.client, me.as_ref(), &json!({}))
+			.await;
+		let text = match outcome.get("isError") {
+			Some(Value::Bool(false)) => {
+				outcome["content"][0]["text"]
+					.as_str()
+					.unwrap_or_default()
+					.to_owned()
+			}
+			_ => return Err((-32002, "Resource not found".to_owned())),
+		};
+		Ok(json!({
+			"contents": [{ "uri": uri, "mimeType": "application/json", "text": text }],
+		}))
 	}
 
 	async fn call_tool(&mut self, params: &Value) -> Result<Value, (i64, String)> {

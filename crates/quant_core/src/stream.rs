@@ -4,6 +4,7 @@ use std::str::FromStr;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::Class;
 use crate::CoreError;
 
 /// The top-level group a stream belongs to. Access grants are scoped to
@@ -208,6 +209,11 @@ pub struct StreamSpec {
 	/// shown to a grant with summary access; titles, URLs and text never are.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub summary_keys: Vec<String>,
+	/// Sensitivity classes every sample of this stream carries, so a grant
+	/// that denies a class never sees the stream. Custom specs load with an
+	/// empty list when they were written before classes existed.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub classes: Vec<Class>,
 }
 
 impl StreamSpec {
@@ -219,6 +225,7 @@ impl StreamSpec {
 			description: description.to_owned(),
 			media_retention_hours: None,
 			summary_keys: Vec::new(),
+			classes: Vec::new(),
 		}
 	}
 
@@ -239,6 +246,11 @@ impl StreamSpec {
 		self.summary_keys = keys.iter().map(|k| (*k).to_owned()).collect();
 		self
 	}
+
+	fn sensitive(mut self, classes: &[Class]) -> Self {
+		self.classes = classes.to_vec();
+		self
+	}
 }
 
 /// The streams Quant understands out of the box.
@@ -256,19 +268,22 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"A transcribed span of speech heard by a device microphone.",
 		)
 		.media_hours(24)
-		.summarise_by(&["source", "speaker"]),
+		.summarise_by(&["source", "speaker"])
+		.sensitive(&[Class::Others]),
 		StreamSpec::event(
 			"audio.buffer",
 			"One rolling-buffer chunk of encoded audio (a minute, by default), kept for the last \
 			 day so a moment can be saved after it happened.",
 		)
 		.media_hours(24)
-		.summarise_by(&["source"]),
+		.summarise_by(&["source"])
+		.sensitive(&[Class::Others]),
 		StreamSpec::event(
 			"audio.clip",
 			"A saved moment of audio: rolling-buffer chunks joined into one file, kept until the \
 			 owner deletes it.",
-		),
+		)
+		.sensitive(&[Class::Others]),
 		StreamSpec::event("apps.focus", "A span of time one app and window had focus.")
 			.summarise_by(&["app"]),
 		StreamSpec::series(
@@ -280,28 +295,35 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"health.heart_rate",
 			&[("bpm", "bpm")],
 			"Heart rate samples from a watch, strap, or phone.",
-		),
+		)
+		.sensitive(&[Class::Health]),
 		StreamSpec::series(
 			"health.hrv",
 			&[("rmssd", "ms")],
 			"Heart rate variability (RMSSD).",
-		),
+		)
+		.sensitive(&[Class::Health]),
 		StreamSpec::series(
 			"health.spo2",
 			&[("percent", "%")],
 			"Blood oxygen saturation.",
-		),
+		)
+		.sensitive(&[Class::Health]),
 		StreamSpec::series(
 			"health.steps",
 			&[("steps", "count")],
 			"Steps counted per interval.",
-		),
+		)
+		.sensitive(&[Class::Health]),
 		StreamSpec::event(
 			"health.sleep",
 			"A sleep stage span: awake, light, deep, or rem.",
 		)
-		.summarise_by(&["stage"]),
-		StreamSpec::event("health.workout", "An exercise session.").summarise_by(&["activity"]),
+		.summarise_by(&["stage"])
+		.sensitive(&[Class::Health]),
+		StreamSpec::event("health.workout", "An exercise session.")
+			.summarise_by(&["activity"])
+			.sensitive(&[Class::Health]),
 		StreamSpec::series(
 			"motion.accelerometer",
 			&[("x", "m/s2"), ("y", "m/s2"), ("z", "m/s2")],
@@ -336,8 +358,11 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 				("altitude", "m"),
 			],
 			"Position fixes.",
-		),
-		StreamSpec::event("location.visit", "A stay at one place.").summarise_by(&["place"]),
+		)
+		.sensitive(&[Class::Location]),
+		StreamSpec::event("location.visit", "A stay at one place.")
+			.summarise_by(&["place"])
+			.sensitive(&[Class::Location]),
 		StreamSpec::series(
 			"device.battery",
 			&[("level", "%")],
@@ -352,16 +377,26 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"comms.notification",
 			"A notification shown on a device: app, title, and text.",
 		)
-		.summarise_by(&["app"]),
+		.summarise_by(&["app"])
+		.sensitive(&[Class::Others]),
 		StreamSpec::event(
 			"memory.episode",
 			"A derived span of activity: what was happening, where, and how the body was doing.",
 		)
-		.summarise_by(&["activity"]),
-		StreamSpec::event("memory.daily", "A derived summary of one day."),
+		.summarise_by(&["activity"])
+		// Episodes and days quote heart rate, sleep, and places, so a grant
+		// denied those classes must not read them through `memory`.
+		.sensitive(&[Class::Health, Class::Location]),
+		StreamSpec::event("memory.daily", "A derived summary of one day.")
+			.sensitive(&[Class::Health, Class::Location]),
 		StreamSpec::event(
 			"memory.note",
 			"A note written by the owner or an authorised agent.",
+		),
+		StreamSpec::event(
+			"memory.profile",
+			"Claims about the owner: preferences, values, routines, facts, relationships, goals, \
+			 and commitments, each with evidence.",
 		),
 	]
 }
@@ -408,5 +443,50 @@ mod tests {
 		let back: StreamId = serde_json::from_str(&json).unwrap();
 		assert_eq!(back, id);
 		assert!(serde_json::from_str::<StreamId>("\"bogus\"").is_err());
+	}
+
+	#[test]
+	fn builtin_streams_carry_their_sensitivity_classes() {
+		let specs = builtin_streams();
+		let classes = |id: &str| {
+			specs
+				.iter()
+				.find(|s| s.id.as_str() == id)
+				.unwrap_or_else(|| panic!("{id} is a built-in stream"))
+				.classes
+				.clone()
+		};
+		for health in [
+			"health.heart_rate",
+			"health.hrv",
+			"health.spo2",
+			"health.steps",
+			"health.sleep",
+			"health.workout",
+		] {
+			assert_eq!(classes(health), vec![Class::Health], "{health}");
+		}
+		for location in ["location.fix", "location.visit"] {
+			assert_eq!(classes(location), vec![Class::Location], "{location}");
+		}
+		for others in [
+			"audio.transcript",
+			"audio.buffer",
+			"audio.clip",
+			"comms.notification",
+		] {
+			assert_eq!(classes(others), vec![Class::Others], "{others}");
+		}
+		assert!(classes("memory.profile").is_empty());
+		assert!(classes("screen.frame").is_empty());
+	}
+
+	#[test]
+	fn specs_stored_without_classes_still_load() {
+		// Specs written before classes existed have no `classes` field.
+		let json = r#"{"id":"sensor.vest.accel","kind":"series",
+			"channels":[{"name":"x","unit":"m/s2"}],"description":"vest"}"#;
+		let spec: StreamSpec = serde_json::from_str(json).unwrap();
+		assert!(spec.classes.is_empty());
 	}
 }
