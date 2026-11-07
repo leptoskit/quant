@@ -50,6 +50,7 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 
 - **Posture.** Each configured accelerometer is read in 5-second windows. The mean vector is gravity, so its angle to the sensor's "up" axis is the tilt; the RMS spread around it is movement. Movement above 0.8 m/s² is walking and above 3.5 m/s² running. Otherwise a torso sensor (chest strap, vest) reads upright under 35°, reclined under 60°, and lying beyond; a thigh sensor reads standing or sitting-or-lying; a loose sensor (a phone) only reads still. A torso and a thigh sensor together tell sitting from standing. Windows merge into `motion.posture` spans, and a blip shorter than 20 seconds between two spans of the same posture is absorbed.
 - **Daily summaries.** One `memory.daily` record per local day: screen time by app, steps, heart rate range with a resting estimate (the mean of the lowest tenth of minute averages), sleep by stage for the night ending that day (18:00 to 18:00), posture totals, and minutes of speech, with a one-paragraph text that search and agents can read.
+- **Hourly episodes.** One `memory.episode` record per hour where anything happened: the top apps by focus time, the place, posture minutes, heart rate range and average, steps, and minutes of speech, plus a one-paragraph text an agent can read. Empty hours produce nothing.
 
 ## Roadmap
 
