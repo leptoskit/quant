@@ -111,11 +111,12 @@ impl ClaimFilter {
 }
 
 /// One stored claim's columns, in table order after `rowid`.
-const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic, c.authority, c.confidence, \
-                       c.classes, c.status, c.valid_from_us, c.valid_to_us, c.proposed_by, \
-                       c.created_at_us, c.updated_at_us, c.superseded_by";
+pub(crate) const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic, c.authority, \
+                                c.confidence, c.classes, c.status, c.valid_from_us, \
+                                c.valid_to_us, c.proposed_by, c.created_at_us, c.updated_at_us, \
+                                c.superseded_by";
 
-fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
+pub(crate) fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
 	let id: Vec<u8> = row.get(0)?;
 	let subject: String = row.get(1)?;
 	let kind: String = row.get(2)?;
@@ -166,7 +167,7 @@ fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
 	})())
 }
 
-fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
+pub(crate) fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
 	let mut clauses = Vec::new();
 	if let Some(status) = filter.status {
 		params.push(status.as_str().to_owned().into());
@@ -199,7 +200,7 @@ fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
 	}
 }
 
-fn attach_evidence(conn: &rusqlite::Connection, claims: &mut [Claim]) -> Result<()> {
+pub(crate) fn attach_evidence(conn: &rusqlite::Connection, claims: &mut [Claim]) -> Result<()> {
 	let mut statement = conn.prepare_cached(
 		"SELECT r.id FROM claim_evidence ce JOIN records r ON r.rowid = ce.record
 		 WHERE ce.claim IN (SELECT rowid FROM claims WHERE id = ?1)",

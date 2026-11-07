@@ -366,17 +366,18 @@ pub async fn purge(
 		quant_access::Level::Summary,
 	)?;
 	drop(specs);
-	let (records, series) = state.vault.store.purge(&selector, range)?;
+	let (records, series, derived) = state.vault.store.purge(&selector, range)?;
 	let media = state.vault.sweep_media(Timestamp::now())?;
 	owner_audit(
 		&state,
 		"purge",
 		body.streams.join(","),
-		serde_json::json!({ "from": range.start, "to": range.end, "records": records, "series": series, "media": media }),
+		serde_json::json!({ "from": range.start, "to": range.end, "records": records, "series": series, "derived": derived, "media": media }),
 	)?;
 	Ok(Json(Purged {
 		records,
 		series,
+		derived,
 		media,
 	}))
 }

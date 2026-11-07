@@ -648,14 +648,22 @@ pub struct PurgeRequest {
 }
 
 /// Answer to a purge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Purged {
 	/// Records deleted.
 	pub records: usize,
 	/// Series batches deleted.
 	pub series: usize,
+	/// Derived records deleted with their sources.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub derived: usize,
 	/// Media files deleted.
 	pub media: usize,
+}
+
+/// Whether a purge count is zero, so fresh answers stay short.
+fn is_zero(n: &usize) -> bool {
+	*n == 0
 }
 
 /// State of one capture source.
