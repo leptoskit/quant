@@ -66,7 +66,10 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 
 ## Roadmap
 
-1. Android collector app on leptoskit, as a second target of the desktop app; upstream foreground service, Health Connect, and audio plugins.
-2. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
-3. More derived memory: purging derived records with their sources.
-4. iOS collector (HealthKit, background modes).
+1. **Memory about the owner.** Claims (preferences, values, routines, people, commitments) backed by the records they came from, ranked by authority (the owner's corrections, then what the owner wrote, then observations, then model inferences); `quant tell` for corrections; a `profile` scope so an agent can act on who the owner is without reading raw data; sensitivity classes a grant can exclude; and context packets sized to an agent's task.
+2. **The relay**, so phones, sensors, and agents reach the vault from anywhere while the relay sees only TLS ([hosting](hosting.md)).
+3. **One leptoskit app everywhere:** the Android collector as a second target of the desktop app, on leptoskit's sensor, health, and background plugins; Wear OS and watchOS for heart rate from the wrist.
+4. **Desktop:** owner actions unlocked with Touch ID, and opening at login.
+5. **Learning on the device:** local embeddings for similarity search, local-model extraction with grounding rules so captured text cannot plant claims, weekly reviews linking body and behaviour, and purging derived records with their sources.
+6. iOS collector (HealthKit, background modes).
+7. Hosted vaults in attested enclaves ([hosting](hosting.md)).
