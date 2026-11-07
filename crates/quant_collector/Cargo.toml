@@ -1,0 +1,25 @@
+[package]
+name = "quant_collector"
+description = "The phone side of Quant: an encrypted local spool capture code writes into, and an uploader that drains it to the desktop vault."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+jiff = { workspace = true }
+quant_api = { workspace = true }
+quant_client = { workspace = true }
+quant_core = { workspace = true }
+quant_crypto = { workspace = true, default-features = false }
+quant_store = { workspace = true, default-features = false }
+serde = { workspace = true }
+
+[dev-dependencies]
+quant_daemon = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

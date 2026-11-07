@@ -270,6 +270,35 @@ impl Store {
 		)?)
 	}
 
+	/// The oldest `limit` records with their row numbers, for draining a
+	/// spool in order.
+	pub fn oldest_records(&self, limit: usize) -> Result<Vec<(i64, Record)>> {
+		let conn = self.conn();
+		let mut statement = conn.prepare_cached(&format!(
+			"SELECT {COLUMNS}, r.rowid FROM records r ORDER BY r.rowid LIMIT ?1"
+		))?;
+		let rows = statement.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+			let record = record_from_row(row)?;
+			let rowid: i64 = row.get(10)?;
+			Ok(record.map(|record| (rowid, record)))
+		})?;
+		rows.map(|row| row?).collect()
+	}
+
+	/// Delete records by row number.
+	pub fn delete_record_rows(&self, rows: &[i64]) -> Result<()> {
+		let mut conn = self.conn();
+		let tx = conn.transaction()?;
+		{
+			let mut delete = tx.prepare_cached("DELETE FROM records WHERE rowid = ?1")?;
+			for row in rows {
+				delete.execute([row])?;
+			}
+		}
+		tx.commit()?;
+		Ok(())
+	}
+
 	/// Read a value from the store's key/value state.
 	pub fn meta(&self, key: &str) -> Result<Option<String>> {
 		Ok(self

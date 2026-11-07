@@ -1325,6 +1325,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "quant_collector"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "quant_api",
+ "quant_client",
+ "quant_core",
+ "quant_crypto",
+ "quant_daemon",
+ "quant_store",
+ "serde",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "quant_core"
 version = "0.1.0"
 dependencies = [

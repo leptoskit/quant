@@ -261,6 +261,50 @@ impl Store {
 		.collect()
 	}
 
+	/// The oldest `limit` series batches with their row numbers, for
+	/// draining a spool in order.
+	pub fn oldest_series(&self, limit: usize) -> Result<Vec<(i64, SeriesBatch)>> {
+		let conn = self.conn();
+		let mut statement = conn.prepare_cached(
+			"SELECT rowid, stream, device, start_us, end_us, rows, channels, stats, body FROM \
+			 series ORDER BY rowid LIMIT ?1",
+		)?;
+		let rows = statement.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+			Ok((
+				row.get::<_, i64>(0)?,
+				StoredBatch {
+					stream: row.get(1)?,
+					device: row.get(2)?,
+					start: row.get(3)?,
+					end: row.get(4)?,
+					rows: usize::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
+					channels: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+					stats: Vec::new(),
+					body: row.get(8)?,
+				},
+			))
+		})?;
+		rows.map(|row| {
+			let (rowid, stored) = row?;
+			Ok((rowid, stored.decode()?))
+		})
+		.collect()
+	}
+
+	/// Delete series batches by row number.
+	pub fn delete_series_rows(&self, rows: &[i64]) -> Result<()> {
+		let mut conn = self.conn();
+		let tx = conn.transaction()?;
+		{
+			let mut delete = tx.prepare_cached("DELETE FROM series WHERE rowid = ?1")?;
+			for row in rows {
+				delete.execute([row])?;
+			}
+		}
+		tx.commit()?;
+		Ok(())
+	}
+
 	/// Raw samples of `stream` (and its children) in `range`, trimmed to the
 	/// range and to at most `max_rows` rows in total.
 	pub fn series(
