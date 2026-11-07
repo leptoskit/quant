@@ -43,6 +43,8 @@ pub struct State {
 	pub started_at: Timestamp,
 	/// The TLS certificate fingerprint, once a network listener is up.
 	pub tls_fingerprint: RwLock<Option<String>>,
+	/// The rendezvous key the daemon proves itself to relays with.
+	pub relay_key: quant_relay::RelayKey,
 }
 
 /// Owner sessions, keyed by token hash, and the unlock throttle.
@@ -114,6 +116,7 @@ impl State {
 		for spec in vault.store.custom_streams()? {
 			specs.insert(spec.id.clone(), spec);
 		}
+		let relay_key = quant_relay::RelayKey::from_vault(vault.key());
 		let state = Self {
 			vault,
 			specs: RwLock::new(specs),
@@ -124,6 +127,7 @@ impl State {
 			capture_control: crate::capture::Control::default(),
 			started_at: Timestamp::now(),
 			tls_fingerprint: RwLock::new(None),
+			relay_key,
 		};
 		// The rolling buffer's retention follows the capture settings, not
 		// the built-in default.

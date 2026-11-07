@@ -89,12 +89,51 @@ pub enum Endpoint {
 		/// The pinned certificate fingerprint.
 		fingerprint: [u8; 32],
 	},
+	/// Through a relay: TLS to the daemon inside a WebSocket, with the same
+	/// pinned fingerprint. When `address` is set it is tried first, with a
+	/// short connect timeout, so clients on the LAN never pay the relay's
+	/// latency.
+	Relay {
+		/// The relay, `wss://host[:port]`.
+		url: String,
+		/// The daemon's rendezvous id.
+		rid: String,
+		/// The pinned certificate fingerprint.
+		fingerprint: [u8; 32],
+		/// A direct `host:port` to try first.
+		address: Option<String>,
+	},
 }
+
+/// How long to wait for the direct address before falling back to the relay.
+const DIRECT_CONNECT: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Endpoint {
 	/// Parse `unix:/path`, `tcp://host:port`, `tls://host:port#<hex
-	/// fingerprint>`, a bare path, or a bare `host:port`.
+	/// fingerprint>`, `relay://host[:port]/<rid>#<hex fingerprint>`, a
+	/// `quant://link?…` pairing link, a bare path, or a bare `host:port`.
 	pub fn parse(s: &str) -> Result<Self, String> {
+		if let Some(rest) = s.strip_prefix("quant://link") {
+			return parse_link(s, rest.starts_with('?') || rest.is_empty());
+		}
+		if let Some(rest) = s.strip_prefix("relay://") {
+			let (base, fingerprint) = rest
+				.split_once('#')
+				.ok_or("a relay:// address needs #<certificate fingerprint>")?;
+			let fingerprint =
+				parse_fingerprint(fingerprint).ok_or("bad certificate fingerprint")?;
+			let (authority, rid) = base
+				.rsplit_once('/')
+				.ok_or("a relay:// address needs /<rendezvous id>")?;
+			let url = quant_relay::RelayUrl::parse(&format!("wss://{authority}"))
+				.map_err(|error| error.to_string())?;
+			return Ok(Endpoint::Relay {
+				url: url.to_string(),
+				rid: rid.to_owned(),
+				fingerprint,
+				address: None,
+			});
+		}
 		if let Some(rest) = s.strip_prefix("tls://") {
 			let (address, fingerprint) = rest
 				.split_once('#')
@@ -117,6 +156,35 @@ impl Endpoint {
 		}
 		Ok(Endpoint::Tcp(s.to_owned()))
 	}
+}
+
+/// A `quant://link?…` pairing link, as `quant link` prints it.
+fn parse_link(text: &str, shaped: bool) -> Result<Endpoint, String> {
+	if !shaped {
+		return Err("not a quant:// link".into());
+	}
+	let link = quant_relay::link::Link::parse(text).map_err(|error| error.to_string())?;
+	let fingerprint = parse_fingerprint(
+		link.fp
+			.as_deref()
+			.ok_or("the link has no fp=<fingerprint> parameter")?,
+	)
+	.ok_or("bad certificate fingerprint")?;
+	if link.has_relay() {
+		return Ok(Endpoint::Relay {
+			url: link.relay.expect("has_relay checked"),
+			rid: link.rid.expect("has_relay checked"),
+			fingerprint,
+			address: link.addr,
+		});
+	}
+	let address = link
+		.addr
+		.ok_or("the link has no addr=<host:port> parameter")?;
+	Ok(Endpoint::Tls {
+		address,
+		fingerprint,
+	})
 }
 
 /// A failed call.
@@ -174,6 +242,7 @@ async fn send_typed(
 	let shown = match endpoint {
 		Endpoint::Unix(path) => path.display().to_string(),
 		Endpoint::Tcp(address) | Endpoint::Tls { address, .. } => address.clone(),
+		Endpoint::Relay { url, .. } => url.clone(),
 	};
 	let unreachable = |source| {
 		ClientError::Unreachable {
@@ -239,6 +308,40 @@ async fn send_typed(
 				pinned::connector(*fingerprint).map_err(|e| ClientError::Http(e.to_string()))?;
 			let name = rustls::pki_types::ServerName::try_from("quantd.local").expect("valid name");
 			let tls = connector.connect(name, tcp).await.map_err(unreachable)?;
+			exchange!(tls)
+		}
+		Endpoint::Relay {
+			url,
+			rid,
+			fingerprint,
+			address,
+		} => {
+			// The direct address first, when the link carried one and this
+			// network can reach it, then the relay.
+			if let Some(address) = address
+				&& let Ok(tcp) =
+					tokio::time::timeout(DIRECT_CONNECT, tokio::net::TcpStream::connect(address))
+						.await
+			{
+				let tcp = tcp.map_err(unreachable)?;
+				let connector = pinned::connector(*fingerprint)
+					.map_err(|e| ClientError::Http(e.to_string()))?;
+				let name =
+					rustls::pki_types::ServerName::try_from("quantd.local").expect("valid name");
+				if let Ok(tls) = connector.connect(name, tcp).await {
+					return exchange!(tls);
+				}
+			}
+			let url =
+				quant_relay::RelayUrl::parse(url).map_err(|e| ClientError::Http(e.to_string()))?;
+			let socket = quant_relay::dial::dial(&url.connect(rid))
+				.await
+				.map_err(unreachable)?;
+			let stream = quant_relay::dial::WsStream::new(socket);
+			let connector =
+				pinned::connector(*fingerprint).map_err(|e| ClientError::Http(e.to_string()))?;
+			let name = rustls::pki_types::ServerName::try_from("quantd.local").expect("valid name");
+			let tls = connector.connect(name, stream).await.map_err(unreachable)?;
 			exchange!(tls)
 		}
 	}
@@ -645,6 +748,23 @@ impl OwnerSession {
 	/// Pause capture, optionally for a number of minutes, or resume it.
 	pub async fn pause_capture(&self, request: &quant_api::PauseRequest) -> Result<Status> {
 		self.call(Method::POST, routes::OWNER_CAPTURE_PAUSE, Some(request))
+			.await
+	}
+
+	/// The relay settings: the relay in use, if any, and this daemon's
+	/// rendezvous id on it.
+	pub async fn relay(&self) -> Result<quant_api::RelayState> {
+		self.call::<(), _>(Method::GET, routes::OWNER_RELAY, None)
+			.await
+	}
+
+	/// Set a relay (with an optional invite), or clear it with
+	/// `url: None`.
+	pub async fn set_relay(
+		&self,
+		request: &quant_api::RelaySetRequest,
+	) -> Result<quant_api::RelayState> {
+		self.call(Method::POST, routes::OWNER_RELAY, Some(request))
 			.await
 	}
 

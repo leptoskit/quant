@@ -127,6 +127,9 @@ pub mod routes {
 	pub const OWNER_CAPTURE: &str = "/v1/owner/capture";
 	/// Pause or resume this machine's capture (owner).
 	pub const OWNER_CAPTURE_PAUSE: &str = "/v1/owner/capture/pause";
+	/// The relay settings: `GET` reads them, `POST` sets or clears them
+	/// (owner).
+	pub const OWNER_RELAY: &str = "/v1/owner/relay";
 	/// Header carrying an owner session token.
 	pub const OWNER_HEADER: &str = "x-quant-owner";
 }
@@ -154,6 +157,12 @@ pub struct Hello {
 	/// connect over the network.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tls_fingerprint: Option<String>,
+	/// The relay the daemon keeps a listener on, when the owner set one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub relay: Option<String>,
+	/// The daemon's rendezvous id on that relay, present with `relay`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub relay_rid: Option<String>,
 }
 
 /// What kind of client is pairing.
@@ -704,6 +713,29 @@ pub struct PauseRequest {
 	/// End the pause by itself after this many minutes.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub minutes: Option<u32>,
+}
+
+/// Answer to `GET` [`routes::OWNER_RELAY`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayState {
+	/// The relay the daemon keeps a listener on, if the owner set one.
+	pub url: Option<String>,
+	/// The daemon's rendezvous id on it, derived from the vault key.
+	pub rid: String,
+	/// Whether an unused invite is held for the first listen.
+	pub invite: bool,
+}
+
+/// `POST` [`routes::OWNER_RELAY`]: set a relay (with an optional invite for
+/// relays that gate registration), or clear it with `url: null`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelaySetRequest {
+	/// The relay address, `wss://host[:port]`; `None` turns the relay off.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub url: Option<String>,
+	/// An invite code, on relays that ask for one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub invite: Option<String>,
 }
 
 /// Answer to [`routes::CAPTURE_STATUS`]: enough for a menu-bar status line,
