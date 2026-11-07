@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use quant_access::Limiter;
 use quant_access::auth::RequestVerifier;
 use quant_api::CaptureStatus;
+use quant_core::Class;
 use quant_core::MediaRef;
 use quant_core::Record;
 use quant_core::SeriesBatch;
@@ -173,6 +174,26 @@ impl State {
 			.values()
 			.cloned()
 			.collect()
+	}
+
+	/// The known stream specs, by id.
+	pub fn specs_lock(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<StreamId, StreamSpec>> {
+		self.specs
+			.read()
+			.unwrap_or_else(std::sync::PoisonError::into_inner)
+	}
+
+	/// The sensitivity classes of `stream`, from its own spec or the nearest
+	/// registered parent.
+	pub fn classes(&self, stream: &StreamId) -> Vec<Class> {
+		self.spec(stream).map_or_else(Vec::new, |spec| spec.classes)
+	}
+
+	/// Whether a grant denying `deny` may see `stream` at all.
+	pub fn class_denied(&self, stream: &StreamId, deny: &[Class]) -> bool {
+		self.classes(stream)
+			.iter()
+			.any(|class| deny.contains(class))
 	}
 
 	/// Register a custom stream.

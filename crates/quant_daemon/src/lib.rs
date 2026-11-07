@@ -8,8 +8,10 @@
 pub mod audio_save;
 mod authn;
 pub mod capture;
+mod claims;
 mod error;
 mod ingest;
+mod memory;
 mod owner;
 mod query;
 mod state;
@@ -68,6 +70,15 @@ pub fn router(state: Arc<State>) -> Router {
 			get(owner::capture_config).post(owner::set_capture_config),
 		)
 		.route(routes::OWNER_CAPTURE_PAUSE, post(owner::pause_capture))
+		.route(routes::MEMORY_PROFILE, get(memory::profile))
+		.route(routes::MEMORY_PROPOSALS, post(memory::propose))
+		.route(routes::CONTEXT, post(memory::context))
+		.route(routes::OWNER_CLAIMS, post(claims::tell))
+		.route(routes::OWNER_CLAIMS_LIST, post(claims::list))
+		.route(routes::OWNER_CLAIM_APPROVE, post(claims::approve))
+		.route(routes::OWNER_CLAIM_REJECT, post(claims::reject))
+		.route(routes::OWNER_CLAIM_RETRACT, post(claims::retract))
+		.route(routes::OWNER_CLAIM_CORRECT, post(claims::correct))
 		.layer(DefaultBodyLimit::max(authn::MAX_BODY))
 		.with_state(state)
 }

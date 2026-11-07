@@ -267,13 +267,16 @@ pub async fn approve(
 		grant.limits = limits;
 	}
 	grant.unredacted = body.unredacted;
+	if let Some(deny_classes) = body.deny_classes {
+		grant.deny_classes = deny_classes;
+	}
 	state.vault.store.approve(&grant)?;
 	state.limiter().reset(grant.id);
 	owner_audit(
 		&state,
 		"grant.create",
 		grant.id.to_string(),
-		serde_json::json!({ "client": client.id, "scopes": grant.scopes.to_strings(), "lookback_hours": body.lookback_hours, "expires_in_hours": body.expires_in_hours, "limits": grant.limits, "unredacted": grant.unredacted }),
+		serde_json::json!({ "client": client.id, "scopes": grant.scopes.to_strings(), "lookback_hours": body.lookback_hours, "expires_in_hours": body.expires_in_hours, "limits": grant.limits, "unredacted": grant.unredacted, "deny_classes": grant.deny_classes }),
 	)?;
 	let client = state
 		.vault
@@ -352,7 +355,14 @@ pub async fn purge(
 		"owner",
 		Scopes::parse(["*:raw"])?,
 	);
-	let (selector, _) = resolve(&everything, &body.streams, quant_access::Level::Summary)?;
+	let specs = state.specs_lock();
+	let (selector, _) = resolve(
+		&everything,
+		&specs,
+		&body.streams,
+		quant_access::Level::Summary,
+	)?;
+	drop(specs);
 	let (records, series) = state.vault.store.purge(&selector, range)?;
 	let media = state.vault.sweep_media(Timestamp::now())?;
 	owner_audit(
