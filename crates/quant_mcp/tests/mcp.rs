@@ -56,6 +56,7 @@ async fn paired(endpoint: &Endpoint, scopes: Option<&[&str]>) -> Client {
 				expires_in_hours: None,
 				limits: None,
 				unredacted: false,
+				deny_classes: None,
 			})
 			.await
 			.unwrap();
@@ -204,4 +205,134 @@ async fn tools_follow_the_grant() {
 	assert_eq!(bad_time["result"]["isError"], true);
 	let unknown = call(&mut full, 5, "nope", json!({})).await;
 	assert_eq!(unknown["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn profile_propose_and_context_follow_the_grant() {
+	let (_dir, endpoint, state) = daemon().await;
+	let device = DeviceId::new();
+	let evidence = Record::new("screen.frame".parse().unwrap(), device)
+		.with_text("Wrote in the morning, focused, with espresso");
+	let evidence_id = evidence.id;
+	state.record(evidence).unwrap();
+	let owner = OwnerSession::open(endpoint.clone(), PASS).await.unwrap();
+	owner
+		.tell(&quant_api::OwnerClaimRequest {
+			statement: "Prefers espresso after lunch".into(),
+			kind: Some(quant_core::ClaimKind::Preference),
+			topic: None,
+			subject: Some("me".into()),
+			classes: Vec::new(),
+		})
+		.await
+		.unwrap();
+
+	// A grant that can read the profile gets the tools and the resource.
+	let mut reader = Server::new(
+		paired(
+			&endpoint,
+			Some(&["memory.profile:read", "memory.profile:write", "screen:read"]),
+		)
+		.await,
+	);
+	let list = call(&mut reader, 1, "tools/list", json!({})).await;
+	for name in ["quant_profile", "quant_propose", "quant_context"] {
+		assert!(tool_names(&list).contains(&name.to_owned()), "{name}");
+	}
+
+	// quant_profile serves the owner's claim.
+	let profile = call(
+		&mut reader,
+		2,
+		"tools/call",
+		json!({ "name": "quant_profile" }),
+	)
+	.await;
+	let text = profile["result"]["content"][0]["text"].as_str().unwrap();
+	assert!(text.contains("Prefers espresso after lunch"));
+	assert!(text.contains("\"level\":\"read\""));
+
+	// The resource lists and reads the same content.
+	let resources = call(&mut reader, 3, "resources/list", json!({})).await;
+	assert_eq!(
+		resources["result"]["resources"][0]["uri"],
+		"quant://profile"
+	);
+	let read = call(
+		&mut reader,
+		4,
+		"resources/read",
+		json!({ "uri": "quant://profile" }),
+	)
+	.await;
+	let text = read["result"]["contents"][0]["text"].as_str().unwrap();
+	assert!(text.contains("Prefers espresso after lunch"));
+	assert_eq!(read["error"], json!(null));
+	let missing = call(
+		&mut reader,
+		5,
+		"resources/read",
+		json!({ "uri": "quant://nope" }),
+	)
+	.await;
+	assert_eq!(missing["error"]["code"], -32002);
+
+	// quant_propose stores a held proposal, grounded in readable evidence.
+	let proposed = call(
+		&mut reader,
+		6,
+		"tools/call",
+		json!({ "name": "quant_propose", "arguments": {
+			"statement": "Focuses best before noon",
+			"kind": "routine",
+			"confidence": 0.8,
+			"evidence": [evidence_id.to_string()],
+		} }),
+	)
+	.await;
+	assert_eq!(proposed["result"]["isError"], false);
+	let held = owner
+		.claims(&quant_api::ClaimListRequest {
+			status: Some(quant_core::ClaimStatus::Held),
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(held.len(), 1);
+
+	// quant_context returns a budgeted packet.
+	let context = call(
+		&mut reader,
+		7,
+		"tools/call",
+		json!({ "name": "quant_context", "arguments": { "task": "espresso", "budget_tokens": 500 } }),
+	)
+	.await;
+	let text = context["result"]["content"][0]["text"].as_str().unwrap();
+	let value: Value = serde_json::from_str(text).unwrap();
+	assert!(value["profile"]["included"].as_bool().unwrap());
+	assert!(
+		value["profile"]["items"][0]["statement"]
+			.as_str()
+			.unwrap()
+			.contains("espresso")
+	);
+	assert_eq!(value["profile_claims_are_the_owners_words"], true);
+
+	// A grant without the profile sees none of the three, and no resource.
+	let mut blind = Server::new(paired(&endpoint, Some(&["apps:summary"])).await);
+	let list = call(&mut blind, 1, "tools/list", json!({})).await;
+	for name in ["quant_profile", "quant_propose", "quant_context"] {
+		assert!(!tool_names(&list).contains(&name.to_owned()), "{name}");
+	}
+	let resources = call(&mut blind, 2, "resources/list", json!({})).await;
+	assert_eq!(resources["result"]["resources"], json!([]));
+	let refused = call(
+		&mut blind,
+		3,
+		"tools/call",
+		json!({ "name": "quant_profile" }),
+	)
+	.await;
+	assert_eq!(refused["result"]["isError"], true);
 }
