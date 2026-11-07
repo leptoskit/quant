@@ -257,6 +257,18 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		)
 		.media_hours(24)
 		.summarise_by(&["source", "speaker"]),
+		StreamSpec::event(
+			"audio.buffer",
+			"One rolling-buffer chunk of encoded audio (a minute, by default), kept for the last \
+			 day so a moment can be saved after it happened.",
+		)
+		.media_hours(24)
+		.summarise_by(&["source"]),
+		StreamSpec::event(
+			"audio.clip",
+			"A saved moment of audio: rolling-buffer chunks joined into one file, kept until the \
+			 owner deletes it.",
+		),
 		StreamSpec::event("apps.focus", "A span of time one app and window had focus.")
 			.summarise_by(&["app"]),
 		StreamSpec::series(

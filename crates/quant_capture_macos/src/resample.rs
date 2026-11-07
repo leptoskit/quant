@@ -2,10 +2,10 @@
 //! recognisers expect.
 
 /// The rate every speech segment is stored and transcribed at.
-pub(crate) const TARGET_RATE: u32 = 16_000;
+pub const TARGET_RATE: u32 = 16_000;
 
 /// Average interleaved frames of `channels` samples down to mono.
-pub(crate) fn downmix(interleaved: &[f32], channels: usize) -> Vec<f32> {
+pub fn downmix(interleaved: &[f32], channels: usize) -> Vec<f32> {
 	if channels <= 1 {
 		return interleaved.to_vec();
 	}
@@ -17,13 +17,10 @@ pub(crate) fn downmix(interleaved: &[f32], channels: usize) -> Vec<f32> {
 		.collect()
 }
 
-/// Streaming sample-rate converter to [`TARGET_RATE`].
-///
-/// Downsampling averages every input sample that falls inside an output
-/// sample's period, which doubles as a crude anti-aliasing filter and is
-/// plenty for speech. Upsampling interpolates linearly.
+/// The rate-changing core, shared by the 16-bit speech path and the float
+/// join path.
 #[derive(Debug)]
-pub(crate) struct Resampler {
+struct Machine {
 	/// Input samples per output sample.
 	step: f64,
 	/// Downsampling: how far into the current output period we are.
@@ -35,11 +32,10 @@ pub(crate) struct Resampler {
 	position: f64,
 }
 
-impl Resampler {
-	/// A converter from `input_rate` Hz.
-	pub(crate) fn new(input_rate: u32) -> Self {
+impl Machine {
+	fn new(input_rate: u32, output_rate: u32) -> Self {
 		Self {
-			step: f64::from(input_rate.max(1)) / f64::from(TARGET_RATE),
+			step: f64::from(input_rate.max(1)) / f64::from(output_rate.max(1)),
 			phase: 0.0,
 			sum: 0.0,
 			count: 0,
@@ -48,10 +44,14 @@ impl Resampler {
 		}
 	}
 
-	/// Convert the next run of mono samples, appending 16-bit output.
-	pub(crate) fn process(&mut self, input: &[f32], out: &mut Vec<i16>) {
+	/// Convert the next run of mono samples, handing each output sample to
+	/// `emit`.
+	#[allow(clippy::cast_possible_truncation)]
+	fn feed(&mut self, input: &[f32], emit: &mut dyn FnMut(f32)) {
 		if (self.step - 1.0).abs() < f64::EPSILON {
-			out.extend(input.iter().map(|&s| to_i16(s)));
+			for &sample in input {
+				emit(sample);
+			}
 		} else if self.step > 1.0 {
 			for &sample in input {
 				self.sum += f64::from(sample);
@@ -59,8 +59,8 @@ impl Resampler {
 				self.phase += 1.0;
 				if self.phase >= self.step {
 					self.phase -= self.step;
-					#[allow(clippy::cast_possible_truncation)]
-					out.push(to_i16((self.sum / f64::from(self.count)) as f32));
+					#[allow(clippy::cast_precision_loss)]
+					emit((self.sum / f64::from(self.count)) as f32);
 					self.sum = 0.0;
 					self.count = 0;
 				}
@@ -71,9 +71,9 @@ impl Resampler {
 				// Emit every output position that falls between the previous
 				// input sample (at 0) and this one (at 1).
 				while self.position < 1.0 {
-					#[allow(clippy::cast_possible_truncation)]
+					#[allow(clippy::cast_precision_loss)]
 					let t = self.position as f32;
-					out.push(to_i16(previous + (sample - previous) * t));
+					emit(previous + (sample - previous) * t);
 					self.position += self.step;
 				}
 				self.position -= 1.0;
@@ -83,8 +83,57 @@ impl Resampler {
 	}
 }
 
+/// Streaming sample-rate converter.
+///
+/// Downsampling averages every input sample that falls inside an output
+/// sample's period, which doubles as a crude anti-aliasing filter and is
+/// plenty for speech. Upsampling interpolates linearly.
+#[derive(Debug)]
+pub struct Resampler {
+	machine: Machine,
+	input_rate: u32,
+	output_rate: u32,
+}
+
+impl Resampler {
+	/// A converter from `input_rate` Hz to [`TARGET_RATE`].
+	pub fn new(input_rate: u32) -> Self {
+		Self::with_rates(input_rate, TARGET_RATE)
+	}
+
+	/// A converter between any two rates, for re-encoding saved clips.
+	pub fn with_rates(input_rate: u32, output_rate: u32) -> Self {
+		Self {
+			machine: Machine::new(input_rate, output_rate),
+			input_rate,
+			output_rate,
+		}
+	}
+
+	/// The rate this converter accepts.
+	pub fn input_rate(&self) -> u32 {
+		self.input_rate
+	}
+
+	/// The rate this converter emits.
+	pub fn output_rate(&self) -> u32 {
+		self.output_rate
+	}
+
+	/// Convert the next run of mono samples, appending 16-bit output.
+	pub fn process(&mut self, input: &[f32], out: &mut Vec<i16>) {
+		self.machine
+			.feed(input, &mut |sample| out.push(to_i16(sample)));
+	}
+
+	/// Convert the next run of mono samples, appending float output.
+	pub fn process_f32(&mut self, input: &[f32], out: &mut Vec<f32>) {
+		self.machine.feed(input, &mut |sample| out.push(sample));
+	}
+}
+
 /// Clamp a float sample to 16 bits.
-pub(crate) fn to_i16(sample: f32) -> i16 {
+pub fn to_i16(sample: f32) -> i16 {
 	#[allow(clippy::cast_possible_truncation)]
 	let value = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
 	value
@@ -132,6 +181,21 @@ mod tests {
 			assert!(
 				out.iter().all(|&s| s == to_i16(0.5)),
 				"{rate} Hz changed the level"
+			);
+		}
+	}
+
+	#[test]
+	fn any_pair_of_rates_round_trips_in_length() {
+		for (from, to) in [(16_000, 22_050), (44_100, 16_000), (48_000, 48_000)] {
+			let mut resampler = Resampler::with_rates(from, to);
+			assert_eq!(resampler.output_rate(), to);
+			let mut out = Vec::new();
+			resampler.process_f32(&vec![0.25f32; from as usize], &mut out);
+			assert!(
+				out.len().abs_diff(to as usize) <= 2,
+				"{from} → {to} gave {} samples",
+				out.len()
 			);
 		}
 	}

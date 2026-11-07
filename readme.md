@@ -43,7 +43,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_store`   | The encrypted vault: SQLCipher records and series, full-text search, sealed media, retention. |
 | `quant_api`     | The daemon's wire types.                                                                       |
 | `quant_derive`  | Derived memory: posture spans from body-worn accelerometers, daily summaries.                 |
-| `quant_capture_macos` | macOS capture: screen text (Vision OCR), focused apps and windows, input counts, microphone speech. |
+| `quant_capture_macos` | macOS capture: screen text (Vision OCR), focused apps and windows, input counts, microphone speech, the Rewind rolling audio buffer. |
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
 | `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault.   |
@@ -75,6 +75,26 @@ quant capture pause --minutes 30   # or `quant capture resume`
 ```
 
 Password managers and private or incognito browser windows are never captured. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
+
+## Rewind: the last day of audio
+
+The daemon keeps a rolling buffer of everything your microphone hears and everything your Mac plays — a private, encrypted substitute for apps like Backtrack, so "save the last 10 minutes" is always possible after the fact. The buffer holds 24 hours by default (about 260 MB per track per day at 24 kbps AAC) and is deleted by the same sweep as everything else.
+
+The difference from Backtrack is the cost. Backtrack kept a transcription model running and burned most of a core; Rewind does no continuous ML at all. While buffering it only downmixes, resamples to 16 kHz, runs the same cheap energy voice-activity detector the speech path uses, and writes 60-second AAC chunks with Apple's encoder on a utility-priority thread. Measured by feeding synthetic speech through the exact encode-and-chunk path (`cargo run -p quant_capture_macos --release --example rewind_bench`), that is **about 4 CPU-seconds per hour of audio — roughly 0.1% of one core** on an M4 Mac mini, against Backtrack's 70%. Nothing is transcribed until you save a moment; the clip is then transcribed once, on device (whisper.cpp if built with the `whisper` feature, otherwise Apple's speech recognizer).
+
+It keeps recording while the screen is locked or you are idle — that is the point — and stops only when you pause capture. When the `audio` speech source is also on, both share one microphone stream.
+
+```sh
+quant rewind save 10m                 # the last ten minutes
+quant rewind save 90s --title "call with Ada"
+quant rewind save --from -1h --to -30m
+quant rewind list                     # saved clips (audio:read)
+quant rewind play rec_019a…           # through the speakers (audio:raw)
+quant rewind export rec_019a… out.m4a
+quant rewind status                   # hours buffered, disk used
+```
+
+Saving needs `audio:write` for your profile (`quant pair --scope audio:write`), because the audio never leaves the vault in the answer: the daemon joins the overlapping buffer chunks into one `.m4a`, stores it as an `audio.clip` whose media never expires, and returns only the clip's id and span. An agent with `audio:write` gets the same power through the MCP tool `quant_save_audio` ("save the last 10 minutes"). A clip's transcript lands in the record in the background, so it also turns up in `quant search`.
 
 Pair a phone over the local network (TLS, certificate pinned by the link):
 
@@ -127,7 +147,7 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | Family     | Streams                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------ |
 | `screen`   | `screen.frame`: on-screen text, app, window title, screenshot                               |
-| `audio`    | `audio.transcript`: speech and its transcript; audio kept 24 hours by default               |
+| `audio`    | `audio.transcript`: speech and its transcript; `audio.buffer`: the Rewind rolling buffer; `audio.clip`: a saved moment. Audio media is kept 24 hours by default, saved clips until you delete them |
 | `apps`     | `apps.focus`: which app and window had focus, and for how long                              |
 | `input`    | `input.activity`: key, click, and scroll counts per minute (never content)                  |
 | `health`   | `health.heart_rate`, `health.hrv`, `health.spo2`, `health.steps`, `health.sleep`, `health.workout` |

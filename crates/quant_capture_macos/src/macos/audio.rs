@@ -1,23 +1,13 @@
 //! The `audio` source: speech segments from the default microphone.
 //!
-//! The device callback only converts samples to `f32` and hands them over;
-//! this thread downmixes, resamples to 16 kHz, runs voice activity detection,
-//! and turns each finished segment into a WAV clip and an
-//! `audio.transcript` record, transcribed when built with `whisper`.
+//! The device itself is shared through [`super::mic`], so this source and
+//! the rolling buffer never open the microphone twice. This thread downmixes,
+//! resamples to 16 kHz, runs voice activity detection, and turns each
+//! finished segment into a WAV clip and an `audio.transcript` record,
+//! transcribed when built with `whisper`.
 
-use std::sync::mpsc;
-use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-use cpal::FromSample;
-use cpal::Sample;
-use cpal::SampleFormat;
-use cpal::SizedSample;
-use cpal::Stream;
-use cpal::StreamConfig;
-use cpal::traits::DeviceTrait;
-use cpal::traits::HostTrait;
-use cpal::traits::StreamTrait;
 use jiff::SignedDuration;
 use jiff::Timestamp;
 use objc2_av_foundation::AVAuthorizationStatus;
@@ -26,6 +16,8 @@ use objc2_av_foundation::AVMediaTypeAudio;
 use quant_core::Record;
 
 use super::Context;
+use super::mic::MicHub;
+use super::mic::MicMessage;
 use crate::config::AudioConfig;
 use crate::resample::Resampler;
 use crate::resample::TARGET_RATE;
@@ -38,13 +30,6 @@ use crate::wav::encode_wav;
 
 /// How often the thread checks for a stop while no audio arrives.
 const POLL: Duration = Duration::from_millis(200);
-
-enum Message {
-	/// Interleaved samples and when the callback received them.
-	Samples(Timestamp, Vec<f32>),
-	/// The stream reported an error.
-	Error(String),
-}
 
 /// Listen until stopped.
 pub(crate) fn run(cx: &Context, config: &AudioConfig) {
@@ -59,36 +44,26 @@ pub(crate) fn run(cx: &Context, config: &AudioConfig) {
 	status.stopped("stopped");
 }
 
+/// Whether macOS says the Microphone permission was refused outright.
+pub(crate) fn microphone_denied() -> bool {
+	matches!(
+		microphone_permission(),
+		Some(AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted)
+	)
+}
+
 fn listen(
 	cx: &Context,
 	config: &AudioConfig,
 	status: &mut crate::control::Status,
 ) -> Result<(), String> {
-	if let Some(AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted) =
-		microphone_permission()
-	{
+	if microphone_denied() {
 		return Err("microphone permission not granted".to_owned());
 	}
 	let (mut transcriber, note) = Transcriber::load(config);
 
-	let host = cpal::default_host();
-	let device = host.default_input_device().ok_or("no microphone found")?;
-	let supported = device
-		.default_input_config()
-		.map_err(|error| format!("microphone unavailable: {error}"))?;
-	let channels = usize::from(supported.channels()).max(1);
-	let rate = supported.sample_rate();
-	let (sender, receiver) = mpsc::channel();
-	let stream = open(
-		&device,
-		supported.sample_format(),
-		supported.config(),
-		sender,
-	)
-	.map_err(|error| format!("could not open microphone: {error}"))?;
-	stream
-		.play()
-		.map_err(|error| format!("could not start microphone: {error}"))?;
+	let mic = MicHub::shared().listen()?;
+	let (channels, rate) = (mic.info.channels, mic.info.rate);
 	status.set(true, note.as_deref());
 
 	let mut resampler = Resampler::new(rate);
@@ -96,8 +71,8 @@ fn listen(
 	let mut converted = Vec::new();
 	let mut last_heard = Timestamp::now();
 	loop {
-		match receiver.recv_timeout(POLL) {
-			Ok(Message::Samples(at, interleaved)) => {
+		match mic.recv(POLL) {
+			Some(MicMessage::Samples { at, interleaved }) => {
 				converted.clear();
 				resampler.process(&downmix(&interleaved, channels), &mut converted);
 				for segment in vad.push(&converted) {
@@ -105,18 +80,17 @@ fn listen(
 				}
 				last_heard = at;
 			}
-			Ok(Message::Error(error)) => {
+			Some(MicMessage::Error(error)) => {
 				tracing::warn!(%error, "microphone stream error");
 				status.set(true, Some(&format!("microphone error: {error}")));
 			}
-			Err(RecvTimeoutError::Timeout) => {}
-			Err(RecvTimeoutError::Disconnected) => break,
+			None => {}
 		}
 		if cx.stop.is_set() {
 			break;
 		}
 	}
-	drop(stream);
+	drop(mic);
 	if let Some(segment) = vad.flush() {
 		emit(cx, config, transcriber.as_mut(), &segment, last_heard);
 	}
@@ -129,52 +103,6 @@ fn microphone_permission() -> Option<AVAuthorizationStatus> {
 	let audio = unsafe { AVMediaTypeAudio }?;
 	// SAFETY: a class method taking a valid media type.
 	Some(unsafe { AVCaptureDevice::authorizationStatusForMediaType(audio) })
-}
-
-/// Build an input stream that forwards `f32` samples, whatever the device's
-/// native format.
-fn open(
-	device: &cpal::Device,
-	format: SampleFormat,
-	config: StreamConfig,
-	sender: mpsc::Sender<Message>,
-) -> Result<Stream, String> {
-	match format {
-		SampleFormat::F32 => typed::<f32>(device, config, sender),
-		SampleFormat::F64 => typed::<f64>(device, config, sender),
-		SampleFormat::I16 => typed::<i16>(device, config, sender),
-		SampleFormat::I32 => typed::<i32>(device, config, sender),
-		SampleFormat::I8 => typed::<i8>(device, config, sender),
-		SampleFormat::U8 => typed::<u8>(device, config, sender),
-		SampleFormat::U16 => typed::<u16>(device, config, sender),
-		SampleFormat::U32 => typed::<u32>(device, config, sender),
-		other => Err(format!("unsupported sample format {other}")),
-	}
-}
-
-fn typed<T>(
-	device: &cpal::Device,
-	config: StreamConfig,
-	sender: mpsc::Sender<Message>,
-) -> Result<Stream, String>
-where
-	T: SizedSample + Send + 'static,
-	f32: FromSample<T>,
-{
-	let errors = sender.clone();
-	device
-		.build_input_stream::<T, _, _>(
-			config,
-			move |data: &[T], _| {
-				let samples = data.iter().map(|&s| f32::from_sample(s)).collect();
-				let _ = sender.send(Message::Samples(Timestamp::now(), samples));
-			},
-			move |error| {
-				let _ = errors.send(Message::Error(error.to_string()));
-			},
-			None,
-		)
-		.map_err(|error| error.to_string())
 }
 
 /// Store one speech segment that ended at about `ended`.

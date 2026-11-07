@@ -39,6 +39,8 @@ pub enum Tool {
 	Media,
 	/// Write a note into memory.
 	Note,
+	/// Save a moment from the rolling audio buffer.
+	SaveAudio,
 }
 
 /// The tools a caller with `me` may use.
@@ -78,6 +80,12 @@ pub fn tools_for(me: Option<&Me>) -> Vec<Tool> {
 		.can_write(&"memory.note".parse().expect("valid stream"))
 	{
 		tools.push(Tool::Note);
+	}
+	if grant
+		.scopes
+		.can_write(&"audio.buffer".parse().expect("valid stream"))
+	{
+		tools.push(Tool::SaveAudio);
 	}
 	tools
 }
@@ -151,6 +159,7 @@ impl Tool {
 			Tool::Search => "quant_search",
 			Tool::Media => "quant_media",
 			Tool::Note => "quant_note",
+			Tool::SaveAudio => "quant_save_audio",
 		}
 	}
 
@@ -276,8 +285,27 @@ impl Tool {
 					}),
 				)
 			}
+			Tool::SaveAudio => {
+				(
+					"Save audio",
+					"Save a moment from the owner's rolling 24-hour audio buffer as a clip, such \
+					 as the last 10 minutes of a call. Nothing is transcribed until you save; the \
+					 clip is transcribed once, on device, right after. Audio content is never \
+					 returned — use the clip id with the export commands the owner runs.",
+					json!({
+						"type": "object",
+						"properties": {
+							"from": { "type": "string", "description": "Start: RFC 3339, or an offset like -10m. Defaults to the whole `duration` back from `to`." },
+							"to": { "type": "string", "description": "End, in the same forms. Defaults to now." },
+							"duration": { "type": "string", "description": "How far back to keep, such as `90s`, `10m`, or `1h`. Used when `from` is omitted." },
+							"title": { "type": "string", "description": "A name for the clip." },
+						},
+						"additionalProperties": false,
+					}),
+				)
+			}
 		};
-		let read_only = !matches!(self, Tool::Note);
+		let read_only = !matches!(self, Tool::Note | Tool::SaveAudio);
 		json!({
 			"name": self.name(),
 			"title": title,
@@ -373,6 +401,28 @@ impl Tool {
 				Ok(value)
 			}
 			Tool::Media => Err("handled separately".into()),
+			Tool::SaveAudio => {
+				let to = to.unwrap_or(now);
+				let from = if let Some(from) = from {
+					from
+				} else {
+					let duration = arg(args, "duration")
+						.ok_or("`duration` (such as `10m`) or `from` is required")?;
+					when::parse(&format!("-{duration}"), to)?
+				};
+				if to <= from {
+					return Err("the range ends before it starts".into());
+				}
+				let saved = client
+					.save_audio(&quant_api::SaveAudio {
+						from,
+						to,
+						title: arg(args, "title").map(str::to_owned),
+					})
+					.await
+					.map_err(failed)?;
+				Ok(serde_json::to_value(saved).unwrap_or_default())
+			}
 			Tool::Note => {
 				let text = arg(args, "text").ok_or("`text` is required")?;
 				let client_id = client.identity().client.ok_or("not paired")?;

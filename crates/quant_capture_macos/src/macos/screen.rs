@@ -274,7 +274,7 @@ fn capture(config: &ScreenConfig, exclusions: &Exclusions) -> Result<CFRetained<
 }
 
 /// The windows, displays and apps that can be captured right now.
-fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
+pub(crate) fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
 	let (sender, receiver) = mpsc::sync_channel(1);
 	let handler = RcBlock::new(
 		move |content: *mut SCShareableContent, error: *mut NSError| {

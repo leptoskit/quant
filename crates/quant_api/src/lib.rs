@@ -54,6 +54,11 @@ pub mod routes {
 	/// `POST` raw bytes with `?stream=…`: store media, get a
 	/// [`MediaRef`](quant_core::MediaRef).
 	pub const INGEST_MEDIA: &str = "/v1/ingest/media";
+	/// `POST` [`SaveAudio`](super::SaveAudio): save a moment from the rolling
+	/// audio buffer as a clip. Needs `audio:write`.
+	pub const AUDIO_SAVE: &str = "/v1/audio/save";
+	/// `POST` [`SaveAudio`](super::SaveAudio), with the owner's session.
+	pub const OWNER_AUDIO_SAVE: &str = "/v1/owner/audio/save";
 	/// `POST` [`AuditRequest`](super::AuditRequest).
 	pub const AUDIT: &str = "/v1/audit";
 	/// `POST` [`UnlockRequest`](super::UnlockRequest): start an owner session.
@@ -464,6 +469,38 @@ pub struct Ingested {
 	pub stored: usize,
 	/// Already present.
 	pub duplicate: usize,
+}
+
+/// `POST /v1/audio/save`: keep a moment from the rolling audio buffer.
+///
+/// The range is clipped to what the buffer still holds, and the answer
+/// describes the audio actually saved. The clip's bytes are never in the
+/// response — that is why `audio:write` is enough to save one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveAudio {
+	/// Start of the moment to keep.
+	pub from: Timestamp,
+	/// End of the moment to keep; now-ish reaches into the chunk still being
+	/// recorded, which is closed early so "just now" is included.
+	pub to: Timestamp,
+	/// A name for the clip.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub title: Option<String>,
+}
+
+/// Answer to [`routes::AUDIO_SAVE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedClip {
+	/// The clip's `audio.clip` record id.
+	pub id: RecordId,
+	/// The saved span, clipped to what the buffer held.
+	pub from: Timestamp,
+	/// End of the saved span.
+	pub to: Timestamp,
+	/// Buffer chunks joined into the clip.
+	pub chunks: usize,
+	/// Size of the joined audio file.
+	pub bytes: u64,
 }
 
 /// Ask for audit entries.

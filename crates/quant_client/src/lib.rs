@@ -46,6 +46,8 @@ use quant_api::Purged;
 use quant_api::Records;
 use quant_api::RecordsRequest;
 use quant_api::RevokeRequest;
+use quant_api::SaveAudio;
+use quant_api::SavedClip;
 use quant_api::Series;
 use quant_api::SeriesRequest;
 use quant_api::Status;
@@ -445,6 +447,12 @@ impl Client {
 			.await
 	}
 
+	/// Save a moment from the rolling audio buffer (needs `audio:write`).
+	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
+		self.signed(Method::POST, routes::AUDIO_SAVE, Some(request))
+			.await
+	}
+
 	/// Open an owner session with the passphrase.
 	pub async fn unlock(&self, passphrase: &str) -> Result<OwnerSession> {
 		OwnerSession::open(self.endpoint.clone(), passphrase).await
@@ -592,6 +600,12 @@ impl OwnerSession {
 	/// Pause capture, optionally for a number of minutes, or resume it.
 	pub async fn pause_capture(&self, request: &quant_api::PauseRequest) -> Result<Status> {
 		self.call(Method::POST, routes::OWNER_CAPTURE_PAUSE, Some(request))
+			.await
+	}
+
+	/// Save a moment from the rolling audio buffer.
+	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
+		self.call(Method::POST, routes::OWNER_AUDIO_SAVE, Some(request))
 			.await
 	}
 

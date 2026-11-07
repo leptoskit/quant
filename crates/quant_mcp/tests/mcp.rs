@@ -177,6 +177,10 @@ async fn tools_follow_the_grant() {
 	] {
 		assert!(tool_names(&list).contains(&name.to_owned()), "{name}");
 	}
+	assert!(
+		!tool_names(&list).contains(&"quant_save_audio".to_owned()),
+		"audio:write was never granted"
+	);
 	let note = call(&mut full, 2, "tools/call", json!({ "name": "quant_note", "arguments": { "text": "Owner focuses best before noon", "tags": ["pattern"] } })).await;
 	assert_eq!(note["result"]["isError"], false);
 	let found = call(

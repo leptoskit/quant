@@ -133,6 +133,20 @@ impl Store {
 		Ok(rows.collect::<rusqlite::Result<_>>()?)
 	}
 
+	/// Set or clear when media expires. Clearing it is how a saved clip
+	/// outlives the buffer chunks it was joined from, even if a chunk's
+	/// content was identical.
+	pub fn set_media_expiry(&self, hash: &str, expires: Option<Timestamp>) -> Result<()> {
+		let changed = self.conn().execute(
+			"UPDATE media SET expires_us = ?2 WHERE hash = ?1",
+			params![hash, expires.map(micros)],
+		)?;
+		if changed == 0 {
+			return Err(StoreError::NotFound);
+		}
+		Ok(())
+	}
+
 	/// Forget media after its file is gone. Records keep their reference, so
 	/// agents see that something was captured even once the pixels are gone.
 	pub fn forget_media(&self, hash: &str) -> Result<()> {
@@ -204,5 +218,28 @@ mod tests {
 		);
 		store.forget_media(&media.hash).unwrap();
 		assert!(!store.has_media(&media.hash).unwrap());
+	}
+
+	#[test]
+	fn a_cleared_expiry_survives_a_later_note() {
+		let store = crate::test_support::store();
+		let now = Timestamp::now();
+		let media = MediaRef::of(b"clip", "audio/mp4");
+		store
+			.note_media(&media, Some(now + SignedDuration::from_hours(1)))
+			.unwrap();
+		// A saved clip clears the expiry outright, rather than keeping the
+		// longest retention a buffer chunk set.
+		store.set_media_expiry(&media.hash, None).unwrap();
+		assert!(
+			store
+				.expired_media(now + SignedDuration::from_hours(24))
+				.unwrap()
+				.is_empty()
+		);
+		assert!(matches!(
+			store.set_media_expiry("ff".repeat(32).as_str(), None),
+			Err(StoreError::NotFound)
+		));
 	}
 }

@@ -13,15 +13,19 @@
 //! - **audio** (off by default): speech segments from the microphone as
 //!   `audio.transcript` records with a WAV clip and, with the `whisper`
 //!   feature, a transcript.
+//! - **rewind** (on by default): a rolling buffer of the last day of microphone
+//!   and system audio as `audio.buffer` chunks, so a moment can be saved after
+//!   it happened. It never transcribes while recording; see [`rewind`].
 //!
 //! Every source reports how it is doing through [`Sink::status`] under the
-//! names `screen`, `apps`, `input` and `audio`, including when macOS refuses
-//! a permission. On other platforms [`spawn`] reports every source
-//! unavailable and starts nothing.
+//! names `screen`, `apps`, `input`, `audio` and `rewind`, including when
+//! macOS refuses a permission. On other platforms [`spawn`] reports every
+//! source unavailable and starts nothing.
 
 // Capture has to call Apple's Objective-C and C APIs.
 #![allow(unsafe_code)]
 
+mod aac;
 mod config;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod control;
@@ -35,24 +39,32 @@ mod focus;
 mod macos;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod privacy;
+pub mod resample;
+pub mod rewind;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod resample;
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod vad;
+mod transcribe;
+pub mod vad;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod wav;
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+pub use aac::AacFile;
+pub use aac::AacWriter;
+pub use aac::Piece;
+pub use aac::join;
 pub use config::*;
 use control::Stop;
 use quant_core::DeviceId;
 use quant_core::Sink;
 use quant_core::StreamId;
+pub use rewind::Track;
+pub use transcribe::Transcribe;
+pub use transcribe::transcribe;
 
 /// The names sources report their status under, in start order.
-pub const SOURCES: [&str; 4] = ["apps", "input", "screen", "audio"];
+pub const SOURCES: [&str; 5] = ["apps", "input", "screen", "audio", "rewind"];
 
 /// Start capturing. Each enabled source runs on its own thread until the
 /// returned handle is stopped or dropped.
@@ -122,6 +134,18 @@ impl std::fmt::Debug for CaptureHandle {
 	}
 }
 
+/// Run the calling thread at utility quality of service, as the capture
+/// sources do, so background work never competes with the user's.
+#[cfg(target_os = "macos")]
+pub fn lower_priority() {
+	macos::system::lower_priority();
+}
+
+/// Run the calling thread at utility quality of service. No-op where the
+/// platform has no such knob.
+#[cfg(not(target_os = "macos"))]
+pub fn lower_priority() {}
+
 /// A built-in stream id.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn stream(name: &str) -> StreamId {
@@ -172,6 +196,8 @@ mod tests {
 			"apps.focus",
 			"input.activity",
 			"audio.transcript",
+			"audio.buffer",
+			"audio.clip",
 			"device.state",
 		] {
 			assert!(
@@ -198,6 +224,10 @@ mod tests {
 				..InputConfig::default()
 			},
 			audio: AudioConfig::default(),
+			rewind: RewindConfig {
+				enabled: false,
+				..RewindConfig::default()
+			},
 		};
 		let handle = spawn(config, sink.clone(), DeviceId::new());
 		let began = std::time::Instant::now();

@@ -17,7 +17,7 @@ A vault is a directory holding `vault.json` (the manifest), `quant.db` (SQLCiphe
 
 - The **vault key** is 256 random bits. It is stored only wrapped: under the owner's passphrase with Argon2id (64 MiB, 3 passes) in the manifest, and in the OS keychain so the daemon can start at login without asking.
 - **SQLCipher** encrypts every database page with a subkey derived from the vault key. Records are indexed by stream and time, and their text by FTS5 (`unicode61`, diacritics folded). Search terms are quoted before they reach FTS5, so user input cannot inject query syntax.
-- **Media** is sealed with XChaCha20-Poly1305 under a separate subkey, with the content hash as associated data, so one blob cannot be swapped for another. Each stream sets how long its media is kept (screenshots 7 days, audio 24 hours by default); a sweep deletes expired files while keeping the records that pointed at them.
+- **Media** is sealed with XChaCha20-Poly1305 under a separate subkey, with the content hash as associated data, so one blob cannot be swapped for another. Each stream sets how long its media is kept (screenshots 7 days, audio 24 hours by default); a sweep deletes expired files while keeping the records that pointed at them. A saved `audio.clip` clears its media's expiry outright, so a clip outlives the buffer chunks it was joined from.
 - `secure_delete` is on, so purged rows are overwritten rather than left in free pages.
 
 ## Access
@@ -39,10 +39,17 @@ Nothing reads the vault directly except the daemon, `quantd`, which listens on a
 ## Capture
 
 Capture sources write to a `Sink`. In the daemon the sink writes straight into the vault; on a phone it queues for signed upload with a device grant (`health:write`, `motion:write`, …), which never implies read access.
-
-- **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; and, when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription. Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything pauses while the machine is idle or locked. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
+- **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription; and **Rewind**, a rolling buffer of the last day of microphone and system audio as 60-second AAC `audio.buffer` chunks (`audio.clip` is a saved moment joined from them). Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything but Rewind pauses while the machine is idle or locked — Rewind keeps recording until the owner pauses capture, because its whole purpose is to hold what already happened. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
 - **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
+
+### Rewind
+
+The rolling buffer is a source like the others, designed around one number: the CPU it may spend while recording. Everything runs at utility priority on background threads. Each track (microphone, and system audio through a ScreenCaptureKit `SCStream` that excludes this process's own output) is downmixed, resampled to 16 kHz, measured by the same energy VAD the speech path uses, and encoded as mono 24 kbps AAC into 60-second `audio.buffer` chunks; a chunk's record carries `source`, `device`, `speech_ms`, `peak_dbfs` and its size. When both the `audio` source and `rewind` want the microphone they share one cpal stream rather than opening the device twice.
+
+Saving a moment (`POST /v1/audio/save`, scope `audio:write`, or the owner route) asks the source to close the chunk still being recorded when the range reaches the present, joins the overlapping chunks into one `.m4a` — one decode-and-re-encode pass, decoded a chunk at a time — and stores it as an `audio.clip` whose media has no expiry. The response carries ids, spans, and byte counts, never audio, which is why write scope is enough. Only then is anything transcribed: once, on a low-priority thread, with whisper.cpp (when built with the feature and a model is set) or Apple's on-device `SFSpeechRecognizer`; the outcome lands in the clip's `transcript_status`.
+
+The buffer's retention follows `rewind.hours` from the capture settings: the daemon keeps the `audio.buffer` stream spec's `media_retention_hours` in sync, so the sweep that deletes yesterday's chunks obeys the setting the owner chose.
 
 ## Derived memory
 

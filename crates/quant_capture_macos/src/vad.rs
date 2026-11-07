@@ -12,11 +12,11 @@ use crate::config::AudioConfig;
 use crate::resample::TARGET_RATE;
 
 /// Samples per analysis frame (30 ms at 16 kHz).
-pub(crate) const FRAME: usize = (TARGET_RATE as usize) * 30 / 1000;
+pub const FRAME: usize = (TARGET_RATE as usize) * 30 / 1000;
 
 /// Frame-count thresholds derived from an [`AudioConfig`].
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct VadSettings {
+pub struct VadSettings {
 	/// dB above the noise floor that counts as speech.
 	pub(crate) margin_db: f32,
 	/// Absolute dBFS below which nothing is speech.
@@ -35,7 +35,7 @@ pub(crate) struct VadSettings {
 
 impl VadSettings {
 	/// Settings from the user's millisecond-based config.
-	pub(crate) fn from_config(config: &AudioConfig) -> Self {
+	pub fn from_config(config: &AudioConfig) -> Self {
 		let frames = |ms: u32| (ms as usize).div_ceil(30);
 		Self {
 			margin_db: config.margin_db,
@@ -64,7 +64,7 @@ enum State {
 
 /// Splits a continuous stream into speech segments.
 #[derive(Debug)]
-pub(crate) struct Vad {
+pub struct Vad {
 	settings: VadSettings,
 	pending: Vec<i16>,
 	floor_db: Option<f32>,
@@ -74,7 +74,7 @@ pub(crate) struct Vad {
 
 impl Vad {
 	/// A detector with `settings`.
-	pub(crate) fn new(settings: VadSettings) -> Self {
+	pub fn new(settings: VadSettings) -> Self {
 		Self {
 			settings,
 			pending: Vec::with_capacity(FRAME),
@@ -85,7 +85,7 @@ impl Vad {
 	}
 
 	/// Feed samples; returns every segment that finished.
-	pub(crate) fn push(&mut self, samples: &[i16]) -> Vec<Vec<i16>> {
+	pub fn push(&mut self, samples: &[i16]) -> Vec<Vec<i16>> {
 		let mut finished = Vec::new();
 		let mut rest = samples;
 		while !rest.is_empty() {
@@ -103,7 +103,7 @@ impl Vad {
 	}
 
 	/// End the stream, returning the open segment if it holds enough speech.
-	pub(crate) fn flush(&mut self) -> Option<Vec<i16>> {
+	pub fn flush(&mut self) -> Option<Vec<i16>> {
 		let state = mem::replace(&mut self.state, State::Quiet { onset: Vec::new() });
 		self.preroll.clear();
 		match state {
@@ -221,7 +221,7 @@ impl Vad {
 }
 
 /// Mean energy of a frame in dB relative to full scale.
-pub(crate) fn energy_dbfs(frame: &[i16]) -> f32 {
+pub fn energy_dbfs(frame: &[i16]) -> f32 {
 	if frame.is_empty() {
 		return -120.0;
 	}

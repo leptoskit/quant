@@ -583,3 +583,185 @@ async fn only_the_owner_configures_and_pauses_capture() {
 		assert!(actions.iter().any(|a| a == action), "{action} not audited");
 	}
 }
+
+/// Encode one minute of speech-like audio as a real AAC chunk. Each `voice`
+/// sounds different so no two chunks hash the same.
+#[cfg(target_os = "macos")]
+fn aac_chunk(seconds: u32, voice: u32) -> Vec<u8> {
+	let rate = 16_000_u32;
+	let mut writer = quant_capture_macos::AacWriter::new(rate, 24_000).unwrap();
+	let mut samples = Vec::new();
+	let frequency = 180.0 + (voice % 5) as f32 * 40.0;
+	for i in 0..rate as usize * seconds as usize {
+		let t = i as f32 / rate as f32;
+		samples.push((t * frequency * std::f32::consts::TAU).sin() * 0.3);
+	}
+	writer.write(&samples).unwrap();
+	writer.finish().unwrap().bytes
+}
+
+/// Seed the vault with three minutes of rolling-buffer chunks ending now.
+#[cfg(target_os = "macos")]
+fn seed_buffer(state: &State) -> Timestamp {
+	let device = DeviceId::new();
+	let now = Timestamp::now();
+	let started = now - SignedDuration::from_mins(3);
+	let mut at = started;
+	for index in 0..3 {
+		let ended = at + SignedDuration::from_mins(1);
+		let bytes = aac_chunk(60, index);
+		let media = state
+			.media(&"audio.buffer".parse().unwrap(), &bytes, "audio/mp4")
+			.unwrap();
+		state
+			.record(
+				Record::new("audio.buffer".parse().unwrap(), device)
+					.starting(at)
+					.ending(ended)
+					.with("source", if index % 2 == 0 { "mic" } else { "system" })
+					.with("device", "test microphone")
+					.with("speech_ms", 30_000)
+					.with("peak_dbfs", -12.5)
+					.with("bytes", bytes.len())
+					.with_media(media),
+			)
+			.unwrap();
+		at = ended;
+	}
+	started
+}
+
+#[tokio::test]
+#[cfg(target_os = "macos")]
+async fn saving_a_moment_needs_write_scope_and_never_returns_audio() {
+	let h = start().await;
+	let buffer_from = seed_buffer(&h.state);
+	let now = Timestamp::now();
+
+	// A read-only client can see the chunks exist, but not their audio…
+	let reader = h
+		.paired("Reader", ClientKind::Agent, approve(&["audio:read"]))
+		.await;
+	let listed = reader
+		.records(&RecordsRequest {
+			streams: vec!["audio.buffer".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(listed.records.len(), 3);
+	assert!(listed.records.iter().all(|record| record.media.is_none()));
+
+	// …and cannot save.
+	let refused = reader
+		.save_audio(&quant_api::SaveAudio {
+			from: buffer_from,
+			to: now,
+			title: None,
+		})
+		.await
+		.unwrap_err();
+	assert_eq!(refused.code(), Some("forbidden"));
+	assert!(
+		h.owner()
+			.await
+			.audit(&quant_api::AuditRequest::default())
+			.await
+			.unwrap()
+			.entries
+			.iter()
+			.any(|entry| {
+				entry.action == "audio.save"
+					&& matches!(entry.outcome, quant_access::audit::Outcome::Denied { .. })
+			}),
+		"the refused save was not audited"
+	);
+
+	// A write client saves the range; the answer has ids and sizes only.
+	let writer = h
+		.paired("Writer", ClientKind::Agent, approve(&["audio:write"]))
+		.await;
+	let saved = writer
+		.save_audio(&quant_api::SaveAudio {
+			from: buffer_from + SignedDuration::from_mins(1),
+			to: now,
+			title: Some("Tuesday call".into()),
+		})
+		.await
+		.unwrap();
+	assert_eq!(saved.chunks, 2);
+	assert!(saved.bytes > 1000);
+	let body = serde_json::to_value(saved).unwrap();
+	let keys: Vec<_> = body.as_object().unwrap().keys().collect();
+	assert_eq!(keys, ["bytes", "chunks", "from", "id", "to"]);
+	assert!(saved.to > saved.from);
+
+	// The owner can save too.
+	let owner_saved = h
+		.owner()
+		.await
+		.save_audio(&quant_api::SaveAudio {
+			from: buffer_from,
+			to: now,
+			title: None,
+		})
+		.await
+		.unwrap();
+	assert_eq!(owner_saved.chunks, 3);
+
+	// The clip record carries the title and its sources; its media has no
+	// expiry, so the sweep that clears the buffer never clears a clip.
+	let raw = h
+		.paired("Raw", ClientKind::Agent, approve(&["audio:raw"]))
+		.await;
+	let clips = raw
+		.records(&RecordsRequest {
+			streams: vec!["audio.clip".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(clips.records.len(), 2);
+	let clip = clips
+		.records
+		.iter()
+		.find(|record| record.id == saved.id)
+		.unwrap();
+	assert_eq!(clip.text.as_deref(), Some("Tuesday call"));
+	assert_eq!(clip.data["title"], "Tuesday call");
+	assert_eq!(clip.data["sources"], serde_json::json!(["mic", "system"]));
+	let media = clip.media.clone().unwrap();
+	let (mime, bytes) = raw.media(&media.hash).await.unwrap();
+	assert_eq!(mime, "audio/mp4");
+	assert!(!bytes.is_empty());
+
+	// A reader cannot fetch the clip's audio either: it answers exactly
+	// like media that does not exist.
+	let denied = reader.media(&media.hash).await.unwrap_err();
+	assert_eq!(denied.code(), Some("not_found"));
+
+	// Two days later the sweep deletes the expired buffer chunks — and never
+	// the saved clip.
+	let later = Timestamp::now() + SignedDuration::from_hours(48);
+	let swept = h.state.vault.sweep_media(later).unwrap();
+	assert!(swept >= 3, "the buffer chunks were not swept");
+	assert!(!swept_removed(&h.state, &media.hash));
+	assert_eq!(h.state.vault.get_media(&media.hash).unwrap(), bytes);
+	assert!(
+		h.state
+			.vault
+			.store
+			.media_mime(&media.hash)
+			.unwrap()
+			.is_some()
+	);
+}
+
+/// Whether the sweep removed this hash.
+#[cfg(target_os = "macos")]
+fn swept_removed(state: &State, hash: &str) -> bool {
+	matches!(
+		state.vault.get_media(hash),
+		Err(quant_store::StoreError::NotFound)
+	)
+}
