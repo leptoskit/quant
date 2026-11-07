@@ -383,8 +383,12 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"memory.episode",
 			"A derived span of activity: what was happening, where, and how the body was doing.",
 		)
-		.summarise_by(&["activity"]),
-		StreamSpec::event("memory.daily", "A derived summary of one day."),
+		.summarise_by(&["activity"])
+		// Episodes and days quote heart rate, sleep, and places, so a grant
+		// denied those classes must not read them through `memory`.
+		.sensitive(&[Class::Health, Class::Location]),
+		StreamSpec::event("memory.daily", "A derived summary of one day.")
+			.sensitive(&[Class::Health, Class::Location]),
 		StreamSpec::event(
 			"memory.note",
 			"A note written by the owner or an authorised agent.",

@@ -206,36 +206,32 @@ pub async fn propose(
 			Error::Forbidden(Denied::RateLimited),
 		));
 	}
-	let mut ids = Vec::with_capacity(body.claims.len());
+	// Check every proposal before storing any, so a request either lands
+	// whole or not at all.
+	let failed = || {
+		state
+			.vault
+			.store
+			.audit(quant_access::audit::AuditEvent::new(
+				caller.actor(),
+				"claims.propose",
+				PROFILE,
+				quant_access::audit::Outcome::Failed,
+			))
+	};
+	let mut claims = Vec::with_capacity(body.claims.len());
 	for proposal in &body.claims {
 		// Every evidence id must exist and be readable by this grant at
 		// read level; otherwise the request fails as not found, never
 		// saying which id or why.
-		if proposal.evidence.is_empty() {
-			state
-				.vault
-				.store
-				.audit(quant_access::audit::AuditEvent::new(
-					caller.actor(),
-					"claims.propose",
-					PROFILE,
-					quant_access::audit::Outcome::Failed,
-				))?;
+		if proposal.evidence.is_empty()
+			|| !proposal
+				.evidence
+				.iter()
+				.all(|evidence| evidence_readable(&state, caller, *evidence))
+		{
+			failed()?;
 			return Err(Error::NotFound);
-		}
-		for evidence in &proposal.evidence {
-			if !evidence_readable(&state, caller, *evidence) {
-				state
-					.vault
-					.store
-					.audit(quant_access::audit::AuditEvent::new(
-						caller.actor(),
-						"claims.propose",
-						PROFILE,
-						quant_access::audit::Outcome::Failed,
-					))?;
-				return Err(Error::NotFound);
-			}
 		}
 		let claim = Claim {
 			id: ClaimId::new(),
@@ -255,10 +251,15 @@ pub async fn propose(
 			updated_at: now,
 			superseded_by: None,
 		};
-		claim
-			.validate()
-			.map_err(|e| Error::Invalid(e.to_string()))?;
-		state.vault.store.insert_claim(&claim)?;
+		if let Err(error) = claim.validate() {
+			failed()?;
+			return Err(Error::Invalid(error.to_string()));
+		}
+		claims.push(claim);
+	}
+	let mut ids = Vec::with_capacity(claims.len());
+	for claim in &claims {
+		state.vault.store.insert_claim(claim)?;
 		ids.push(claim.id);
 	}
 	let answer = Proposed { claims: ids };

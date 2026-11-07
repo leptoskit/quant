@@ -1210,6 +1210,24 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 	assert_eq!(withheld.withheld, vec!["health.heart_rate"]);
 	assert!(!withheld.records.is_empty());
 
+	// Derived summaries quote heart rate and sleep, so they are withheld too.
+	h.state
+		.record(
+			Record::new("memory.daily".parse().unwrap(), DeviceId::new())
+				.starting(Timestamp::now() - SignedDuration::from_hours(2))
+				.with_text("Resting heart rate 52 bpm; slept 7 h 10 min."),
+		)
+		.unwrap();
+	let daily = agent
+		.records(&RecordsRequest {
+			streams: vec!["memory.daily".into()],
+			..Default::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(daily.withheld, vec!["memory.daily"]);
+	assert!(daily.records.is_empty());
+
 	// Series and durations treat it exactly like an out-of-scope stream.
 	assert_eq!(
 		agent
@@ -1344,7 +1362,7 @@ async fn context_packets_respect_budget_and_scopes() {
 }
 
 #[tokio::test]
-async fn tell_with_a_topic_supersedes_lower_authority_claims() {
+async fn tell_with_a_topic_supersedes_earlier_claims_on_it() {
 	let h = start().await;
 	seed(&h.state);
 	let owner = h.owner().await;
@@ -1376,8 +1394,8 @@ async fn tell_with_a_topic_supersedes_lower_authority_claims() {
 	let held = proposed.claims[0];
 	owner.claim_approve(held).await.unwrap();
 
-	// The owner states it again with the same topic: the inferred claim is
-	// superseded, the owner's claims stay active.
+	// The owner states it again with the same topic: everything earlier on
+	// it, the owner's own first statement included, is superseded.
 	let correction = tell(
 		&owner,
 		"Espresso, but never after 16:00",
@@ -1396,12 +1414,14 @@ async fn tell_with_a_topic_supersedes_lower_authority_claims() {
 	let old = claims.iter().find(|c| c.id == held).unwrap();
 	assert_eq!(old.status, quant_core::ClaimStatus::Superseded);
 	assert_eq!(old.superseded_by, Some(correction.id));
-	assert!(
-		claims
-			.iter()
-			.filter(|c| c.authority == quant_core::Authority::Owner)
-			.all(|c| c.status == quant_core::ClaimStatus::Active)
-	);
+	for claim in &claims {
+		let expected = if claim.id == correction.id {
+			quant_core::ClaimStatus::Active
+		} else {
+			quant_core::ClaimStatus::Superseded
+		};
+		assert_eq!(claim.status, expected, "{}", claim.statement);
+	}
 
 	// Serving skips superseded claims entirely.
 	let profile = agent.profile().await.unwrap();

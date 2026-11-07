@@ -88,7 +88,8 @@ pub async fn tell(
 		.map_err(|e| Error::Invalid(e.to_string()))?;
 	state.vault.store.insert_claim(&claim)?;
 	// A claim with a topic supersedes everything active on the same subject
-	// and topic that did not come from the owner directly.
+	// and topic, the owner's own earlier statements included: the newest
+	// thing the owner said is what holds.
 	if let Some(topic) = &claim.topic {
 		let older = state.vault.store.claims(
 			&ClaimFilter::new()
@@ -97,7 +98,7 @@ pub async fn tell(
 				.topic(topic),
 		)?;
 		for old in older {
-			if old.id != claim.id && old.authority != Authority::Owner {
+			if old.id != claim.id {
 				state.vault.store.supersede(old.id, claim.id)?;
 			}
 		}
