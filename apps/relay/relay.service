@@ -1,0 +1,47 @@
+# relay under systemd, written by `leptoskit generate deploy`. It's
+# yours to edit: running the generator again keeps your changes unless you
+# pass --force.
+#
+#   sudo cp relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now relay
+#
+# It reads the environment from /etc/relay/relay.env, which is where the
+# secrets go. The binary and the built site are installed by your deploy;
+# the paths below match /usr/local/bin and /srv/relay.
+
+[Unit]
+Description=relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+WorkingDirectory=/srv/relay
+EnvironmentFile=/etc/relay/relay.env
+Environment=LEPTOS_SITE_ADDR=0.0.0.0:3000
+Environment=LEPTOS_SITE_ROOT=/srv/relay/dist
+Environment=DATABASE_URL=sqlite:///var/lib/relay/relay.sqlite3
+StateDirectory=relay
+ExecStart=/usr/local/bin/relay
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# A read-only filesystem, except for the paths systemd gives the service.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/relay
+
+[Install]
+WantedBy=multi-user.target

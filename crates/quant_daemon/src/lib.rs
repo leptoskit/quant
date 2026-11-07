@@ -13,7 +13,8 @@ mod error;
 mod ingest;
 mod memory;
 mod owner;
-mod query;
+pub mod query;
+pub mod relay;
 mod state;
 pub mod tls;
 
@@ -79,6 +80,10 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::OWNER_CLAIM_REJECT, post(claims::reject))
 		.route(routes::OWNER_CLAIM_RETRACT, post(claims::retract))
 		.route(routes::OWNER_CLAIM_CORRECT, post(claims::correct))
+		.route(
+			routes::OWNER_RELAY,
+			get(relay::owner_state).post(relay::owner_set),
+		)
 		.layer(DefaultBodyLimit::max(authn::MAX_BODY))
 		.with_state(state)
 }

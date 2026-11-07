@@ -20,6 +20,10 @@ pub struct DaemonArgs {
 	/// input, or microphone.
 	#[arg(long)]
 	no_capture: bool,
+	/// Do not keep a listener on the relay, even though one is set with
+	/// `quant relay set`.
+	#[arg(long)]
+	no_relay: bool,
 }
 
 fn open(paths: &VaultPaths) -> Result<Vault> {
@@ -79,6 +83,30 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 
 	let (stop, _) = tokio::sync::broadcast::channel::<()>(1);
 	let mut tasks = Vec::new();
+	if !args.no_relay {
+		// Starts on its own only when the vault names a relay; returns at
+		// once otherwise.
+		let relay = match quant_daemon::relay::config(&state.vault.store) {
+			Ok(Some(config)) => Some(config),
+			Ok(None) => None,
+			Err(error) => {
+				tracing::warn!(%error, "could not read the relay settings");
+				None
+			}
+		};
+		if let Some(config) = relay {
+			let (serving, mut stopped) = (Arc::clone(&state), stop.subscribe());
+			tasks.push(tokio::spawn(async move {
+				let url = config.url;
+				quant_daemon::relay::listen(serving, async move {
+					let _ = stopped.recv().await;
+				})
+				.await;
+				tracing::info!(%url, "relay listener stopped");
+				Ok::<(), std::io::Error>(())
+			}));
+		}
+	}
 	if let Some(address) = args.tcp {
 		let (serving, mut stopped) = (Arc::clone(&state), stop.subscribe());
 		tasks.push(tokio::spawn(async move {

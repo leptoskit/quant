@@ -23,7 +23,7 @@ The vault stays on the owner's machine. The daemon keeps an outbound connection 
 - Phones keep their upload spool while the daemon is unreachable, so the relay needs no mailbox.
 - Limits per rendezvous id (connections, bytes per day, idle time) keep one vault from starving the rest.
 
-The relay is a small leptoskit server: `leptoskit_db` keeps registrations and usage counters, and `leptoskit generate deploy` writes the Docker, Fly, Compose, Kubernetes, or systemd files. Because it never holds a key, anyone can run one, and `leptoskit verify` lets users check that a public relay runs the published code.
+The relay is a small leptoskit server: `leptoskit_db` keeps registrations and usage counters, and `leptoskit generate deploy` writes the Docker, Fly, Compose, Kubernetes, or systemd files. Because it never holds a key, anyone can run one, and `leptoskit verify` lets users check that a public relay runs the published code. A relay that wants to choose its daemons turns on invite gating: every invite is single-use, and a rendezvous id not yet registered must present one on its first listen (`relay invite add` on the server, `quant relay set <url> --invite <code>` on the daemon).
 
 ## 2. Hosted vaults (designed, not built)
 

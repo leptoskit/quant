@@ -55,7 +55,9 @@ impl TlsIdentity {
 		fingerprint(&self.cert)
 	}
 
-	fn acceptor(&self) -> Result<TlsAcceptor, rustls::Error> {
+	/// The TLS acceptor, also used for relay connections, which arrive as
+	/// ordinary byte streams inside a WebSocket.
+	pub fn acceptor(&self) -> Result<TlsAcceptor, rustls::Error> {
 		let provider = Arc::new(rustls::crypto::ring::default_provider());
 		let config = rustls::ServerConfig::builder_with_provider(provider)
 			.with_safe_default_protocol_versions()?

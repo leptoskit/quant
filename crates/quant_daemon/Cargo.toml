@@ -16,12 +16,14 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 getrandom = { workspace = true }
 hex = { workspace = true }
+hyper-util = { workspace = true, features = ["http1", "http2", "server-auto", "server", "tokio"] }
 jiff = { workspace = true }
 quant_access = { workspace = true }
 quant_api = { workspace = true }
 quant_capture_macos = { workspace = true }
 quant_core = { workspace = true }
 quant_derive = { workspace = true }
+quant_relay = { workspace = true, default-features = false, features = ["dial"] }
 quant_store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,9 +31,12 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+futures-util = { workspace = true }
 quant_client = { workspace = true }
 quant_crypto = { workspace = true }
+quant_relay = { workspace = true, features = ["server"] }
 tempfile = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true

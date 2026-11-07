@@ -1,0 +1,262 @@
+{
+  "format": 1,
+  "dialect": "sqlite",
+  "tables": [
+    {
+      "name": {
+        "name": "invites"
+      },
+      "comment": "An invite code, spent once.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The row's id."
+        },
+        {
+          "name": "code",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The code a daemon presents on its first listen."
+        },
+        {
+          "name": "used_by",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "comment": "The rendezvous id that spent it."
+        },
+        {
+          "name": "used_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When it was spent."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When it was created."
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "invites_code_key",
+          "columns": [
+            "code"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "invites_code_length",
+          "rule": {
+            "kind": "length",
+            "column": "code",
+            "min": 8,
+            "max": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "registrations"
+      },
+      "comment": "A daemon registered on this relay by rendezvous id.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The row's id."
+        },
+        {
+          "name": "rid",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The rendezvous id: lowercase base32, 26 characters."
+        },
+        {
+          "name": "public_key",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The daemon's relay key, as unpadded base64. It derives the rid."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the daemon first registered."
+        },
+        {
+          "name": "last_seen",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the daemon was last seen."
+        },
+        {
+          "name": "invite_id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": true,
+          "comment": "The invite that opened the door, when the relay asked for one."
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "registrations_rid_key",
+          "columns": [
+            "rid"
+          ],
+          "unique": true
+        }
+      ],
+      "foreign_keys": [
+        {
+          "name": "registrations_invite_id_fkey",
+          "columns": [
+            "invite_id"
+          ],
+          "references": {
+            "name": "invites"
+          },
+          "referenced_columns": [
+            "id"
+          ],
+          "on_delete": "set_null"
+        }
+      ],
+      "checks": [
+        {
+          "name": "registrations_rid_length",
+          "rule": {
+            "kind": "length",
+            "column": "rid",
+            "min": 26,
+            "max": 26
+          }
+        },
+        {
+          "name": "registrations_rid_pattern",
+          "rule": {
+            "kind": "regex",
+            "column": "rid",
+            "pattern": "^[a-z2-7]+$"
+          }
+        },
+        {
+          "name": "registrations_public_key_length",
+          "rule": {
+            "kind": "length",
+            "column": "public_key",
+            "min": 43,
+            "max": 43
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "usage"
+      },
+      "comment": "Bytes moved for one rendezvous id on one UTC day, both directions.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The row's id."
+        },
+        {
+          "name": "usage_key",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "`<rid>/<day>`, so each pair has exactly one row."
+        },
+        {
+          "name": "rid",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The rendezvous id the bytes flowed for."
+        },
+        {
+          "name": "day",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The UTC day, `YYYY-MM-DD`."
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The count, both directions added."
+        },
+        {
+          "name": "updated_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the counter last moved."
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "usage_usage_key_key",
+          "columns": [
+            "usage_key"
+          ],
+          "unique": true
+        },
+        {
+          "name": "usage_rid_idx",
+          "columns": [
+            "rid"
+          ]
+        }
+      ]
+    }
+  ]
+}

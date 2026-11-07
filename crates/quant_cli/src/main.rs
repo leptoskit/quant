@@ -4,6 +4,7 @@ mod capture;
 mod daemon;
 mod hardware;
 mod print;
+mod relay;
 mod rewind;
 mod service;
 
@@ -230,6 +231,9 @@ enum Command {
 		#[command(subcommand)]
 		action: capture::CaptureAction,
 	},
+	/// Point the daemon at a relay so clients reach it from anywhere
+	/// (asks for the passphrase).
+	Relay(relay::RelayArgs),
 	/// Save moments from the rolling audio buffer, and see what it holds.
 	Rewind {
 		#[command(subcommand)]
@@ -682,6 +686,7 @@ async fn main() -> Result<()> {
 		Command::Link { host, port } => link(&cx, host, port).await,
 		Command::Stream { action } => hardware::stream(&cx, action).await,
 		Command::Capture { action } => capture::run(&cx, action).await,
+		Command::Relay(args) => relay::run(&cx, args).await,
 		Command::Rewind { action } => rewind::run(&cx, action).await,
 		Command::Derive { action } => hardware::derive(&cx, action).await,
 		Command::Ingest {
@@ -958,10 +963,20 @@ async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
 		Some(host) => host,
 		None => lan_address().context("could not find this machine's LAN address; pass --host")?,
 	};
-	let link = format!(
+	let mut link = format!(
 		"quant://link?addr={host}:{port}&fp={fingerprint}&vault={}",
 		hello.vault_id
 	);
+	let relayed = hello.relay.is_some();
+	if let Some(relay) = hello.relay
+		&& let Some(rid) = hello.relay_rid
+	{
+		let encoded = relay.replace(':', "%3A").replace('/', "%2F");
+		link.push_str("&relay=");
+		link.push_str(&encoded);
+		link.push_str("&rid=");
+		link.push_str(&rid);
+	}
 	let code = qrcode::QrCode::new(link.as_bytes())?;
 	println!(
 		"{}",
@@ -973,6 +988,9 @@ async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
 	println!("Scan this in the Quant app on your phone. It will ask to pair; approve it with");
 	println!("`quant approve <code>` and the scopes the phone should write, such as");
 	println!("--scope health:write --scope motion:write --scope location:write.");
+	if relayed {
+		println!("The link carries a relay, so the phone can also reach this vault from anywhere.");
+	}
 	Ok(())
 }
 

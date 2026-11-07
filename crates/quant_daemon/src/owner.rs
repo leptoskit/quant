@@ -69,7 +69,7 @@ fn status_out(status: ClientStatus) -> quant_api::ClientStatus {
 	}
 }
 
-fn owner_audit(
+pub(crate) fn owner_audit(
 	state: &State,
 	action: &str,
 	target: impl Into<String>,
@@ -92,6 +92,7 @@ fn owner_audit(
 
 /// `GET /v1/hello`
 pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
+	let relay = crate::relay::config(&state.vault.store).ok().flatten();
 	Json(Hello {
 		service: "quant".into(),
 		version: env!("CARGO_PKG_VERSION").into(),
@@ -101,6 +102,8 @@ pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
 			.read()
 			.unwrap_or_else(std::sync::PoisonError::into_inner)
 			.clone(),
+		relay: relay.as_ref().map(|config| config.url.to_string()),
+		relay_rid: relay.is_some().then(|| state.relay_key.rid()),
 	})
 }
 
