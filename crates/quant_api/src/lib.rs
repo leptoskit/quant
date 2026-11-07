@@ -13,6 +13,11 @@ use quant_access::Level;
 use quant_access::Limits;
 use quant_access::audit::AuditEntry;
 use quant_access::auth::PublicKey;
+use quant_core::Authority;
+use quant_core::ClaimId;
+use quant_core::ClaimKind;
+use quant_core::ClaimStatus;
+use quant_core::Class;
 use quant_core::ClientId;
 use quant_core::DeviceId;
 use quant_core::MediaRef;
@@ -67,6 +72,32 @@ pub mod routes {
 	/// `POST` [`RenameClip`](super::RenameClip): retitle a saved clip. Needs
 	/// `audio:write`.
 	pub const AUDIO_RENAME: &str = "/v1/audio/rename";
+	/// `GET`: the owner's profile claims, shaped by the grant's level on
+	/// `memory.profile`.
+	pub const MEMORY_PROFILE: &str = "/v1/memory/profile";
+	/// `POST` [`ProposeRequest`](super::ProposeRequest): propose claims about
+	/// the owner. Needs `memory.profile:write`.
+	pub const MEMORY_PROPOSALS: &str = "/v1/memory/proposals";
+	/// `POST` [`ContextRequest`](super::ContextRequest): a budgeted packet of
+	/// what the grant may know, assembled for one task.
+	pub const CONTEXT: &str = "/v1/context";
+	/// `POST` [`OwnerClaimRequest`](super::OwnerClaimRequest): the owner
+	/// states a claim.
+	pub const OWNER_CLAIMS: &str = "/v1/owner/memory/claims";
+	/// `POST` [`ClaimListRequest`](super::ClaimListRequest): list claims.
+	pub const OWNER_CLAIMS_LIST: &str = "/v1/owner/memory/claims/list";
+	/// `POST` [`ClaimActionRequest`](super::ClaimActionRequest): a held
+	/// proposal becomes active.
+	pub const OWNER_CLAIM_APPROVE: &str = "/v1/owner/memory/claims/approve";
+	/// `POST` [`ClaimActionRequest`](super::ClaimActionRequest): refuse a
+	/// held proposal.
+	pub const OWNER_CLAIM_REJECT: &str = "/v1/owner/memory/claims/reject";
+	/// `POST` [`ClaimActionRequest`](super::ClaimActionRequest): withdraw a
+	/// claim.
+	pub const OWNER_CLAIM_RETRACT: &str = "/v1/owner/memory/claims/retract";
+	/// `POST` [`ClaimCorrectRequest`](super::ClaimCorrectRequest): replace a
+	/// claim with a new owner claim.
+	pub const OWNER_CLAIM_CORRECT: &str = "/v1/owner/memory/claims/correct";
 	/// `POST` [`UnlockRequest`](super::UnlockRequest): start an owner session.
 	pub const OWNER_UNLOCK: &str = "/v1/owner/unlock";
 	/// `POST`: end the owner session.
@@ -576,6 +607,10 @@ pub struct ApproveRequest {
 	/// Serve text without redacting secrets.
 	#[serde(default)]
 	pub unredacted: bool,
+	/// Sensitivity classes the grant never sees. Absent keeps what the
+	/// grant already had, or nothing for a new grant.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub deny_classes: Option<Vec<Class>>,
 }
 
 /// Refuse a pairing.
@@ -741,6 +776,203 @@ pub struct RenameClip {
 	pub id: RecordId,
 	/// Its new title.
 	pub title: String,
+}
+
+/// A claim as served to a client. Text is sanitised and redacted like every
+/// other served text; evidence and confidence appear only when the grant may
+/// read the profile, and evidence ids the grant could not read are never
+/// included.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimView {
+	/// The claim's id.
+	pub id: ClaimId,
+	/// Who it is about.
+	pub subject: String,
+	/// What sort of claim.
+	pub kind: ClaimKind,
+	/// The statement, in natural language.
+	pub statement: String,
+	/// Its dotted topic key, if any.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub topic: Option<String>,
+	/// Where the claim came from.
+	pub authority: Authority,
+	/// How sure Quant is, from 0 to 1.
+	pub confidence: f32,
+	/// Sensitivity classes.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub classes: Vec<Class>,
+	/// Where the claim stands. Served claims are always active.
+	pub status: ClaimStatus,
+	/// From when it holds, if bounded.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub valid_from: Option<Timestamp>,
+	/// Until when it holds, if bounded.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub valid_to: Option<Timestamp>,
+	/// The records it is grounded in, at read level and above.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub evidence: Vec<RecordId>,
+	/// When it was created.
+	pub created_at: Timestamp,
+	/// When it last changed.
+	pub updated_at: Timestamp,
+}
+
+/// Answer to [`routes::MEMORY_PROFILE`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProfileClaims {
+	/// The level of detail the grant allows on `memory.profile`.
+	pub level: Level,
+	/// The claims. At summary level only what the owner stated themselves;
+	/// at read level everything active, with evidence.
+	pub claims: Vec<ClaimView>,
+}
+
+/// One claim an agent proposes about the owner.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimProposal {
+	/// The statement, in natural language, 1 to 500 characters.
+	pub statement: String,
+	/// What sort of claim; defaults to `fact`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<ClaimKind>,
+	/// A short dotted key such as `coffee.timing`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub topic: Option<String>,
+	/// Who it is about; defaults to `me`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub subject: Option<String>,
+	/// Sensitivity classes.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub classes: Vec<Class>,
+	/// How sure the agent is, from 0 to 1; defaults to 0.5.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub confidence: Option<f32>,
+	/// Records the claim is grounded in. Every id must name a record the
+	/// grant may read; otherwise the whole request fails as not found.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub evidence: Vec<RecordId>,
+}
+
+/// Ask to propose claims. A proposal is stored as held, invisible to every
+/// client but the owner, until the owner approves it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProposeRequest {
+	/// The claims to propose.
+	pub claims: Vec<ClaimProposal>,
+}
+
+/// Answer to [`routes::MEMORY_PROPOSALS`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proposed {
+	/// The stored claims' ids.
+	pub claims: Vec<ClaimId>,
+}
+
+/// Ask for a context packet sized to one task.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContextRequest {
+	/// What the agent is doing, used to pick matching claims and records.
+	pub task: String,
+	/// Rough token budget for the packet; clamped to 200..=8000, default
+	/// 1500. Tokens are estimated as characters / 4.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub budget_tokens: Option<u32>,
+}
+
+/// One section of a context packet, and whether it was included in full.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContextSection<T> {
+	/// Some items were included.
+	pub included: bool,
+	/// The grant cannot see this section at all.
+	pub withheld: bool,
+	/// The budget ran out before the section was complete.
+	pub cut: bool,
+	/// How many items were included.
+	pub count: usize,
+	/// The items.
+	pub items: Vec<T>,
+}
+
+/// Answer to [`routes::CONTEXT`]: profile claims, then recent memory texts,
+/// then matching records, each only where the grant allows and while the
+/// budget lasts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Context {
+	/// The budget after clamping.
+	pub budget_tokens: u32,
+	/// Rough tokens used, as characters / 4.
+	pub used_tokens: u32,
+	/// Profile claims: those matching the task first, then by authority and
+	/// confidence.
+	pub profile: ContextSection<ClaimView>,
+	/// The latest `memory.daily` and the last 24 hours of `memory.episode`
+	/// texts.
+	pub memory: ContextSection<ServedRecord>,
+	/// Records matching the task's terms, through the search path.
+	pub records: ContextSection<ServedRecord>,
+}
+
+/// A claim the owner states directly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OwnerClaimRequest {
+	/// The statement, in the owner's words.
+	pub statement: String,
+	/// What sort of claim; defaults to `preference`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<ClaimKind>,
+	/// A short dotted key such as `coffee.timing`. When given, active claims
+	/// with the same subject and topic and a lower authority are superseded
+	/// by this one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub topic: Option<String>,
+	/// Who it is about; defaults to `me`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub subject: Option<String>,
+	/// Sensitivity classes.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub classes: Vec<Class>,
+}
+
+/// Filter the owner's claim list.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClaimListRequest {
+	/// Only this status.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub status: Option<ClaimStatus>,
+	/// Only this authority.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub authority: Option<Authority>,
+	/// Only this kind.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<ClaimKind>,
+	/// Only this subject.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub subject: Option<String>,
+	/// Only this topic.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub topic: Option<String>,
+	/// Most claims.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<usize>,
+}
+
+/// Act on one claim by id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimActionRequest {
+	/// The claim.
+	pub id: ClaimId,
+}
+
+/// Replace a claim with the owner's correction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCorrectRequest {
+	/// The claim being corrected.
+	pub id: ClaimId,
+	/// The corrected statement, in the owner's words.
+	pub statement: String,
 }
 
 #[cfg(test)]
