@@ -1,4 +1,0 @@
-module LeptosKitBridge {
-header "LeptosKitBridge-Swift.h"
-export *
-}

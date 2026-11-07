@@ -9,6 +9,9 @@ version = "0.1.0"
 default_platform = "macos"
 # The Android collector joins this app later; macOS is the menu-bar remote.
 platforms = ["macos"]
+# The Riemann mark; leptoskit makes the .icns (and later the Android
+# launcher icons) from it.
+icon = "../../assets/brand/icon.svg"
 
 [build]
 backend = false

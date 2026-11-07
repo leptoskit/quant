@@ -1,4 +1,0 @@
-module AsyncTest {
-    header "async_test.h"
-    export *
-}
