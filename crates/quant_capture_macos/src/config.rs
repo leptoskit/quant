@@ -16,6 +16,8 @@ pub struct CaptureConfig {
 	pub input: InputConfig,
 	/// Microphone speech segments.
 	pub audio: AudioConfig,
+	/// Rolling audio buffer ("Rewind").
+	pub rewind: RewindConfig,
 }
 
 /// How hard Vision tries when reading text off the screen.
@@ -209,17 +211,72 @@ impl Default for AudioConfig {
 	}
 }
 
+/// Settings for the `rewind` source: a rolling, always-on buffer of the last
+/// `hours` of audio that can be saved as a clip after the fact.
+///
+/// Unlike the `audio` source this never transcribes while recording; the
+/// whole point is to spend well under one percent of a core buffering, and
+/// transcribe only the moments worth keeping. It keeps recording while the
+/// screen is locked or the user is idle, and stops only when the owner pauses
+/// capture.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RewindConfig {
+	/// Whether to keep a rolling audio buffer. On by default; the microphone
+	/// and system-audio flags below trim what it listens to.
+	pub enabled: bool,
+	/// How long buffered audio is kept before the media sweep deletes it.
+	pub hours: u32,
+	/// Buffer the default microphone (needs the Microphone permission).
+	pub mic: bool,
+	/// Buffer what the machine is playing, through `SCStream` (needs the
+	/// Screen Recording permission).
+	pub system_audio: bool,
+	/// AAC bits per second. 24 kbps mono is telephone-clear speech for about
+	/// 260 MB a day.
+	pub bitrate: u32,
+	/// Sample rate of the encoded audio, in Hz.
+	pub sample_rate: u32,
+	/// Seconds of audio per `audio.buffer` chunk.
+	pub chunk_secs: u64,
+}
+
+impl Default for RewindConfig {
+	fn default() -> Self {
+		Self {
+			enabled: true,
+			hours: 24,
+			mic: true,
+			system_audio: true,
+			bitrate: 24_000,
+			sample_rate: 16_000,
+			chunk_secs: 60,
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
-	fn defaults_enable_everything_but_audio() {
+	fn defaults_enable_everything_but_audio_segments() {
 		let config = CaptureConfig::default();
 		assert!(config.screen.enabled && config.apps.enabled && config.input.enabled);
 		assert!(!config.audio.enabled);
 		assert_eq!(config.screen.interval_secs, 10);
 		assert_eq!(config.audio.max_segment_secs, 30);
+	}
+
+	#[test]
+	fn rewind_defaults_buffer_a_day_of_speech() {
+		let rewind = RewindConfig::default();
+		assert!(rewind.enabled && rewind.mic && rewind.system_audio);
+		assert_eq!(rewind.hours, 24);
+		assert_eq!(rewind.chunk_secs, 60);
+		assert_eq!(rewind.sample_rate, 16_000);
+		// A day of mono AAC at the default bitrate is roughly 260 MB.
+		assert_eq!(u64::from(rewind.bitrate) * 3600 * 24 / 8 / 1_000_000, 259);
 	}
 
 	#[test]

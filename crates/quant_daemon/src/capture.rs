@@ -14,6 +14,7 @@ use quant_api::Paused;
 use quant_capture_macos::CaptureConfig;
 use quant_capture_macos::CaptureHandle;
 use quant_core::DeviceId;
+use quant_core::StreamId;
 use quant_store::StoreError;
 
 use crate::State;
@@ -63,6 +64,10 @@ pub fn config(state: &State) -> Result<CaptureConfig, StoreError> {
 pub fn set_config(state: &Arc<State>, config: &CaptureConfig) -> Result<(), StoreError> {
 	let json = serde_json::to_string(config).expect("capture settings serialize");
 	state.vault.store.set_meta(CONFIG, &json)?;
+	state.set_media_retention(
+		&StreamId::new("audio.buffer").expect("built-in stream"),
+		Some(config.rewind.hours),
+	);
 	let mut inner = state.capture_control.lock();
 	if inner.handle.is_some() {
 		restart(state, &mut inner)?;

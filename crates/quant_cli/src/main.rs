@@ -4,6 +4,7 @@ mod capture;
 mod daemon;
 mod hardware;
 mod print;
+mod rewind;
 mod service;
 
 use std::path::PathBuf;
@@ -194,6 +195,11 @@ enum Command {
 	Capture {
 		#[command(subcommand)]
 		action: capture::CaptureAction,
+	},
+	/// Save moments from the rolling audio buffer, and see what it holds.
+	Rewind {
+		#[command(subcommand)]
+		action: rewind::RewindAction,
 	},
 	/// Configure derived memory, such as where accelerometers are worn.
 	Derive {
@@ -509,6 +515,7 @@ async fn main() -> Result<()> {
 		Command::Link { host, port } => link(&cx, host, port).await,
 		Command::Stream { action } => hardware::stream(&cx, action).await,
 		Command::Capture { action } => capture::run(&cx, action).await,
+		Command::Rewind { action } => rewind::run(&cx, action).await,
 		Command::Derive { action } => hardware::derive(&cx, action).await,
 		Command::Ingest {
 			stream,

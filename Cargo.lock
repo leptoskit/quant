@@ -1459,6 +1459,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "libc",
  "objc2",
  "objc2-core-audio",
@@ -1496,7 +1497,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "objc2",
+ "objc2-audio-toolbox",
+ "objc2-core-audio-types",
  "objc2-foundation",
 ]
 
@@ -1591,6 +1595,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05ec576860167a15dd9fce7fbee7512beb4e31f532159d3482d1f9c6caedf31d"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "dispatch2",
  "objc2",
  "objc2-core-audio",
@@ -1727,6 +1732,19 @@ dependencies = [
  "objc2-core-media",
  "objc2-foundation",
  "objc2-uniform-type-identifiers",
+]
+
+[[package]]
+name = "objc2-speech"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9eb609f9d2a25e0f8b76954f3acaa58348ce2a91285fe867643b2224ac4d263"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-avf-audio",
+ "objc2-core-media",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -1970,18 +1988,24 @@ dependencies = [
  "block2",
  "cpal",
  "jiff",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
+ "objc2-avf-audio",
+ "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-core-media",
  "objc2-foundation",
  "objc2-image-io",
  "objc2-screen-capture-kit",
+ "objc2-speech",
  "objc2-vision",
  "quant_core",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "whisper-rs",
@@ -2006,6 +2030,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

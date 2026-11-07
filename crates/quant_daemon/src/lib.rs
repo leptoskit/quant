@@ -5,6 +5,7 @@
 //! sign every request with their own key and are held to the grant the owner
 //! approved; owner actions need the passphrase.
 
+pub mod audio_save;
 mod authn;
 pub mod capture;
 mod error;
@@ -43,6 +44,8 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::INGEST_SERIES, post(ingest::series))
 		.route(routes::INGEST_MEDIA, post(ingest::media))
 		.route(routes::AUDIT, post(owner::client_audit))
+		.route(routes::AUDIO_SAVE, post(audio_save::save))
+		.route(routes::OWNER_AUDIO_SAVE, post(audio_save::owner_save))
 		.route(routes::OWNER_UNLOCK, post(owner::unlock))
 		.route(routes::OWNER_LOCK, post(owner::lock))
 		.route(routes::OWNER_CLIENTS, get(owner::clients))

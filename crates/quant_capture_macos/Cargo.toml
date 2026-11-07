@@ -1,6 +1,6 @@
 [package]
 name = "quant_capture_macos"
-description = "First-party macOS capture: screen frames with OCR, app focus, input activity, and microphone speech."
+description = "First-party macOS capture: screen frames with OCR, app focus, input activity, microphone speech, and a rolling audio buffer."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,20 +21,44 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tempfile = { workspace = true }
 block2 = { workspace = true }
 cpal = { workspace = true }
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-av-foundation = { workspace = true }
+objc2-avf-audio = { workspace = true, features = [
+	"AVAudioBuffer",
+	"AVAudioFile",
+	"AVAudioFormat",
+	"AVAudioSettings",
+	"AVAudioTypes",
+] }
+objc2-core-audio-types = { workspace = true }
 objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
+objc2-core-media = { workspace = true, features = [
+	"CMBase",
+	"CMBlockBuffer",
+	"CMFormatDescription",
+	"CMSampleBuffer",
+] }
 objc2-foundation = { workspace = true }
 objc2-image-io = { workspace = true }
 objc2-screen-capture-kit = { workspace = true }
+objc2-speech = { workspace = true, features = [
+	"SFSpeechRecognitionRequest",
+	"SFSpeechRecognitionResult",
+	"SFSpeechRecognitionTask",
+	"SFSpeechRecognizer",
+	"SFTranscription",
+	"block2",
+] }
 objc2-vision = { workspace = true }
 whisper-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+libc = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

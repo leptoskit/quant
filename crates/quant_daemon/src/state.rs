@@ -113,7 +113,7 @@ impl State {
 		for spec in vault.store.custom_streams()? {
 			specs.insert(spec.id.clone(), spec);
 		}
-		Ok(Self {
+		let state = Self {
 			vault,
 			specs: RwLock::new(specs),
 			limiter: Mutex::new(Limiter::new()),
@@ -123,7 +123,16 @@ impl State {
 			capture_control: crate::capture::Control::default(),
 			started_at: Timestamp::now(),
 			tls_fingerprint: RwLock::new(None),
-		})
+		};
+		// The rolling buffer's retention follows the capture settings, not
+		// the built-in default.
+		if let Ok(config) = crate::capture::config(&state) {
+			state.set_media_retention(
+				&StreamId::new("audio.buffer").expect("built-in stream"),
+				Some(config.rewind.hours),
+			);
+		}
+		Ok(state)
 	}
 
 	/// The limiter.
@@ -174,6 +183,19 @@ impl State {
 			.unwrap_or_else(std::sync::PoisonError::into_inner)
 			.insert(spec.id.clone(), spec);
 		Ok(())
+	}
+
+	/// Point a built-in stream's media retention at a new setting. The
+	/// daemon uses this so `audio.buffer` media is kept exactly as long as
+	/// the rolling buffer is configured to hold it.
+	pub fn set_media_retention(&self, stream: &StreamId, hours: Option<u32>) {
+		let mut specs = self
+			.specs
+			.write()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		if let Some(spec) = specs.get_mut(stream) {
+			spec.media_retention_hours = hours;
+		}
 	}
 
 	fn count(&self, stream: &StreamId, n: u64) {

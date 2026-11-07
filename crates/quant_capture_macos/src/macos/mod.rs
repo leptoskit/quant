@@ -4,8 +4,10 @@ mod apps;
 mod audio;
 mod image;
 mod input;
+mod mic;
+mod rewind;
 mod screen;
-mod system;
+pub(crate) mod system;
 #[cfg(feature = "whisper")]
 mod whisper;
 
@@ -107,6 +109,7 @@ pub(crate) fn spawn(
 		apps,
 		input,
 		audio,
+		rewind,
 	} = config;
 	let apps_exclusions = exclusions.clone();
 	start(
@@ -128,6 +131,11 @@ pub(crate) fn spawn(
 		"audio",
 		audio.enabled,
 		Box::new(move |cx| audio::run(cx, &audio)),
+	);
+	start(
+		"rewind",
+		rewind.enabled,
+		Box::new(move |cx| rewind::run(cx, &rewind)),
 	);
 	threads
 }
