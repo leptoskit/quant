@@ -1,5 +1,6 @@
 use jiff::SignedDuration;
 use jiff::Timestamp;
+use quant_core::Class;
 use quant_core::ClientId;
 use quant_core::GrantId;
 use quant_core::StreamId;
@@ -55,6 +56,10 @@ pub struct Grant {
 	/// Whether text it receives keeps secrets and personal data unredacted.
 	#[serde(default)]
 	pub unredacted: bool,
+	/// Sensitivity classes this grant never sees: any stream or claim
+	/// carrying one is treated exactly as if it were out of scope.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub deny_classes: Vec<Class>,
 	/// When it was created.
 	pub created_at: Timestamp,
 	/// When it stops working.
@@ -108,6 +113,7 @@ impl Grant {
 			lookback: None,
 			limits: Limits::default(),
 			unredacted: false,
+			deny_classes: Vec::new(),
 			created_at: Timestamp::now(),
 			expires_at: None,
 			revoked_at: None,
@@ -170,6 +176,13 @@ impl Grant {
 		} else {
 			Err(Denied::OutOfScope)
 		}
+	}
+
+	/// Whether this grant denies any of `classes`.
+	pub fn denies(&self, classes: &[Class]) -> bool {
+		classes
+			.iter()
+			.any(|class| self.deny_classes.contains(class))
 	}
 }
 
@@ -237,5 +250,25 @@ mod tests {
 			expired.authorize_read(&hr(), Level::Read, range, now),
 			Err(Denied::Expired)
 		);
+	}
+
+	#[test]
+	fn deny_classes_default_empty_and_round_trip() {
+		let g = grant(&["*:read"]);
+		assert!(g.deny_classes.is_empty());
+		assert!(!g.denies(&[Class::Health]));
+
+		let mut g = grant(&["*:read"]);
+		g.deny_classes = vec![Class::Health, Class::Others];
+		assert!(g.denies(&[Class::Others]));
+		assert!(g.denies(&[Class::Health, Class::Location]));
+		assert!(!g.denies(&[Class::Location, Class::Financial]));
+
+		// A grant written before deny_classes existed still loads.
+		let json = serde_json::to_string(&g).unwrap();
+		let mut without: serde_json::Value = serde_json::from_str(&json).unwrap();
+		without.as_object_mut().unwrap().remove("deny_classes");
+		let back: Grant = serde_json::from_value(without).unwrap();
+		assert!(back.deny_classes.is_empty());
 	}
 }

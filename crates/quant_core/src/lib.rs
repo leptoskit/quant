@@ -6,6 +6,7 @@
 //! sensor: heart rate, acceleration, orientation). Both name a [`StreamId`],
 //! and every stream belongs to a [`Family`] that access grants are scoped to.
 
+mod claim;
 mod id;
 pub mod paths;
 mod record;
@@ -14,6 +15,7 @@ mod sink;
 mod stream;
 mod time;
 
+pub use claim::*;
 pub use id::*;
 pub use record::*;
 pub use series::*;
@@ -30,6 +32,12 @@ pub enum CoreError {
 	/// A stream family is not one Quant knows.
 	#[error("unknown stream family `{0}`")]
 	UnknownFamily(String),
+	/// A sensitivity class name is not one Quant knows.
+	#[error("unknown sensitivity class `{0}`")]
+	UnknownClass(String),
+	/// A claim's values are not acceptable.
+	#[error("invalid claim: {0}")]
+	BadClaim(String),
 	/// A series batch's values do not divide evenly into its channels.
 	#[error("series batch has {values} values for {channels} channels")]
 	RaggedSeries {
