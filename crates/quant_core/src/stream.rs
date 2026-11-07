@@ -310,6 +310,11 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"A span spent lying, sitting, standing, walking, running, or in a vehicle.",
 		)
 		.summarise_by(&["posture"]),
+		StreamSpec::event(
+			"motion.gait",
+			"A derived walking bout: cadence, steps, stride regularity, and intensity.",
+		)
+		.summarise_by(&["placement"]),
 		StreamSpec::series(
 			"location.fix",
 			&[

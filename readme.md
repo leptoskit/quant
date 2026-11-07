@@ -131,7 +131,7 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `apps`     | `apps.focus`: which app and window had focus, and for how long                              |
 | `input`    | `input.activity`: key, click, and scroll counts per minute (never content)                  |
 | `health`   | `health.heart_rate`, `health.hrv`, `health.spo2`, `health.steps`, `health.sleep`, `health.workout` |
-| `motion`   | `motion.accelerometer`, `motion.gyroscope`, `motion.orientation`, `motion.posture`          |
+| `motion`   | `motion.accelerometer`, `motion.gyroscope`, `motion.orientation`, `motion.posture`, `motion.gait` |
 | `location` | `location.fix`, `location.visit`                                                            |
 | `device`   | `device.battery`, `device.state`                                                            |
 | `comms`    | `comms.notification`                                                                        |

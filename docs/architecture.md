@@ -49,6 +49,7 @@ Capture sources write to a `Sink`. In the daemon the sink writes straight into t
 The daemon recomputes derived records every ten minutes (`quant_derive`). Derived records come from the nil device, carry a `derived_from` attribute, and have ids computed from what they summarise, so recomputing replaces rather than duplicates them.
 
 - **Posture.** Each configured accelerometer is read in 5-second windows. The mean vector is gravity, so its angle to the sensor's "up" axis is the tilt; the RMS spread around it is movement. Movement above 0.8 m/s² is walking and above 3.5 m/s² running. Otherwise a torso sensor (chest strap, vest) reads upright under 35°, reclined under 60°, and lying beyond; a thigh sensor reads standing or sitting-or-lying; a loose sensor (a phone) only reads still. A torso and a thigh sensor together tell sitting from standing. Windows merge into `motion.posture` spans, and a blip shorter than 20 seconds between two spans of the same posture is absorbed.
+- **Gait.** Walking bouts of 30 seconds or more become `motion.gait` records, one per bout. Peak detection on the acceleration magnitude with gravity filtered out sets the cadence — a thigh sensor peaks once per stride, so each of its peaks is two steps, while a torso or loose sensor peaks once per step — and autocorrelation at the dominant step lag says how regular the stride was. When cadence falls more than 10% below the day's earlier bouts, the bout where it dropped says so in its text and is marked `slowed`.
 - **Daily summaries.** One `memory.daily` record per local day: screen time by app, steps, heart rate range with a resting estimate (the mean of the lowest tenth of minute averages), sleep by stage for the night ending that day (18:00 to 18:00), posture totals, and minutes of speech, with a one-paragraph text that search and agents can read.
 - **Hourly episodes.** One `memory.episode` record per hour where anything happened: the top apps by focus time, the place, posture minutes, heart rate range and average, steps, and minutes of speech, plus a one-paragraph text an agent can read. Empty hours produce nothing.
 
@@ -57,5 +58,5 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 1. macOS capture in the daemon, with a menu bar app (leptoskit) for status, pausing, and approving agents.
 2. Android collector app on leptoskit; upstream foreground service, Health Connect, and audio plugins.
 3. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
-4. More derived memory: hourly episodes joining screen, place, posture, and heart rate; gait from leg sensors; purging derived records with their sources.
+4. More derived memory: hourly episodes joining screen, place, posture, and heart rate; purging derived records with their sources.
 5. iOS collector (HealthKit, background modes).
