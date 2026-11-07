@@ -76,6 +76,8 @@ quant capture pause --minutes 30   # or `quant capture resume`
 
 Password managers and private or incognito browser windows are never captured. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
 
+The menu-bar app in [`apps/quant`](apps/quant/readme.md) shows the same status, pauses and resumes, saves the last minutes of audio, and approves agents, without a terminal.
+
 ## Rewind: the last day of audio
 
 The daemon keeps a rolling buffer of everything your microphone hears and everything your Mac plays — a private, encrypted substitute for apps like Backtrack, so "save the last 10 minutes" is always possible after the fact. The buffer holds 24 hours by default (about 260 MB per track per day at 24 kbps AAC) and is deleted by the same sweep as everything else.

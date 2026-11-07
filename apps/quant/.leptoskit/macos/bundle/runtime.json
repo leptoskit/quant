@@ -1,0 +1,7 @@
+{
+  "abi": 1,
+  "plugins": [
+    "quant"
+  ],
+  "shell": "mobile-v1/macos"
+}

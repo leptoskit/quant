@@ -7,6 +7,7 @@
 //! and every stream belongs to a [`Family`] that access grants are scoped to.
 
 mod id;
+pub mod paths;
 mod record;
 mod series;
 mod sink;

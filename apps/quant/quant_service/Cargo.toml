@@ -1,0 +1,45 @@
+[package]
+name = "quant_service"
+description = "The Quant desktop app's native side: the signed daemon client, the owner session, and the menu-bar item."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The app's one native service. The host activates it before the window's
+# guest starts; it registers the `quant-desktop` capability the guest calls.
+[package.metadata.leptoskit.runtime]
+name = "quant"
+rust-service-factory = "from_app_dirs"
+
+[dependencies]
+jiff = { workspace = true }
+leptoskit_bridge = { workspace = true }
+leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
+leptoskit_native = { workspace = true }
+leptoskit_wasm = { workspace = true }
+quant_access = { workspace = true }
+quant_api = { workspace = true }
+quant_client = { workspace = true }
+quant_core = { workspace = true }
+quant_model = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
+zeroize = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { workspace = true }
+leptoskit_plugin_menu = { workspace = true }
+leptoskit_plugin_tray = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSBundle", "NSError", "NSString"] }
+objc2-service-management = { workspace = true, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[build-dependencies]
+png = { workspace = true }
+
+[lints]
+workspace = true

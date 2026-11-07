@@ -17,6 +17,7 @@ use quant_access::audit::AuditEvent;
 use quant_access::audit::Outcome;
 use quant_access::redact;
 use quant_api::Bucket;
+use quant_api::CaptureState;
 use quant_api::ChannelSummary;
 use quant_api::DurationItem;
 use quant_api::Durations;
@@ -30,6 +31,7 @@ use quant_api::RecordsRequest;
 use quant_api::Series;
 use quant_api::SeriesRequest;
 use quant_api::ServedRecord;
+use quant_api::SourceState;
 use quant_api::StreamAccess;
 use quant_core::Record;
 use quant_core::StreamId;
@@ -232,6 +234,23 @@ pub async fn me(AxumState(state): Shared, request: SignedAny) -> ApiResult<Json<
 		name: client.name,
 		status: status(client.status),
 		grant,
+	}))
+}
+
+/// `GET /v1/capture/status`: whether each source runs, for any approved
+/// client. Counts, capture times, and free-text details stay owner-only.
+pub async fn capture_status(
+	AxumState(state): Shared,
+	_request: Signed<()>,
+) -> ApiResult<Json<CaptureState>> {
+	Ok(Json(CaptureState {
+		version: env!("CARGO_PKG_VERSION").into(),
+		sources: state
+			.capture_status()
+			.iter()
+			.map(SourceState::from)
+			.collect(),
+		paused: state.capture_control.paused(),
 	}))
 }
 

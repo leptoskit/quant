@@ -17,6 +17,7 @@ use jiff::Timestamp;
 use quant_access::audit::Actor;
 use quant_access::audit::AuditEvent;
 use quant_access::audit::Outcome;
+use quant_api::RenameClip;
 use quant_api::SaveAudio;
 use quant_api::SavedClip;
 use quant_core::Record;
@@ -144,6 +145,65 @@ pub async fn owner_save(
 		.detail(json!({ "from": saved.from, "to": saved.to, "clip": saved.id })),
 	)?;
 	Ok(Json(saved))
+}
+
+/// `POST /v1/audio/rename`: give a saved clip a new title, as a client with
+/// `audio:write`. Only `audio.clip` records can be renamed.
+pub async fn rename(AxumState(state): Shared, request: Signed<RenameClip>) -> ApiResult<Json<()>> {
+	let caller = request.caller;
+	let body = request.body;
+	let target = clip();
+	if let Err(denied) = caller.grant.authorize_write(&target, Timestamp::now()) {
+		let _ = state.vault.store.audit(AuditEvent::new(
+			caller.actor(),
+			"audio.rename",
+			target.as_str(),
+			Outcome::Denied { reason: denied },
+		));
+		return Err(Error::Forbidden(denied));
+	}
+	let title = body.title.trim();
+	if title.is_empty() || title.chars().count() > 200 {
+		return Err(Error::Invalid("a title is 1 to 200 characters".into()));
+	}
+	let mut record = state
+		.vault
+		.store
+		.record(body.id)?
+		.filter(|record| record.stream == target)
+		.ok_or(Error::NotFound)?;
+	let old = record
+		.data
+		.get("title")
+		.and_then(|v| v.as_str())
+		.map(str::to_owned);
+	// The text is the title, then the transcript once there is one.
+	let transcript = match (&record.text, &old) {
+		(Some(text), Some(old)) => text.strip_prefix(old.as_str()).map(str::trim_start),
+		(Some(text), None) => Some(text.as_str()),
+		_ => None,
+	}
+	.filter(|rest| !rest.is_empty())
+	.map(str::to_owned);
+	record.data.insert("title".into(), json!(title));
+	record.text = Some(match transcript {
+		Some(rest) => format!("{title}\n\n{rest}"),
+		None => title.to_owned(),
+	});
+	state.vault.store.replace_records(&[record])?;
+	state.vault.store.audit(
+		AuditEvent::new(
+			caller.actor(),
+			"audio.rename",
+			target.as_str(),
+			Outcome::Allowed {
+				records: 1,
+				bytes: 0,
+			},
+		)
+		.detail(json!({ "clip": body.id })),
+	)?;
+	Ok(Json(()))
 }
 
 fn save_blocking(state: &Arc<State>, body: &SaveAudio) -> ApiResult<SavedClip> {

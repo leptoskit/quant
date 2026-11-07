@@ -1,0 +1,18 @@
+[package]
+name = "quant_macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "leptoskit_app"
+crate-type = ["staticlib"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
+quant_service = { workspace = true }
+
+# The generated registrant exports C entry points, which the workspace's
+# `unsafe_code = "deny"` would refuse.
+[lints]

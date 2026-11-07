@@ -378,10 +378,14 @@ pub async fn audit(
 	let since = body
 		.since
 		.unwrap_or_else(|| Timestamp::now() - SignedDuration::from_hours(24));
-	let entries = state
-		.vault
-		.store
-		.audit_log(since, body.limit.unwrap_or(200).clamp(1, 2000))?;
+	let limit = body.limit.unwrap_or(200).clamp(1, 2000);
+	let entries = if body.newest {
+		let mut tail = state.vault.store.audit_tail(limit)?;
+		tail.reverse();
+		tail
+	} else {
+		state.vault.store.audit_log(since, limit)?
+	};
 	let chain = state.vault.store.verify_audit()?;
 	Ok(Json(Audit {
 		entries,

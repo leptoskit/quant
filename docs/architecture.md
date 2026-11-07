@@ -34,12 +34,16 @@ Nothing reads the vault directly except the daemon, `quantd`, which listens on a
 
 **Text.** All text served to clients is sanitised: invisible and control characters are removed, and anything shaped like a markup tag is defanged, so a web page read off the screen cannot open or close a block in an agent's prompt. Unless the grant is unredacted, secrets are replaced with `[redacted:<kind>]`: private keys, JWTs, cloud and API keys, bearer tokens, URL credentials, seed phrases, `password=` style assignments, and Luhn-valid card numbers. String attributes such as window titles and URLs are cleaned the same way.
 
+**Status.** Any approved client may ask `GET /v1/capture/status` which capture sources run, whether capture is paused and until when, and which macOS permission a stopped source needs. It answers nothing that was captured: no counts, no capture times, and no free-text details, which stay behind the owner's `/v1/owner/status`. This is what lets the menu bar show its status line without the passphrase.
+
 **Audit.** Every client request, refusal, owner action, and pairing request is appended to a hash-chained log. Each entry records who acted, the request's shape (streams, range, search terms, limits) and how many records and bytes were served, never the data itself. Removing or editing an entry breaks every hash after it; `quant audit` checks the chain.
 
 ## Capture
 
 Capture sources write to a `Sink`. In the daemon the sink writes straight into the vault; on a phone it queues for signed upload with a device grant (`health:write`, `motion:write`, …), which never implies read access.
+
 - **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription; and **Rewind**, a rolling buffer of the last day of microphone and system audio as 60-second AAC `audio.buffer` chunks (`audio.clip` is a saved moment joined from them). Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything but Rewind pauses while the machine is idle or locked — Rewind keeps recording until the owner pauses capture, because its whole purpose is to hold what already happened. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
+- **Desktop app** (`apps/quant`, built with leptoskit): a menu-bar remote control for the daemon, which still does all the capturing. It pairs as its own `device` client asking for `audio:write audio:read audio:raw`, shows the status line, saves the last minutes of the rolling audio buffer, pauses and resumes capture, and opens a window to approve agents, revoke grants, and read the audit log. Owner actions take the passphrase once per 15-minute session; the app keeps only the session token, in memory.
 - **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 
@@ -62,8 +66,7 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 
 ## Roadmap
 
-1. macOS capture in the daemon, with a menu bar app (leptoskit) for status, pausing, and approving agents.
-2. Android collector app on leptoskit; upstream foreground service, Health Connect, and audio plugins.
-3. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
-4. More derived memory: purging derived records with their sources.
-5. iOS collector (HealthKit, background modes).
+1. Android collector app on leptoskit, as a second target of the desktop app; upstream foreground service, Health Connect, and audio plugins.
+2. Phone-to-desktop sync away from home, through a relay that only sees TLS traffic.
+3. More derived memory: purging derived records with their sources.
+4. iOS collector (HealthKit, background modes).

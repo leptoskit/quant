@@ -1,0 +1,219 @@
+{
+  "" : {
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App-primary.dia",
+    "emit-module-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App-primary-emit-module.dia",
+    "pch" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App-primary.swiftdeps"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/App.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/App.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/App~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/DevtoolsOverlay.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/DevtoolsOverlay~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/ExitingViews.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ExitingViews~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/GeneratedPlugins.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/GeneratedPlugins~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/LayerMotion.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LayerMotion~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/LeptosKitMacViewController.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/LeptosKitMacViewController~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/MacScrollView.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacScrollView~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/MacTextLabel.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacTextLabel~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/MacWidgetControls.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetControls~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/MacWidgetRenderer.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/MacWidgetRenderer~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeAppFactory.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppFactory~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeAppRuntime.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeAppRuntime~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeDevelopmentGuests.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeDevelopmentGuests~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeRequestExecutor.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRequestExecutor~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeRive.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRive~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeRustAsync.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustAsync~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/NativeRustWorker.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/NativeRustWorker~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/RenderTransaction.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/RenderTransaction~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/ScrollTracker.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/ScrollTracker~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/WidgetMotion.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetMotion~partial.swiftmodule"
+  },
+  "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/Sources/WidgetProps.swift" : {
+    "const-values" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.swiftconstvalues",
+    "dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.d",
+    "diagnostics" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.dia",
+    "index-unit-output-path" : "/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.o",
+    "llvm-bc" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.bc",
+    "object" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.o",
+    "swift-dependencies" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps.swiftdeps",
+    "swiftmodule" : "/Users/mini02/.t3/worktrees/quant/t3-e8380218/apps/quant/.leptoskit/macos/.build/out/Intermediates.noindex/App.build/Debug/App-p.build/Objects-normal/arm64/WidgetProps~partial.swiftmodule"
+  }
+}

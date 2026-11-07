@@ -61,6 +61,12 @@ pub mod routes {
 	pub const OWNER_AUDIO_SAVE: &str = "/v1/owner/audio/save";
 	/// `POST` [`AuditRequest`](super::AuditRequest).
 	pub const AUDIT: &str = "/v1/audit";
+	/// `GET`: which capture sources run, for any approved client. Answers
+	/// [`CaptureState`](super::CaptureState), which holds nothing captured.
+	pub const CAPTURE_STATUS: &str = "/v1/capture/status";
+	/// `POST` [`RenameClip`](super::RenameClip): retitle a saved clip. Needs
+	/// `audio:write`.
+	pub const AUDIO_RENAME: &str = "/v1/audio/rename";
 	/// `POST` [`UnlockRequest`](super::UnlockRequest): start an owner session.
 	pub const OWNER_UNLOCK: &str = "/v1/owner/unlock";
 	/// `POST`: end the owner session.
@@ -512,6 +518,10 @@ pub struct AuditRequest {
 	/// Most entries (default 200, at most 2000).
 	#[serde(default)]
 	pub limit: Option<usize>,
+	/// The newest `limit` entries, whenever they happened, instead of the
+	/// first `limit` since `since` (owner route only; still oldest first).
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub newest: bool,
 }
 
 /// Answer to an audit request.
@@ -659,4 +669,101 @@ pub struct PauseRequest {
 	/// End the pause by itself after this many minutes.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub minutes: Option<u32>,
+}
+
+/// Answer to [`routes::CAPTURE_STATUS`]: enough for a menu-bar status line,
+/// and nothing that was captured. Counts and capture times stay behind the
+/// owner's [`Status`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaptureState {
+	/// Daemon version.
+	pub version: String,
+	/// Capture sources.
+	pub sources: Vec<SourceState>,
+	/// Whether the owner paused capture.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub paused: Option<Paused>,
+}
+
+/// Whether one capture source runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceState {
+	/// Source name, such as `screen` or `audio`.
+	pub source: String,
+	/// Whether it is running.
+	pub running: bool,
+	/// The permission it is waiting for, if that is why it stopped.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub needs: Option<Permission>,
+}
+
+/// A macOS privacy permission a capture source needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+	/// Screen Recording: screenshots and window titles.
+	ScreenRecording,
+	/// Microphone: speech and the rolling audio buffer.
+	Microphone,
+}
+
+impl Permission {
+	/// The permission a capture source's status detail says it lacks.
+	pub fn from_detail(detail: &str) -> Option<Self> {
+		let detail = detail.to_ascii_lowercase();
+		if !detail.contains("permission") {
+			return None;
+		}
+		if detail.contains("screen recording") {
+			Some(Self::ScreenRecording)
+		} else if detail.contains("microphone") {
+			Some(Self::Microphone)
+		} else {
+			None
+		}
+	}
+}
+
+impl From<&CaptureStatus> for SourceState {
+	fn from(status: &CaptureStatus) -> Self {
+		Self {
+			source: status.source.clone(),
+			running: status.running,
+			needs: status.detail.as_deref().and_then(Permission::from_detail),
+		}
+	}
+}
+
+/// `POST /v1/audio/rename`: give a saved clip a new title.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameClip {
+	/// The clip's record.
+	pub id: RecordId,
+	/// Its new title.
+	pub title: String,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn permission_details_name_the_missing_permission() {
+		assert_eq!(
+			Permission::from_detail("screen recording permission not granted"),
+			Some(Permission::ScreenRecording)
+		);
+		assert_eq!(
+			Permission::from_detail(
+				"window titles unavailable: screen recording permission not granted"
+			),
+			Some(Permission::ScreenRecording)
+		);
+		assert_eq!(
+			Permission::from_detail("microphone permission not granted"),
+			Some(Permission::Microphone)
+		);
+		assert_eq!(Permission::from_detail("microphone error: busy"), None);
+		assert_eq!(Permission::from_detail("paused: idle"), None);
+	}
 }
