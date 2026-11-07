@@ -47,6 +47,11 @@ type Shared = AxumState<Arc<State>>;
 /// handshake, like the TCP listener does.
 const TLS_HANDSHAKE: Duration = Duration::from_secs(10);
 
+/// The most relay connections served at once. The relay already limits
+/// each rendezvous id, but a relay that misbehaves must not be able to make
+/// this machine open sockets without end.
+const MAX_CONNECTIONS: usize = 32;
+
 /// The relay the daemon listens on, from the vault's meta.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelayConfig {
@@ -167,9 +172,23 @@ pub async fn listen(state: Arc<State>, shutdown: impl Future<Output = ()> + Send
 	}
 }
 
-/// Up to half again the backoff, so reconnecting daemons do not line up.
+/// A random wait of up to half the backoff, so daemons reconnecting after a
+/// relay restart do not line up.
 fn jitter(backoff: Duration) -> Duration {
-	Duration::from_millis(backoff.as_millis().rem_euclid(7).try_into().unwrap_or(0))
+	let mut bytes = [0u8; 8];
+	if getrandom::fill(&mut bytes).is_err() {
+		return Duration::ZERO;
+	}
+	let half = u64::try_from(backoff.as_millis() / 2)
+		.unwrap_or(u64::MAX)
+		.max(1);
+	Duration::from_millis(u64::from_le_bytes(bytes) % half)
+}
+
+/// Whether `conn` looks like a connection id the relay makes (a UUID), so
+/// nothing else is put into the accept URL.
+fn valid_conn(conn: &str) -> bool {
+	conn.len() == 36 && conn.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
 async fn one_connection(
@@ -187,6 +206,7 @@ async fn one_connection(
 	.await?;
 	tracing::info!(url = %config.url, rid = %state.relay_key.rid(), "relay listener up");
 	let router = router(Arc::clone(&state));
+	let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
 	let mut ping = tokio::time::interval(Duration::from_secs(30));
 	ping.reset();
 	loop {
@@ -194,13 +214,23 @@ async fn one_connection(
 			_ = ping.tick() => dial::ping(&mut socket).await?,
 			notice = dial::recv_text::<OpenNotice>(&mut socket) => match notice {
 				Ok(Some(notice)) => {
-					let url = config.url.clone();
 					let conn = notice.open;
+					// Over the cap, or not an id the relay would make: let the
+					// client's connect time out on the relay instead.
+					let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
+						tracing::debug!(%conn, "too many relay connections; ignoring one");
+						continue;
+					};
+					if !valid_conn(&conn) {
+						continue;
+					}
+					let url = config.url.clone();
 					let router = router.clone();
 					let acceptor = acceptor.clone();
 					let key = RelayKey::clone(&state.relay_key);
 					tokio::spawn(async move {
 						accept_connection(url, conn, key, acceptor, router).await;
+						drop(slot);
 					});
 				}
 				_ => return Err(std::io::Error::new(
@@ -260,4 +290,24 @@ where
 		.serve_connection_with_upgrades(TokioIo::new(stream), service)
 		.await
 		.map_err(std::io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn jitter_stays_under_half_the_backoff() {
+		for _ in 0..100 {
+			assert!(jitter(Duration::from_secs(8)) < Duration::from_secs(4));
+		}
+		assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
+	}
+
+	#[test]
+	fn only_relay_connection_ids_are_accepted() {
+		assert!(valid_conn("0190f5d2-7c1a-7b3e-9a4f-2d6c8e1b5a70"));
+		assert!(!valid_conn("../listen"));
+		assert!(!valid_conn("0190f5d2-7c1a-7b3e-9a4f-2d6c8e1b5a70?x"));
+	}
 }

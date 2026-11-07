@@ -437,7 +437,14 @@ async fn connect_socket<S: RelayStore>(relay: Arc<Relay<S>>, rid: String, socket
 		*live += 1;
 	}
 	connect_wait(Arc::clone(&relay), &rid, socket).await;
-	*relay.connections.lock().await.entry(rid).or_insert(1) -= 1;
+	// Drop the entry at zero, so ids that clients only tried do not pile up.
+	let mut connections = relay.connections.lock().await;
+	if let Some(live) = connections.get_mut(&rid) {
+		*live = live.saturating_sub(1);
+		if *live == 0 {
+			connections.remove(&rid);
+		}
+	}
 }
 
 async fn connect_wait<S: RelayStore>(relay: Arc<Relay<S>>, rid: &str, socket: WebSocket) {
