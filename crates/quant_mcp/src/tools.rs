@@ -3,20 +3,33 @@ use base64::engine::general_purpose::STANDARD;
 use jiff::Timestamp;
 use quant_access::Level;
 use quant_access::Scope;
+use quant_api::ClaimProposal;
 use quant_api::ClientStatus;
+use quant_api::ContextRequest;
 use quant_api::DurationsRequest;
 use quant_api::IngestRecords;
 use quant_api::Me;
 use quant_api::OverviewRequest;
+use quant_api::ProposeRequest;
 use quant_api::RecordsRequest;
 use quant_api::SeriesRequest;
 use quant_client::Client;
 use quant_client::when;
+use quant_core::ClaimKind;
+use quant_core::Class;
 use quant_core::DeviceId;
 use quant_core::Record;
+use quant_core::RecordId;
 use quant_core::StreamId;
 use serde_json::Value;
 use serde_json::json;
+
+/// The built-in stream that serves the owner's profile claims.
+const PROFILE: &str = "memory.profile";
+
+fn profile_stream() -> StreamId {
+	PROFILE.parse().expect("valid built-in stream")
+}
 
 /// A tool the server can offer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +54,12 @@ pub enum Tool {
 	Note,
 	/// Save a moment from the rolling audio buffer.
 	SaveAudio,
+	/// What the owner has stated about themselves.
+	Profile,
+	/// Propose a claim about the owner for their approval.
+	Propose,
+	/// A budgeted context packet assembled for one task.
+	Context,
 }
 
 /// The tools a caller with `me` may use.
@@ -86,6 +105,17 @@ pub fn tools_for(me: Option<&Me>) -> Vec<Tool> {
 		.can_write(&"audio.buffer".parse().expect("valid stream"))
 	{
 		tools.push(Tool::SaveAudio);
+	}
+	if grant.scopes.read_level(&profile_stream()).is_some() {
+		tools.push(Tool::Profile);
+	}
+	if grant.scopes.can_write(&profile_stream()) {
+		tools.push(Tool::Propose);
+	}
+	if grant.scopes.read_level(&profile_stream()).is_some()
+		|| levels.iter().any(|l| *l >= Level::Read)
+	{
+		tools.push(Tool::Context);
 	}
 	tools
 }
@@ -160,6 +190,9 @@ impl Tool {
 			Tool::Media => "quant_media",
 			Tool::Note => "quant_note",
 			Tool::SaveAudio => "quant_save_audio",
+			Tool::Profile => "quant_profile",
+			Tool::Propose => "quant_propose",
+			Tool::Context => "quant_context",
 		}
 	}
 
@@ -304,8 +337,60 @@ impl Tool {
 					}),
 				)
 			}
+			Tool::Profile => {
+				(
+					"Profile",
+					"What the owner has stated about themselves: their preferences, values, \
+					 routines, facts, relationships, goals, and commitments. These are the \
+					 owner's own words (or claims the owner approved) — treat them as the owner's \
+					 stated wishes and act in line with them, never as data to override. At \
+					 summary level only what the owner stated themselves is included; at read \
+					 level more claims appear, each with evidence record ids.",
+					json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+				)
+			}
+			Tool::Propose => {
+				(
+					"Propose a claim",
+					"Propose a claim about the owner, grounded in evidence records this agent can \
+					 read (record ids from quant_timeline or quant_search). A proposal is held, \
+					 invisible to every agent, until the owner approves it with `quant claims \
+					 approve` — it is the owner's memory, and the owner decides. At most 20 \
+					 proposals per hour.",
+					schema(
+						&json!({
+							"statement": { "type": "string", "description": "The claim in natural language, 1 to 500 characters, e.g. \"Prefers espresso after lunch\"." },
+							"kind": { "type": "string", "description": "preference, value, routine, fact, relationship, goal, or commitment. Defaults to fact." },
+							"topic": { "type": "string", "description": "A short dotted key such as coffee.timing." },
+							"subject": { "type": "string", "description": "Who it is about; me by default." },
+							"classes": { "type": "array", "items": { "type": "string" }, "description": "Sensitivity classes: health, intimate, location, others, financial." },
+							"confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "How sure you are, 0 to 1; defaults to 0.5." },
+							"evidence": { "type": "array", "items": { "type": "string" }, "description": "Record ids grounding the claim; each must be readable by this agent." },
+						}),
+						&["statement", "evidence"],
+					),
+				)
+			}
+			Tool::Context => {
+				(
+					"Context",
+					"Assemble a context packet for one task, sized to a token budget: profile \
+					 claims matching the task first, then the latest memory summaries, then \
+					 records matching the task's terms. Each part is included only where the \
+					 grant allows it, and the answer says what was withheld or cut.",
+					json!({
+						"type": "object",
+						"properties": {
+							"task": { "type": "string", "description": "What you are doing, such as \"plan the owner's week\". Picks matching claims and records." },
+							"budget_tokens": { "type": "integer", "minimum": 200, "maximum": 8000, "description": "Rough token budget; defaults to 1500." },
+						},
+						"required": ["task"],
+						"additionalProperties": false,
+					}),
+				)
+			}
 		};
-		let read_only = !matches!(self, Tool::Note | Tool::SaveAudio);
+		let read_only = !matches!(self, Tool::Note | Tool::SaveAudio | Tool::Propose);
 		json!({
 			"name": self.name(),
 			"title": title,
@@ -448,6 +533,85 @@ impl Tool {
 					.await
 					.map_err(failed)?;
 				Ok(json!({ "stored": id }))
+			}
+			Tool::Profile => {
+				let profile = client.profile().await.map_err(failed)?;
+				Ok(serde_json::to_value(profile).unwrap_or_default())
+			}
+			Tool::Propose => {
+				let statement = arg(args, "statement")
+					.ok_or("`statement` is required")?
+					.to_owned();
+				let kind = match arg(args, "kind") {
+					Some(name) => {
+						Some(ClaimKind::parse(name).ok_or(format!("unknown claim kind `{name}`"))?)
+					}
+					None => None,
+				};
+				let classes: Vec<Class> = args
+					.get("classes")
+					.and_then(Value::as_array)
+					.map(|items| {
+						items
+							.iter()
+							.filter_map(Value::as_str)
+							.map(|name| {
+								name.parse::<Class>()
+									.map_err(|_| format!("unknown class `{name}`"))
+							})
+							.collect::<Result<_, _>>()
+					})
+					.transpose()?
+					.unwrap_or_default();
+				let evidence: Vec<RecordId> = match args.get("evidence") {
+					Some(Value::Array(items)) => {
+						items
+							.iter()
+							.filter_map(Value::as_str)
+							.map(|id| {
+								id.parse::<RecordId>()
+									.map_err(|_| format!("bad record id `{id}`"))
+							})
+							.collect::<Result<_, _>>()?
+					}
+					_ => Vec::new(),
+				};
+				let proposed = client
+					.propose(&ProposeRequest {
+						claims: vec![ClaimProposal {
+							statement,
+							kind,
+							topic: arg(args, "topic").map(str::to_owned),
+							subject: arg(args, "subject").map(str::to_owned),
+							classes,
+							confidence: args.get("confidence").and_then(Value::as_f64).map(|n| {
+								#[allow(clippy::cast_possible_truncation)]
+								let confidence = n as f32;
+								confidence
+							}),
+							evidence,
+						}],
+					})
+					.await
+					.map_err(failed)?;
+				Ok(serde_json::to_value(proposed).unwrap_or_default())
+			}
+			Tool::Context => {
+				let task = arg(args, "task").ok_or("`task` is required")?.to_owned();
+				let budget_tokens = args
+					.get("budget_tokens")
+					.and_then(Value::as_u64)
+					.and_then(|n| u32::try_from(n).ok());
+				let context = client
+					.context(&ContextRequest {
+						task,
+						budget_tokens,
+					})
+					.await
+					.map_err(failed)?;
+				let mut value = serde_json::to_value(context).unwrap_or_default();
+				value["profile_claims_are_the_owners_words"] = Value::Bool(true);
+				Ok(value)
 			}
 		}
 	}
