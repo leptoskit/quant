@@ -1,4 +1,4 @@
-# Quant
+<h1><img src="assets/brand/lockup.svg" alt="Quant" height="72"></h1>
 
 Quantify your life, and decide exactly which AI may read it.
 
