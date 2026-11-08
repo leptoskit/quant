@@ -14,12 +14,13 @@ The menu-bar menu:
 - **Pause for 30 minutes**, **1 hour**, or **until resumed**; or **Resume**.
 - **Open Quant…** and **Quit Quant**.
 
-The window has four sections: **Status** (the daemon's version and each capture source), **Saved moments** (play and rename), **Agents** (approve a pending pairing with the scopes and lookback you choose, deny it, or revoke a grant), and **Audit** (the last 50 entries and whether the hash chain verifies).
+The window has five sections: **Status** (the daemon's version, each capture source, and the "Open Quant at login" switch), **Saved moments** (play and rename), **Agents** (approve a pending pairing with the scopes and lookback you choose, deny it, or revoke a grant), **Devices** (set up Touch ID and manage the owner devices that can unlock), and **Audit** (the last 50 entries and whether the hash chain verifies).
 
 ## Security
 
 - The app is its own client: profile `desktop`, kind `device`, asking once for `audio:write audio:read audio:raw`. It pairs the first time it reaches the daemon and shows the pairing code. Approve it with `quant approve <code>`, or unlock the window and approve "Quant desktop" under Agents.
 - Approving, denying, revoking, pausing, resuming, and the audit log need an owner session. The window asks for the passphrase in a secure field and sends it to the daemon once; the app keeps only the 15-minute session token, in memory, and never writes the passphrase anywhere. Quitting ends the session.
+- **Touch ID** can open the session instead of the passphrase, once it is set up. The app generates a non-exportable P-256 key in the Secure Enclave (alias `quant-owner`, `.biometryCurrentSet`), enrols only its public half as an owner device labelled "<computer name> Touch ID", and keeps the returned device id in an app-private file — never the key, which stays in the Secure Enclave. Unlocking fetches a single-use challenge from the daemon and signs it after a fingerprint check. Touch ID proves the person is holding this Mac with the fingerprint enrolled, not which person it is: it never replaces the passphrase for anything that changes the passphrase or exports the vault key (the daemon keeps device sessions from enrolling more devices), and it does not help if the vault key itself is lost.
 - The status line uses `GET /v1/capture/status`, which any approved client may call: which sources run, whether capture is paused, and which permission a stopped source needs. Nothing captured is in it.
 - Listing saved moments is an audited read, so the app does it when the window opens and after a save, not on every status check.
 
@@ -61,7 +62,7 @@ QUANT_HOME=/tmp/q/vault QUANT_CONFIG=/tmp/q/clients .leptoskit/macos/App.app/Con
 
 ### Open at login
 
-The Status section has an "Open Quant at login" checkbox, which registers the app with `SMAppService.mainApp` and shows what macOS reports back. A local build is signed ad hoc; macOS may refuse it, or list it under System Settings → General → Login Items for you to allow. A signed copy in `/Applications` registers normally.
+The Status section has an "Open Quant at login" checkbox, off by default and never prompted for. Toggling it registers a per-user login entry through `leptoskit_plugin_autostart`: a LaunchAgent at `~/Library/LaunchAgents/dev.leptoskit.quant.plist` pointing at this app's own executable, written only when the owner turns it on. The switch reflects the entry actually present, and the app does nothing at first launch. A local build points at its `.leptoskit` path; a signed copy in `/Applications` registers its real location.
 
 ### Snapshots
 
