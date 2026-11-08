@@ -42,10 +42,7 @@ pub fn space(state: &State) -> Result<Option<String>, StoreError> {
 }
 
 /// `GET /v1/owner/learn`
-pub async fn learn_config(
-	AxumState(state): Shared,
-	_owner: Owner,
-) -> ApiResult<Json<LearnConfig>> {
+pub async fn learn_config(AxumState(state): Shared, _owner: Owner) -> ApiResult<Json<LearnConfig>> {
 	Ok(Json(config(&state)?))
 }
 
@@ -55,9 +52,7 @@ pub async fn set_learn_config(
 	_owner: Owner,
 	Json(config): Json<LearnConfig>,
 ) -> ApiResult<Json<LearnConfig>> {
-	config
-		.validate()
-		.map_err(|why| Error::Invalid(why))?;
+	config.validate().map_err(Error::Invalid)?;
 	let json = serde_json::to_string(&config).map_err(|e| Error::Invalid(e.to_string()))?;
 	state.vault.store.set_meta(CONFIG, &json)?;
 	state.vault.store.audit(
@@ -76,13 +71,12 @@ pub async fn set_learn_config(
 }
 
 /// `POST /v1/owner/learn/off`
-pub async fn learn_off(
-	AxumState(state): Shared,
-	_owner: Owner,
-) -> ApiResult<Json<()>> {
+pub async fn learn_off(AxumState(state): Shared, _owner: Owner) -> ApiResult<Json<()>> {
 	state.vault.store.remove_meta(CONFIG)?;
-	state.vault.store.audit(
-		quant_access::audit::AuditEvent::new(
+	state
+		.vault
+		.store
+		.audit(quant_access::audit::AuditEvent::new(
 			quant_access::audit::Actor::Owner,
 			"learn.off",
 			"",
@@ -90,8 +84,7 @@ pub async fn learn_off(
 				records: 0,
 				bytes: 0,
 			},
-		),
-	)?;
+		))?;
 	Ok(Json(()))
 }
 
@@ -123,13 +116,8 @@ pub async fn tick(state: &Arc<State>) -> Result<(), StoreError> {
 			!= Some(today.as_str())
 			&& todays_daily_exists(&state.vault.store, now, &tz)?
 		{
-			let report = quant_learn::extract::extract_daily(
-				&state.vault.store,
-				&config,
-				now,
-				&tz,
-			)
-			.await?;
+			let report =
+				quant_learn::extract::extract_daily(&state.vault.store, &config, now, &tz).await?;
 			tracing::debug!(?report, "extracted claims");
 		}
 	}
@@ -153,10 +141,9 @@ fn todays_daily_exists(
 	let range = TimeRange::new(start.timestamp(), end.timestamp())
 		.map_err(|e| StoreError::Invalid(e.to_string()))?;
 	let daily: StreamId = "memory.daily".parse().expect("built-in stream");
-	Ok(store
+	Ok(!store
 		.records(&RecordQuery::new(Selector::stream(daily), range).limit(1))?
-		.first()
-		.is_some())
+		.is_empty())
 }
 
 /// Embed one query text for a search, normalised for comparison. Returns
@@ -166,8 +153,8 @@ pub async fn embed_query(state: &State, terms: &str) -> Result<Vec<f32>, Error> 
 	let Some(embed) = config.embed else {
 		return Err(Error::Invalid("no embedding endpoint is configured".into()));
 	};
-	let endpoint = quant_learn::endpoint::ModelEndpoint::parse(&embed.endpoint)
-		.map_err(Error::Invalid)?;
+	let endpoint =
+		quant_learn::endpoint::ModelEndpoint::parse(&embed.endpoint).map_err(Error::Invalid)?;
 	let mut vectors = quant_learn::client::embed(&endpoint, &embed.model, &[terms])
 		.await
 		.map_err(|error| Error::Internal(error.0))?;

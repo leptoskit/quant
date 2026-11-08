@@ -67,6 +67,9 @@ The daemon recomputes derived records every ten minutes (`quant_derive`). Derive
 - **Gait.** Walking bouts of 30 seconds or more become `motion.gait` records, one per bout. Peak detection on the acceleration magnitude with gravity filtered out sets the cadence — a thigh sensor peaks once per stride, so each of its peaks is two steps, while a torso or loose sensor peaks once per step — and autocorrelation at the dominant step lag says how regular the stride was. When cadence falls more than 10% below the day's earlier bouts, the bout where it dropped says so in its text and is marked `slowed`.
 - **Daily summaries.** One `memory.daily` record per local day: screen time by app, steps, heart rate range with a resting estimate (the mean of the lowest tenth of minute averages), sleep by stage for the night ending that day (18:00 to 18:00), posture totals, and minutes of speech, with a one-paragraph text that search and agents can read.
 - **Hourly episodes.** One `memory.episode` record per hour where anything happened: the top apps by focus time, the place, posture minutes, heart rate range and average, steps, and minutes of speech, plus a one-paragraph text an agent can read. Empty hours produce nothing.
+- **Weekly reviews.** One `memory.weekly` record per local week (weeks start Monday, in the owner's time zone like the daily summaries), with the same Health and Location classes: average sleep and its change from the previous week, resting heart rate, steps, top apps, focus hours (focus spans of 25+ minutes), and plain correlations computed from the week and the four before it — sleep on nights with screen use past 23:00 versus other nights, resting heart rate versus the previous day's steps, and focus minutes by hour of day (the best two hours). Each finding states its numbers and how many days it rests on, and stays silent below five data points; the record carries the same numbers as structured data.
+
+Purges take derived records with their sources: deleting records or series rows also deletes `memory.daily`, `memory.episode`, `memory.weekly`, `motion.posture`, and `motion.gait` records whose span overlaps the purged range, and any derived record whose `derived_from` names a purged stream or family; the matching derivation watermarks move back to the purge's start so the next run recomputes from what remains. Claims and embeddings follow through their cascades.
 
 ## Memory about the owner
 
@@ -78,11 +81,30 @@ Claims are what Quant believes about its owner — preferences, values, routines
 - **The owner's side.** `quant tell "<statement>" --kind preference --topic coffee.timing` states a claim and supersedes anything lower-authority on the same subject and topic; `quant claims list|approve|reject|retract|correct` runs the review queue, and `quant profile` prints the owner's own words first, then the rest by confidence. All of it is owner-session work, so an agent with a shell cannot rewrite the profile.
 - **Context packets.** `POST /v1/context` assembles a budgeted packet for one task (default 1,500 tokens, clamped 200–8,000, tokens estimated as characters ÷ 4): profile claims matching the task's terms first, then the latest `memory.daily` and the last 24 hours of `memory.episode` texts, then records matching the task through the ordinary search path. Sections are filled in that order until the budget is spent, each only where the grant allows it, with the same access checks, deny classes, redaction, lookback, and rate budgets as the underlying endpoints; the answer says which sections were cut for budget or withheld. The MCP server exposes this as `quant_context`, alongside `quant_profile` and `quant_propose` and a `quant://profile` resource, offered only to grants that can use them.
 
+## Learning on the device
+
+Everything learning-related is off until the owner configures it, and everything it calls is reachable only on this machine's own loopback. The settings live in the vault under `learn.config` (owner routes, audited, like `capture.config`): `embed {endpoint, model, dims}` for an OpenAI-compatible `/v1/embeddings` server (Ollama or a llama.cpp server, say), `extract {endpoint, model, calls_per_day, claims_per_run}` for an OpenAI-compatible `/v1/chat/completions` server, and the streams to learn from (by default records with text in `screen.*`, `audio.*` transcripts, and `memory.*` except `memory.profile`). Endpoints must be literal loopback addresses — `127.0.0.1` or `::1`, any port, plain http only — and hostnames are refused, so a DNS change or a proxy can never redirect vault text off the machine. `quant learn show|set …|off` configures it.
+
+### Similarity search
+
+Records and claims can carry embedding vectors (`embeddings` and `claim_embeddings` tables, cascading with their rows), stored per embedding **space**: a short hash of the model, its dimensions, and the chunking version, so switching models re-embeds into a fresh space instead of mixing vectors. Vectors are little-endian f32, L2-normalised, and are never served to clients. A backfill job on the derivation schedule embeds at most 200 un-embedded texts per run, oldest first; texts longer than the model's window are truncated (the chunking version records that policy), and an unavailable endpoint just stops the run, which resumes next time.
+
+`POST /v1/query/search` and `quant_search` gain a `mode`: `keyword`, `similar`, or `hybrid` — hybrid by default when embeddings exist for the current space, keyword otherwise. Similarity search first narrows candidates in SQL by the caller's selector and time range (exactly the streams search may already see, denied classes included in that narrowing), then scores by cosine in Rust. Hybrid fuses the keyword and vector rankings with reciprocal rank fusion (k = 60). Results travel the existing path — redaction, budgets, audit — and context packets use hybrid for their records and claims sections when a space exists.
+
+### Extraction, with grounding rules
+
+After the day's `memory.daily` exists, a daily job sends the day's texts — the daily summary, its episodes, notes, and saved audio transcripts — to the extract model in small batches, asking for claims as strict JSON (`kind, subject, topic, statement, confidence, classes, evidence: [{record, quote}]`). Before anything is stored, deterministically:
+
+- **Grounding.** Every quote must appear in its cited record's text after NFKC normalisation, case folding, and whitespace collapsing, as whole words, and every evidence id must be a record in the batch. A claim with any ungrounded quote is dropped whole.
+- **No instructions.** A claim whose statement or quotes look like instructions to an AI — imperatives addressed to an assistant, "ignore previous", "system prompt", "you must", role markers, tool or markup syntax — is dropped, so captured text cannot plant orders in the owner's memory.
+- **Held when sensitive.** Claims about identity, credentials, access, grants, money movement, or the owner's relationships to named people are always stored Held for the owner to approve.
+- **Observed otherwise.** The rest stores with authority Observed: Active only when grounded in at least two distinct records from different days or different source streams, otherwise Held. An active claim with the same subject and topic gains the new evidence instead of a duplicate (corroboration, confidence rising by a bounded step); owner claims are never touched.
+- **Budgets.** The settings' calls-per-day and claims-per-run are hard caps. Each call reports ok, empty, or unavailable; only ok and empty advance the day's watermark, so an outage never looks like "nothing was learned". Prompts and model output are never served to agents, and stored claims go through the usual sanitise-and-redact path. Every extraction run writes one audit entry, counts only.
+
 ## Roadmap
 
 1. **The relay**, so phones, sensors, and agents reach the vault from anywhere while the relay sees only TLS ([hosting](hosting.md)).
 2. **One leptoskit app everywhere:** the Android collector as a second target of the desktop app, on leptoskit's sensor, health, and background plugins; Wear OS and watchOS for heart rate from the wrist.
 3. **Desktop:** owner actions unlocked with Touch ID, and opening at login.
-4. **Learning on the device:** local embeddings for similarity search, local-model extraction with grounding rules so captured text cannot plant claims, weekly reviews linking body and behaviour, and purging derived records with their sources.
-5. iOS collector (HealthKit, background modes).
-6. Hosted vaults in attested enclaves ([hosting](hosting.md)).
+4. iOS collector (HealthKit, background modes).
+5. Hosted vaults in attested enclaves ([hosting](hosting.md)).

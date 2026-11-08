@@ -112,9 +112,9 @@ impl ClaimFilter {
 
 /// One stored claim's columns, in table order after `rowid`.
 pub(crate) const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic, c.authority, \
-                                c.confidence, c.classes, c.status, c.valid_from_us, \
-                                c.valid_to_us, c.proposed_by, c.created_at_us, c.updated_at_us, \
-                                c.superseded_by";
+                                  c.confidence, c.classes, c.status, c.valid_from_us, \
+                                  c.valid_to_us, c.proposed_by, c.created_at_us, c.updated_at_us, \
+                                  c.superseded_by";
 
 pub(crate) fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
 	let id: Vec<u8> = row.get(0)?;

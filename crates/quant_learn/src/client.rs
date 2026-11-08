@@ -20,19 +20,26 @@ pub struct ModelError(pub String);
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 /// POST `body` to `path` on the endpoint and return the JSON answer.
-async fn post(endpoint: &ModelEndpoint, path: &str, body: serde_json::Value) -> Result<serde_json::Value, ModelError> {
+async fn post(
+	endpoint: &ModelEndpoint,
+	path: &str,
+	body: serde_json::Value,
+) -> Result<serde_json::Value, ModelError> {
 	let address = endpoint.address();
 	let stream = tokio::net::TcpStream::connect(&address)
 		.await
-		.map_err(|error| ModelError(format!("cannot reach the model endpoint {address}: {error}")))?;
-	let (mut sender, connection) =
-		hyper::client::conn::http1::handshake(TokioIo::new(stream))
-			.await
-			.map_err(|error| ModelError(error.to_string()))?;
+		.map_err(|error| {
+			ModelError(format!(
+				"cannot reach the model endpoint {address}: {error}"
+			))
+		})?;
+	let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+		.await
+		.map_err(|error| ModelError(error.to_string()))?;
 	tokio::spawn(connection);
-	let bytes = hyper::body::Bytes::from(serde_json::to_vec(&body).map_err(|error| {
-		ModelError(error.to_string())
-	})?);
+	let bytes = hyper::body::Bytes::from(
+		serde_json::to_vec(&body).map_err(|error| ModelError(error.to_string()))?,
+	);
 	let request = Request::builder()
 		.method(Method::POST)
 		.uri(path)
@@ -55,7 +62,8 @@ async fn post(endpoint: &ModelEndpoint, path: &str, body: serde_json::Value) -> 
 	if !status.is_success() {
 		return Err(ModelError(format!("the model endpoint answered {status}")));
 	}
-	serde_json::from_slice(&body).map_err(|error| ModelError(format!("bad answer from the model endpoint: {error}")))
+	serde_json::from_slice(&body)
+		.map_err(|error| ModelError(format!("bad answer from the model endpoint: {error}")))
 }
 
 /// Embed `texts` with the endpoint's `/v1/embeddings` call, one vector per

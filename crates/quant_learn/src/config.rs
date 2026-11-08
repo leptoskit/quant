@@ -1,5 +1,7 @@
 //! The learning settings, stored in the vault under `learn.config`.
 
+use quant_core::Family;
+use quant_core::StreamId;
 use quant_store::Selector;
 use serde::Deserialize;
 use serde::Serialize;
@@ -108,9 +110,9 @@ impl LearnConfig {
 	/// The embedding space of the configured embedding model, if any.
 	#[must_use]
 	pub fn space(&self) -> Option<String> {
-		self.embed.as_ref().map(|embed| {
-			quant_store::space_hash(&embed.model, embed.dims, CHUNKING_VERSION)
-		})
+		self.embed
+			.as_ref()
+			.map(|embed| quant_store::space_hash(&embed.model, embed.dims, CHUNKING_VERSION))
 	}
 }
 
@@ -119,9 +121,9 @@ impl LearnConfig {
 pub fn learn_selector(streams: &[String]) -> Result<Selector, String> {
 	let mut selector = Selector::default();
 	for name in streams {
-		if let Ok(stream) = name.parse() {
+		if let Ok(stream) = name.parse::<StreamId>() {
 			selector.streams.push(stream);
-		} else if let Ok(family) = name.parse() {
+		} else if let Ok(family) = name.parse::<Family>() {
 			selector.families.push(family);
 		} else {
 			return Err(format!("unknown stream or family `{name}`"));

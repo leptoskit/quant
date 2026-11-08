@@ -39,8 +39,7 @@ pub async fn backfill(
 	let Some(embed) = &config.embed else {
 		return Ok(report);
 	};
-	let endpoint = ModelEndpoint::parse(&embed.endpoint)
-		.map_err(|error| StoreError::Invalid(error))?;
+	let endpoint = ModelEndpoint::parse(&embed.endpoint).map_err(StoreError::Invalid)?;
 	let selector = config
 		.streams
 		.as_deref()
@@ -53,12 +52,9 @@ pub async fn backfill(
 			.iter()
 			.map(|(_, text)| config::truncate(text))
 			.collect();
-		let vectors = match client::embed(&endpoint, &embed.model, &texts).await {
-			Ok(vectors) => vectors,
-			Err(_) => {
-				report.unavailable = true;
-				return Ok(report);
-			}
+		let Ok(vectors) = client::embed(&endpoint, &embed.model, &texts).await else {
+			report.unavailable = true;
+			return Ok(report);
 		};
 		if vectors.len() != texts.len() {
 			report.unavailable = true;

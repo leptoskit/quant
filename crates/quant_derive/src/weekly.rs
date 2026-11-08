@@ -143,11 +143,7 @@ fn steps_on(store: &Store, date: Date, tz: &TimeZone) -> Result<Option<f64>, Sto
 
 /// The steps walked on each day of the week starting `monday`: `None` where
 /// no steps were captured.
-fn steps_days(
-	store: &Store,
-	monday: Date,
-	tz: &TimeZone,
-) -> Result<Vec<Option<f64>>, StoreError> {
+fn steps_days(store: &Store, monday: Date, tz: &TimeZone) -> Result<Vec<Option<f64>>, StoreError> {
 	let mut days = Vec::new();
 	let mut date = monday;
 	for _ in 0..7 {
@@ -186,14 +182,9 @@ fn late_screen(store: &Store, date: Date, tz: &TimeZone) -> Result<bool, StoreEr
 		day.start + SignedDuration::from_hours(26),
 	)
 	.map_err(|e| StoreError::Invalid(e.to_string()))?;
-	Ok(store
-		.records(&RecordQuery::new(
-			Selector::stream(stream("screen.frame")),
-			window,
-		)
-		.limit(1))?
-		.first()
-		.is_some())
+	Ok(!store
+		.records(&RecordQuery::new(Selector::stream(stream("screen.frame")), window).limit(1))?
+		.is_empty())
 }
 
 /// The Pearson correlation of paired values, or `None` where one side has
@@ -227,10 +218,7 @@ fn focus_spans(store: &Store, range: TimeRange) -> Result<Vec<(Timestamp, f64)>,
 	Ok(spans
 		.into_iter()
 		.filter_map(|record| {
-			let seconds = record
-				.end?
-				.duration_since(record.start)
-				.as_secs_f64();
+			let seconds = record.end?.duration_since(record.start).as_secs_f64();
 			(seconds >= FOCUS_MINUTES * 60.0).then_some((record.start, seconds))
 		})
 		.collect())
@@ -244,11 +232,8 @@ fn focus_by_hour(
 	tz: &TimeZone,
 ) -> Result<Vec<(u8, f64, usize)>, StoreError> {
 	let start = monday - SignedDuration::from_hours(24 * 7 * WINDOW_WEEKS);
-	let window = TimeRange::new(
-		day_range(start, tz)?.start,
-		week_range(monday, tz)?.end,
-	)
-	.map_err(|e| StoreError::Invalid(e.to_string()))?;
+	let window = TimeRange::new(day_range(start, tz)?.start, week_range(monday, tz)?.end)
+		.map_err(|e| StoreError::Invalid(e.to_string()))?;
 	let spans = focus_spans(store, window)?;
 	let mut hours: BTreeMap<u8, f64> = BTreeMap::new();
 	for (start, seconds) in &spans {
@@ -309,12 +294,14 @@ pub fn summarize_week(
 	}
 
 	// Resting heart rate, over the days with data.
-	let resting: Vec<f64> = resting_days(store, monday, tz)?.into_iter().flatten().collect();
+	let resting: Vec<f64> = resting_days(store, monday, tz)?
+		.into_iter()
+		.flatten()
+		.collect();
 	let (resting_avg, resting_days) = average(&resting);
 	if resting_days >= MIN_POINTS {
 		parts.push(format!(
-			"Resting heart rate averaged {:.0} bpm ({resting_days} days).",
-			resting_avg
+			"Resting heart rate averaged {resting_avg:.0} bpm ({resting_days} days)."
 		));
 		data.insert(
 			"resting_hr_avg".into(),
@@ -323,12 +310,14 @@ pub fn summarize_week(
 	}
 
 	// Steps.
-	let steps: Vec<f64> = steps_days(store, monday, tz)?.into_iter().flatten().collect();
+	let steps: Vec<f64> = steps_days(store, monday, tz)?
+		.into_iter()
+		.flatten()
+		.collect();
 	let (steps_avg, steps_days) = average(&steps);
 	if steps_days >= MIN_POINTS {
 		parts.push(format!(
-			"Walked {:.0} steps a day on average ({steps_days} days).",
-			steps_avg
+			"Walked {steps_avg:.0} steps a day on average ({steps_days} days)."
 		));
 		data.insert(
 			"steps_avg".into(),
@@ -341,20 +330,17 @@ pub fn summarize_week(
 		.into_iter()
 		.collect();
 	apps.sort_by(|a, b| b.1.total_cmp(&a.1));
-	let top: Vec<String> = apps
-		.iter()
-		.take(5)
-		.map(|(app, _)| app.clone())
-		.collect();
+	let top: Vec<String> = apps.iter().take(5).map(|(app, _)| app.clone()).collect();
 	if !top.is_empty() {
 		let joined = top.join(", ");
 		parts.push(format!("Most screen time in {joined}."));
 		data.insert(
 			"top_apps".into(),
-			json!(apps
-				.iter()
-				.map(|(app, seconds)| json!({ "app": app, "seconds": seconds }))
-				.collect::<Vec<_>>()),
+			json!(
+				apps.iter()
+					.map(|(app, seconds)| json!({ "app": app, "seconds": seconds }))
+					.collect::<Vec<_>>()
+			),
 		);
 	}
 
@@ -437,8 +423,7 @@ pub fn summarize_week(
 			&& let Some(r) = pearson(&pairs)
 		{
 			parts.push(format!(
-				"Resting heart rate and the previous day's steps correlate at r={r:.2} ({} \
-				 days).",
+				"Resting heart rate and the previous day's steps correlate at r={r:.2} ({} days).",
 				pairs.len()
 			));
 			data.insert(
@@ -462,10 +447,13 @@ pub fn summarize_week(
 		parts.push(format!("Focus peaks at {}.", shown.join(" and ")));
 		data.insert(
 			"focus_by_hour".into(),
-			json!(best
-				.iter()
-				.map(|(hour, minutes, points)| json!({ "hour": hour, "minutes": minutes, "spans": points }))
-				.collect::<Vec<_>>()),
+			json!(
+				best.iter()
+					.map(
+						|(hour, minutes, points)| json!({ "hour": hour, "minutes": minutes, "spans": points })
+					)
+					.collect::<Vec<_>>()
+			),
 		);
 	}
 
@@ -499,10 +487,7 @@ mod tests {
 	fn weeks_start_on_monday_in_the_owners_zone() {
 		// 2026-11-08 is a Sunday; its week started on the 2nd.
 		let sunday: Timestamp = "2026-11-08T12:00:00Z".parse().unwrap();
-		assert_eq!(
-			monday_of(sunday, &TimeZone::UTC).to_string(),
-			"2026-11-02"
-		);
+		assert_eq!(monday_of(sunday, &TimeZone::UTC).to_string(), "2026-11-02");
 		// 16:00 UTC is already Monday 01:00 in Tokyo, so the same instant
 		// belongs to the next week there.
 		let evening: Timestamp = "2026-11-08T16:00:00Z".parse().unwrap();

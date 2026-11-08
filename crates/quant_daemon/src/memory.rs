@@ -382,38 +382,36 @@ pub async fn context(
 			let all = state.vault.store.claims(&filter)?;
 			let ordered: Vec<Claim> = match &task_vec {
 				Some(vector)
-					if space
-						.as_deref()
-						.is_some_and(|space| {
-							state.vault.store.has_claim_embeddings(space).unwrap_or(false)
-						}) =>
+					if space.as_deref().is_some_and(|space| {
+						state
+							.vault
+							.store
+							.has_claim_embeddings(space)
+							.unwrap_or(false)
+					}) =>
 				{
 					let space = space.clone().expect("the space was just checked");
 					let keyword = match quant_store::fts_any(task) {
 						Some(query) => state.vault.store.claims_matching(&filter, &query)?,
 						None => Vec::new(),
 					};
-					let similar =
-						state.vault.store.similar_claims(&space, &filter, vector, 200)?;
-					let keyword_ids: Vec<ClaimId> =
-						keyword.iter().map(|claim| claim.id).collect();
-					let similar_ids: Vec<ClaimId> =
-						similar.iter().map(|claim| claim.id).collect();
+					let similar = state
+						.vault
+						.store
+						.similar_claims(&space, &filter, vector, 200)?;
+					let keyword_ids: Vec<ClaimId> = keyword.iter().map(|claim| claim.id).collect();
+					let similar_ids: Vec<ClaimId> = similar.iter().map(|claim| claim.id).collect();
 					let mut by_id: HashMap<ClaimId, Claim> = keyword
 						.into_iter()
 						.chain(similar)
 						.map(|claim| (claim.id, claim))
 						.collect();
-					let mut fused: Vec<Claim> = quant_store::rrf_fuse(
-						&keyword_ids,
-						&similar_ids,
-						60,
-					)
-					.into_iter()
-					.filter_map(|(id, _)| by_id.remove(&id))
-					.collect();
-					let fused_ids: HashSet<ClaimId> =
-						fused.iter().map(|claim| claim.id).collect();
+					let mut fused: Vec<Claim> =
+						quant_store::rrf_fuse(&keyword_ids, &similar_ids, 60)
+							.into_iter()
+							.filter_map(|(id, _)| by_id.remove(&id))
+							.collect();
+					let fused_ids: HashSet<ClaimId> = fused.iter().map(|claim| claim.id).collect();
 					let mut rest: Vec<Claim> = all
 						.into_iter()
 						.filter(|claim| !fused_ids.contains(&claim.id))
@@ -498,9 +496,7 @@ pub async fn context(
 			let range = window(&caller.grant, None, None)?;
 			let query = RecordQuery::new(selector, range).search(task).limit(500);
 			let hits: Vec<SearchHit> = match (&space, &task_vec) {
-				(Some(space), Some(vector)) => {
-					state.vault.store.hybrid(&query, space, vector)?
-				}
+				(Some(space), Some(vector)) => state.vault.store.hybrid(&query, space, vector)?,
 				_ => state.vault.store.search(&query)?,
 			};
 			let cost = |hit: &SearchHit| {

@@ -298,7 +298,9 @@ pub fn claims(claims: &[quant_core::Claim]) {
 
 /// The on-device learning settings, for the owner.
 pub fn learn_config(config: &serde_json::Value) {
-	if config == &serde_json::Value::Null || config.as_object().is_some_and(|m| m.is_empty()) {
+	if config == &serde_json::Value::Null
+		|| config.as_object().is_some_and(serde_json::Map::is_empty)
+	{
 		println!("On-device learning is off.");
 		println!("`quant learn set --embed-endpoint http://127.0.0.1:11434 …` turns it on.");
 		return;
@@ -306,9 +308,17 @@ pub fn learn_config(config: &serde_json::Value) {
 	if let Some(embed) = config.get("embed").and_then(serde_json::Value::as_object) {
 		println!(
 			"embeddings: {} ({}) {} dims",
-			embed.get("endpoint").and_then(serde_json::Value::as_str).unwrap_or("?"),
-			embed.get("model").and_then(serde_json::Value::as_str).unwrap_or("?"),
-			embed.get("dims").map_or_else(|| "?".into(), serde_json::Value::to_string),
+			embed
+				.get("endpoint")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("?"),
+			embed
+				.get("model")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("?"),
+			embed
+				.get("dims")
+				.map_or_else(|| "?".into(), serde_json::Value::to_string),
 		);
 	} else {
 		println!("embeddings: off");
@@ -316,10 +326,20 @@ pub fn learn_config(config: &serde_json::Value) {
 	if let Some(extract) = config.get("extract").and_then(serde_json::Value::as_object) {
 		println!(
 			"extraction: {} ({}) — {} calls/day, {} claims/run",
-			extract.get("endpoint").and_then(serde_json::Value::as_str).unwrap_or("?"),
-			extract.get("model").and_then(serde_json::Value::as_str).unwrap_or("?"),
-			extract.get("calls_per_day").map_or_else(|| "?".into(), serde_json::Value::to_string),
-			extract.get("claims_per_run").map_or_else(|| "?".into(), serde_json::Value::to_string),
+			extract
+				.get("endpoint")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("?"),
+			extract
+				.get("model")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("?"),
+			extract
+				.get("calls_per_day")
+				.map_or_else(|| "?".into(), serde_json::Value::to_string),
+			extract
+				.get("claims_per_run")
+				.map_or_else(|| "?".into(), serde_json::Value::to_string),
 		);
 	} else {
 		println!("extraction: off");

@@ -149,7 +149,7 @@ pub fn fts_any(terms: &str) -> Option<String> {
 }
 
 pub(crate) const COLUMNS: &str = "r.id, r.stream, r.device, r.start_us, r.end_us, r.text, r.data, \
-                              r.media_hash, r.media_mime, r.media_size";
+                                  r.media_hash, r.media_mime, r.media_size";
 
 pub(crate) fn record_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Record>> {
 	let id: Vec<u8> = row.get(0)?;
@@ -327,7 +327,8 @@ impl Store {
 
 	/// Remove a value from the store's key/value state.
 	pub fn remove_meta(&self, key: &str) -> Result<()> {
-		self.conn().execute("DELETE FROM meta WHERE key = ?1", [key])?;
+		self.conn()
+			.execute("DELETE FROM meta WHERE key = ?1", [key])?;
 		Ok(())
 	}
 
@@ -567,8 +568,8 @@ impl Store {
 			params.push(stream.as_str().to_owned().into());
 			params.push(format!("{}.%", stream.as_str()).into());
 			clauses.push(
-				"(json_extract(data, '$.derived_from') = ? OR json_extract(data, '$.derived_from') \
-				 LIKE ?)"
+				"(json_extract(data, '$.derived_from') = ? OR json_extract(data, \
+				 '$.derived_from') LIKE ?)"
 					.to_owned(),
 			);
 		}
@@ -604,9 +605,10 @@ impl Store {
 		};
 		// Posture and gait watermarks, for sources the purge named.
 		let keys: Vec<String> = {
-			let mut statement = tx
-				.prepare("SELECT key FROM meta WHERE key LIKE 'derive.posture.%' OR key LIKE \
-				          'derive.gait.%'")?;
+			let mut statement = tx.prepare(
+				"SELECT key FROM meta WHERE key LIKE 'derive.posture.%' OR key LIKE \
+				 'derive.gait.%'",
+			)?;
 			let rows = statement.query_map([], |r| r.get::<_, String>(0))?;
 			rows.map(|row| row.map_err(Into::into))
 				.collect::<Result<_>>()?
@@ -892,7 +894,7 @@ mod tests {
 		assert_eq!(overview[0].count, 5);
 		assert_eq!(overview[0].first, at(0));
 
-		let (records, _, _) = store
+		let (records, ..) = store
 			.purge(&Selector::family(Family::Screen), range(0, 3))
 			.unwrap();
 		assert_eq!(records, 3);

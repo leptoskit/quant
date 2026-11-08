@@ -12,8 +12,8 @@ pub mod daily;
 pub mod episode;
 pub mod gait;
 pub mod posture;
-pub mod weekly;
 mod run;
+pub mod weekly;
 
 use quant_core::RecordId;
 pub use run::Config;

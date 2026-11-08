@@ -26,7 +26,7 @@ pub fn normalize(text: &str) -> String {
 pub fn quote_grounded(text: &str, quote: &str) -> bool {
 	let text = normalize(text);
 	let needle = normalize(quote);
-	if !needle.chars().any(|c| c.is_alphanumeric()) {
+	if !needle.chars().any(char::is_alphanumeric) {
 		return false;
 	}
 	let mut rest = text.as_str();
@@ -36,7 +36,10 @@ pub fn quote_grounded(text: &str, quote: &str) -> bool {
 			.chars()
 			.next_back()
 			.is_some_and(char::is_alphanumeric);
-		let after = rest[end..].chars().next().is_some_and(char::is_alphanumeric);
+		let after = rest[end..]
+			.chars()
+			.next()
+			.is_some_and(char::is_alphanumeric);
 		if !before && !after {
 			return true;
 		}

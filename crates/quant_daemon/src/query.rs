@@ -424,18 +424,17 @@ async fn records_or_search(
 	}
 	// The search mode: what the caller asked for, or hybrid when
 	// embeddings exist for the vault's current space, keyword otherwise.
-	let space = crate::learning::space(&state)?;
-	let mode = match body.mode {
-		Some(mode) => mode,
-		None => {
-			let hybrid = space
-				.as_deref()
-				.is_some_and(|space| state.vault.store.has_embeddings(space).unwrap_or(false));
-			if hybrid {
-				SearchMode::Hybrid
-			} else {
-				SearchMode::Keyword
-			}
+	let space = crate::learning::space(state)?;
+	let mode = if let Some(mode) = body.mode {
+		mode
+	} else {
+		let hybrid = space
+			.as_deref()
+			.is_some_and(|space| state.vault.store.has_embeddings(space).unwrap_or(false));
+		if hybrid {
+			SearchMode::Hybrid
+		} else {
+			SearchMode::Keyword
 		}
 	};
 	let mut hits = if let Some(terms) = terms {
@@ -444,25 +443,27 @@ async fn records_or_search(
 			SearchMode::Similar => {
 				let space = space.ok_or_else(|| {
 					Error::Invalid(
-						"similarity search needs an embedding endpoint; configure one with \
-						 `quant learn set`"
+						"similarity search needs an embedding endpoint; configure one with `quant \
+						 learn set`"
 							.into(),
 					)
 				})?;
-				let vector = crate::learning::embed_query(&state, terms).await?;
+				let vector = crate::learning::embed_query(state, terms).await?;
 				state.vault.store.similar(&query, &space, &vector)?
 			}
-			SearchMode::Hybrid => match space {
-				Some(space) => {
-					match crate::learning::embed_query(&state, terms).await {
-						Ok(vector) => state.vault.store.hybrid(&query, &space, &vector)?,
-						// Without the endpoint, hybrid degrades to the
-						// keyword ranking rather than failing the search.
-						Err(_) => state.vault.store.search(&query)?,
+			SearchMode::Hybrid => {
+				match space {
+					Some(space) => {
+						match crate::learning::embed_query(state, terms).await {
+							Ok(vector) => state.vault.store.hybrid(&query, &space, &vector)?,
+							// Without the endpoint, hybrid degrades to the
+							// keyword ranking rather than failing the search.
+							Err(_) => state.vault.store.search(&query)?,
+						}
 					}
+					None => state.vault.store.search(&query)?,
 				}
-				None => state.vault.store.search(&query)?,
-			},
+			}
 		}
 	} else {
 		state

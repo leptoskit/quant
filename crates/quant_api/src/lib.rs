@@ -686,6 +686,7 @@ pub struct Purged {
 }
 
 /// Whether a purge count is zero, so fresh answers stay short.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(n: &usize) -> bool {
 	*n == 0
 }

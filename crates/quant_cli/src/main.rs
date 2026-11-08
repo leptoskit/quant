@@ -430,7 +430,7 @@ enum LearnAction {
 	/// Show the learning settings.
 	Show,
 	/// Set the embedding or extraction endpoint. Endpoints must be literal
-	/// loopback addresses (127.0.0.1 or [::1]), so vault text can never
+	/// loopback addresses (`127.0.0.1` or `[::1]`), so vault text can never
 	/// leave the machine through a changed DNS name or a proxy.
 	Set {
 		/// The embedding endpoint, such as `http://127.0.0.1:11434`
@@ -1031,8 +1031,7 @@ async fn learn(cx: &Ctx, action: LearnAction) -> Result<()> {
 				|| claims_per_run.is_some();
 			if extract_flags && config.extract.is_none() {
 				bail!(
-					"new extraction settings need --extract-endpoint and --extract-model \
-					 together"
+					"new extraction settings need --extract-endpoint and --extract-model together"
 				);
 			}
 			if let Some(extract) = &mut config.extract {

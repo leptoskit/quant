@@ -66,7 +66,9 @@ const TOOL_PATTERNS: &[&str] = &[
 /// screen or transcript cannot plant orders in a claim.
 pub fn looks_like_instruction(text: &str) -> bool {
 	let lower = text.to_lowercase();
-	INSTRUCTION_PATTERNS.iter().any(|pattern| lower.contains(pattern))
+	INSTRUCTION_PATTERNS
+		.iter()
+		.any(|pattern| lower.contains(pattern))
 		|| TOOL_PATTERNS.iter().any(|pattern| lower.contains(pattern))
 }
 
@@ -160,10 +162,7 @@ mod tests {
 			"Heart rate stayed below 90 bpm all afternoon",
 			"Ada said the film was good",
 		] {
-			assert!(
-				!looks_like_instruction(text),
-				"`{text}` should pass"
-			);
+			assert!(!looks_like_instruction(text), "`{text}` should pass");
 		}
 	}
 
@@ -175,7 +174,10 @@ mod tests {
 			"Shares a bank account with Ada",
 			"Grants the assistant access to the vault",
 		] {
-			assert!(is_sensitive(None, statement), "`{statement}` should be held");
+			assert!(
+				is_sensitive(None, statement),
+				"`{statement}` should be held"
+			);
 		}
 		// A sensitive topic holds an innocuous statement.
 		assert!(is_sensitive(Some("banking.habits"), "Likes Friday"));

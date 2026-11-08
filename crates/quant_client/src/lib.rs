@@ -776,10 +776,7 @@ impl OwnerSession {
 
 	/// Replace the on-device learning settings. Endpoints must be literal
 	/// loopback addresses; anything else is refused.
-	pub async fn set_learn_config(
-		&self,
-		config: &serde_json::Value,
-	) -> Result<serde_json::Value> {
+	pub async fn set_learn_config(&self, config: &serde_json::Value) -> Result<serde_json::Value> {
 		self.call(Method::POST, routes::OWNER_LEARN, Some(config))
 			.await
 	}

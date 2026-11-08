@@ -38,12 +38,10 @@ use crate::records::record_from_row;
 pub fn rrf_fuse<T: Ord + Hash + Clone>(a: &[T], b: &[T], k: u32) -> Vec<(T, f64)> {
 	let mut scores: HashMap<T, f64> = HashMap::new();
 	for (index, item) in a.iter().enumerate() {
-		*scores.entry(item.clone()).or_default() +=
-			1.0 / (f64::from(k) + index as f64 + 1.0);
+		*scores.entry(item.clone()).or_default() += 1.0 / (f64::from(k) + index as f64 + 1.0);
 	}
 	for (index, item) in b.iter().enumerate() {
-		*scores.entry(item.clone()).or_default() +=
-			1.0 / (f64::from(k) + index as f64 + 1.0);
+		*scores.entry(item.clone()).or_default() += 1.0 / (f64::from(k) + index as f64 + 1.0);
 	}
 	let mut fused: Vec<(T, f64)> = scores.into_iter().collect();
 	fused.sort_by(|(a, sa), (b, sb)| sb.total_cmp(sa).then_with(|| a.cmp(b)));
@@ -143,11 +141,13 @@ impl Store {
 		let mut params: Vec<Value> = vec![space.to_owned().into()];
 		let condition = selector.sql("r.", &mut params);
 		params.push(i64::try_from(limit).unwrap_or(i64::MAX).into());
+		let limit_index = params.len();
 		let sql = format!(
 			"SELECT r.rowid, r.text FROM records r
-			 WHERE r.text IS NOT NULL AND {condition}
+			 WHERE r.text IS NOT NULL
 			 AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.record = r.rowid AND e.space = ?1)
-			 ORDER BY r.rowid LIMIT ?2"
+			 AND {condition}
+			 ORDER BY r.rowid LIMIT ?{limit_index}"
 		);
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&sql)?;
@@ -209,12 +209,7 @@ impl Store {
 
 	/// Candidate rows with their vectors for a vector search over `query`'s
 	/// selector and range in `space`, newest first, at most `pool`.
-	fn candidates(
-		&self,
-		query: &RecordQuery,
-		space: &str,
-		pool: usize,
-	) -> Result<Vec<RowVector>> {
+	fn candidates(&self, query: &RecordQuery, space: &str, pool: usize) -> Result<Vec<RowVector>> {
 		if query.selector.is_empty() || query.limit == 0 {
 			return Ok(Vec::new());
 		}
@@ -226,11 +221,14 @@ impl Store {
 		];
 		let selector = query.selector.sql("r.", &mut params);
 		params.push(i64::try_from(pool).unwrap_or(i64::MAX).into());
+		let limit_index = params.len();
 		let sql = format!(
-			"SELECT r.rowid, r.start_us, e.vector FROM embeddings e JOIN records r ON r.rowid = e.record
-			 WHERE e.space = ?1 AND r.start_us < ?2 AND (r.start_us >= ?3 OR coalesce(r.end_us, r.start_us) > ?4)
+			"SELECT r.rowid, r.start_us, e.vector FROM embeddings e JOIN records r ON r.rowid = \
+			 e.record
+			 WHERE e.space = ?1 AND r.start_us < ?2 AND (r.start_us >= ?3 OR coalesce(r.end_us, r.start_us) \
+			 > ?4)
 			 AND {selector}
-			 ORDER BY r.start_us DESC LIMIT ?5"
+			 ORDER BY r.start_us DESC LIMIT ?{limit_index}"
 		);
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&sql)?;
@@ -270,9 +268,7 @@ impl Store {
 			.into_iter()
 			.map(|row| (cosine(vector, &row.vector), row))
 			.collect();
-		scored.sort_by(|(a, x), (b, y)| {
-			b.total_cmp(a).then_with(|| y.start_us.cmp(&x.start_us))
-		});
+		scored.sort_by(|(a, x), (b, y)| b.total_cmp(a).then_with(|| y.start_us.cmp(&x.start_us)));
 		let mut hits = Vec::with_capacity(query.limit.min(scored.len()));
 		for (_, row) in scored.into_iter().take(query.limit) {
 			let Some(record) = self.record_row(row.rowid)? else {
@@ -307,10 +303,14 @@ impl Store {
 		}
 		let keyword_ids: Vec<RecordId> = keyword.iter().map(|hit| hit.record.id).collect();
 		let similar_ids: Vec<RecordId> = similar.iter().map(|hit| hit.record.id).collect();
-		let keyword_map: HashMap<RecordId, SearchHit> =
-			keyword.into_iter().map(|hit| (hit.record.id, hit)).collect();
-		let similar_map: HashMap<RecordId, SearchHit> =
-			similar.into_iter().map(|hit| (hit.record.id, hit)).collect();
+		let keyword_map: HashMap<RecordId, SearchHit> = keyword
+			.into_iter()
+			.map(|hit| (hit.record.id, hit))
+			.collect();
+		let similar_map: HashMap<RecordId, SearchHit> = similar
+			.into_iter()
+			.map(|hit| (hit.record.id, hit))
+			.collect();
 		let mut hits = Vec::new();
 		for (id, _) in rrf_fuse(&keyword_ids, &similar_ids, 60) {
 			let hit = if keyword_map.contains_key(&id) {
@@ -338,11 +338,12 @@ impl Store {
 		let mut params: Vec<Value> = vec![space.to_owned().into()];
 		let condition = filter_sql(filter, &mut params);
 		params.push(2_000_i64.into());
+		let limit_index = params.len();
 		let sql = format!(
 			"SELECT {CLAIM_COLUMNS}, c.rowid, ce.vector FROM claim_embeddings ce
 			 JOIN claims c ON c.rowid = ce.claim
 			 WHERE ce.space = ?1 AND {condition}
-			 ORDER BY c.updated_at_us DESC LIMIT ?2"
+			 ORDER BY c.updated_at_us DESC LIMIT ?{limit_index}"
 		);
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&sql)?;
@@ -398,7 +399,10 @@ mod tests {
 	fn rrf_fuses_two_ranked_lists() {
 		// A small k makes the scores easy to reason about: 2 is ranked in
 		// both lists and wins outright.
-		assert_eq!(rrf_fuse(&[1, 2], &[2], 1), vec![(2, 1.0 / 3.0 + 1.0 / 2.0), (1, 1.0 / 2.0)]);
+		assert_eq!(
+			rrf_fuse(&[1, 2], &[2], 1),
+			vec![(2, 1.0 / 3.0 + 1.0 / 2.0), (1, 1.0 / 2.0)]
+		);
 		// With k = 60 an item ranked first in one list and third in the
 		// other edges out one ranked second in both.
 		let fused = rrf_fuse(&[3, 2, 1], &[1, 58, 2], 60);
@@ -500,7 +504,9 @@ mod tests {
 
 		// A query vector near the coffee records returns them first.
 		let query = RecordQuery::new(selector, range(0, 10)).limit(2);
-		let hits = store.similar(&query, &space, &[1.0_f32, 0.0, 0.0, 0.0]).unwrap();
+		let hits = store
+			.similar(&query, &space, &[1.0_f32, 0.0, 0.0, 0.0])
+			.unwrap();
 		let texts: Vec<_> = hits
 			.iter()
 			.map(|h| h.record.text.as_deref().unwrap())
@@ -530,12 +536,25 @@ mod tests {
 	}
 
 	#[test]
+	fn pending_embeddings_respects_multi_part_selectors() {
+		let store = store();
+		let space = space_hash("fake", 4, 1);
+		store
+			.insert_records(&[frame(1, "screen text one"), frame(2, "screen text two")])
+			.unwrap();
+		let mut selector = Selector::default();
+		selector.families.push(quant_core::Family::Screen);
+		selector.streams.push("audio.transcript".parse().unwrap());
+		selector.streams.push("memory.note".parse().unwrap());
+		let pending = store.pending_embeddings(&space, &selector, 200).unwrap();
+		assert_eq!(pending.len(), 2, "{pending:?}");
+	}
+
+	#[test]
 	fn embeddings_follow_records_on_delete() {
 		let store = store();
 		let record = frame(1, "grounding");
-		store
-			.insert_records(std::slice::from_ref(&record))
-			.unwrap();
+		store.insert_records(std::slice::from_ref(&record)).unwrap();
 		let space = space_hash("fake", 4, 1);
 		let rowid: i64 = store
 			.conn()

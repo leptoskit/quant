@@ -40,8 +40,8 @@ use crate::client;
 use crate::config;
 use crate::config::LearnConfig;
 use crate::endpoint::ModelEndpoint;
-use crate::guard;
 use crate::ground;
+use crate::guard;
 
 /// The meta key recording the last fully processed day.
 pub const DAY_KEY: &str = "learn.extract.day";
@@ -137,8 +137,7 @@ pub async fn extract_daily(
 	let Some(extract) = &config.extract else {
 		return Ok(report);
 	};
-	let endpoint =
-		ModelEndpoint::parse(&extract.endpoint).map_err(|error| StoreError::Invalid(error))?;
+	let endpoint = ModelEndpoint::parse(&extract.endpoint).map_err(StoreError::Invalid)?;
 	let today = now.to_zoned(tz.clone()).date();
 	let today_string = today.to_string();
 	let calls_key = format!("learn.extract.calls.{today_string}");
@@ -158,33 +157,30 @@ pub async fn extract_daily(
 		}
 		let prompt = build_prompt(&batch);
 		report.calls += 1;
-		let content = match client::chat(&endpoint, &extract.model, &prompt).await {
-			Ok(content) => content,
-			Err(_) => {
-				report.unavailable += 1;
-				break;
-			}
+		let Ok(content) = client::chat(&endpoint, &extract.model, &prompt).await else {
+			report.unavailable += 1;
+			break;
 		};
 		calls_left -= 1;
-		store.set_meta(&calls_key, &(used + u32::try_from(report.calls).unwrap_or(u32::MAX)).to_string())?;
+		store.set_meta(
+			&calls_key,
+			&(used + u32::try_from(report.calls).unwrap_or(u32::MAX)).to_string(),
+		)?;
 		let before = report.stored;
-		match parse_response(&content) {
-			Ok(response) => {
-				for claim in response.claims {
-					if report.stored >= extract.claims_per_run {
-						break;
+		if let Ok(response) = parse_response(&content) {
+			for claim in response.claims {
+				if report.stored >= extract.claims_per_run {
+					break;
+				}
+				match store_claim(store, &batch, claim, tz)? {
+					StoreOutcome::Stored { rowid, statement } => {
+						report.stored += 1;
+						embed_claim(store, config, rowid, &statement).await?;
 					}
-					match store_claim(store, &batch, claim, tz)? {
-						StoreOutcome::Stored { rowid, statement } => {
-							report.stored += 1;
-							embed_claim(store, config, rowid, &statement).await?;
-						}
-						StoreOutcome::Corroborated => report.stored += 1,
-						StoreOutcome::Dropped => report.dropped += 1,
-					}
+					StoreOutcome::Corroborated => report.stored += 1,
+					StoreOutcome::Dropped => report.dropped += 1,
 				}
 			}
-			Err(_) => {}
 		}
 		if report.stored > before {
 			report.ok += 1;
@@ -235,8 +231,16 @@ fn source_records(store: &Store, now: Timestamp, tz: &TimeZone) -> Result<Vec<Re
 	.map(|name| StreamId::new(name).expect("built-in stream"));
 	let range = TimeRange::new(now - SignedDuration::from_hours(24), day.end)
 		.map_err(|error| StoreError::Invalid(error.to_string()))?;
-	let mut records = store
-		.records(&RecordQuery::new(Selector { streams: streams.to_vec(), ..Selector::default() }, range).oldest_first())?;
+	let mut records = store.records(
+		&RecordQuery::new(
+			Selector {
+				streams: streams.to_vec(),
+				..Selector::default()
+			},
+			range,
+		)
+		.oldest_first(),
+	)?;
 	records.retain(|record| {
 		record
 			.text
@@ -284,18 +288,22 @@ fn split_batches(records: Vec<Record>) -> Vec<Vec<Record>> {
 /// back.
 fn build_prompt(batch: &[Record]) -> String {
 	let mut prompt = String::from(
-		"Read the records from the owner's own Quant vault below and state what can be \
-		 observed about the person who produced them. Answer with strict JSON only and no \
-		 commentary: {\"claims\":[{\"kind\":\"preference|value|routine|fact|relationship|goal|commitment\",\"subject\":\"me\",\"topic\":\"an optional dotted key\",\"statement\":\"one natural-language sentence\",\"confidence\":0.6,\"classes\":[\"health\"],\"evidence\":[{\"record\":\"the record id\",\"quote\":\"words copied exactly from that record's text\"}]}]}. \
-		 Every quote must appear word for word in the cited record's text, and every \
-		 evidence id must be one of the records below. Say nothing about credentials, \
-		 passwords, access, grants, or money movement.\n\nRecords:\n",
+		"Read the records from the owner's own Quant vault below and state what can be observed \
+		 about the person who produced them. Answer with strict JSON only and no commentary: \
+		 {\"claims\":[{\"kind\":\"preference|value|routine|fact|relationship|goal|commitment\",\"\
+		 subject\":\"me\",\"topic\":\"an optional dotted key\",\"statement\":\"one \
+		 natural-language \
+		 sentence\",\"confidence\":0.6,\"classes\":[\"health\"],\"evidence\":[{\"record\":\"the \
+		 record id\",\"quote\":\"words copied exactly from that record's text\"}]}]}. Every quote \
+		 must appear word for word in the cited record's text, and every evidence id must be one \
+		 of the records below. Say nothing about credentials, passwords, access, grants, or money \
+		 movement.\n\nRecords:\n",
 	);
 	for record in batch {
 		let text = config::truncate(record.text.as_deref().unwrap_or_default());
-		let _ = write!(
+		let _ = writeln!(
 			prompt,
-			"id {} stream {} at {}: {text}\n",
+			"id {} stream {} at {}: {text}",
 			record.id, record.stream, record.start
 		);
 	}
@@ -343,9 +351,9 @@ fn store_claim(
 	let topic = raw_topic.as_deref().and_then(|topic| {
 		(!topic.is_empty()
 			&& topic.chars().count() <= 64
-			&& topic
-				.bytes()
-				.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'_')))
+			&& topic.bytes().all(|b| {
+				b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'_')
+			}))
 		.then(|| topic.to_owned())
 	});
 	if raw_topic.is_some() && topic.is_none() {
@@ -360,10 +368,7 @@ fn store_claim(
 			classes.push(class);
 		}
 	}
-	let confidence = model
-		.confidence
-		.unwrap_or(BASE_CONFIDENCE)
-		.clamp(0.0, 1.0);
+	let confidence = model.confidence.unwrap_or(BASE_CONFIDENCE).clamp(0.0, 1.0);
 
 	// Grounding: every evidence id must be a record in this batch, and
 	// every quote must appear in that record's text, whole words, after
@@ -404,8 +409,8 @@ fn store_claim(
 
 	// Sensitive content is always held for the owner, relationships to
 	// named people included.
-	let sensitive = guard::is_sensitive(topic.as_deref(), &statement)
-		|| kind == ClaimKind::Relationship;
+	let sensitive =
+		guard::is_sensitive(topic.as_deref(), &statement) || kind == ClaimKind::Relationship;
 
 	// Active only when grounded in at least two distinct records from
 	// different days or different streams; otherwise held.
@@ -422,16 +427,12 @@ fn store_claim(
 	let mut streams: Vec<&StreamId> = supporting.iter().map(|record| &record.stream).collect();
 	streams.sort_unstable();
 	streams.dedup();
-	let active = !sensitive
-		&& supporting.len() >= 2
-		&& (days.len() >= 2 || streams.len() >= 2);
+	let active = !sensitive && supporting.len() >= 2 && (days.len() >= 2 || streams.len() >= 2);
 
 	// Corroboration: an active claim with the same subject and topic gains
 	// the new evidence and a bounded confidence step, instead of a
 	// duplicate. Owner claims are never touched.
-	if active
-		&& let Some(topic) = &topic
-	{
+	if active && let Some(topic) = &topic {
 		let existing = store.claims(
 			&ClaimFilter::new()
 				.status(ClaimStatus::Active)
@@ -444,14 +445,16 @@ fn store_claim(
 		{
 			return store_new(
 				store,
-				ClaimStatus::Held,
-				subject,
-				kind,
-				statement,
-				Some(topic.clone()),
-				confidence.min(HELD_CONFIDENCE),
-				classes,
-				evidence,
+				ObservedClaim {
+					status: ClaimStatus::Held,
+					subject,
+					kind,
+					statement,
+					topic: Some(topic.clone()),
+					confidence: confidence.min(HELD_CONFIDENCE),
+					classes,
+					evidence,
+				},
 			);
 		}
 		if let Some(target) = existing
@@ -467,24 +470,25 @@ fn store_claim(
 
 	store_new(
 		store,
-		if active {
-			ClaimStatus::Active
-		} else {
-			ClaimStatus::Held
+		ObservedClaim {
+			status: if active {
+				ClaimStatus::Active
+			} else {
+				ClaimStatus::Held
+			},
+			subject,
+			kind,
+			statement,
+			topic,
+			confidence,
+			classes,
+			evidence,
 		},
-		subject,
-		kind,
-		statement,
-		topic,
-		confidence,
-		classes,
-		evidence,
 	)
 }
 
-/// Insert a fully checked claim with authority Observed.
-fn store_new(
-	store: &Store,
+/// One fully checked claim, ready to store with authority Observed.
+struct ObservedClaim {
 	status: ClaimStatus,
 	subject: String,
 	kind: ClaimKind,
@@ -493,7 +497,20 @@ fn store_new(
 	confidence: f32,
 	classes: Vec<Class>,
 	evidence: Vec<RecordId>,
-) -> Result<StoreOutcome, StoreError> {
+}
+
+/// Insert a fully checked claim with authority Observed.
+fn store_new(store: &Store, observed: ObservedClaim) -> Result<StoreOutcome, StoreError> {
+	let ObservedClaim {
+		status,
+		subject,
+		kind,
+		statement,
+		topic,
+		confidence,
+		classes,
+		evidence,
+	} = observed;
 	let now = Timestamp::now();
 	let claim = Claim {
 		id: ClaimId::new(),
@@ -535,8 +552,7 @@ async fn embed_claim(
 	let Some(space) = config.space() else {
 		return Ok(());
 	};
-	let endpoint =
-		ModelEndpoint::parse(&embed.endpoint).map_err(|error| StoreError::Invalid(error))?;
+	let endpoint = ModelEndpoint::parse(&embed.endpoint).map_err(StoreError::Invalid)?;
 	let Ok(mut vectors) = client::embed(&endpoint, &embed.model, &[statement]).await else {
 		return Ok(());
 	};
@@ -556,7 +572,8 @@ mod tests {
 
 	#[test]
 	fn responses_parse_with_or_without_fences() {
-		let raw = "Here you go:\n```json\n{\"claims\":[{\"statement\":\"ok\",\"evidence\":[]}]}\n```";
+		let raw =
+			"Here you go:\n```json\n{\"claims\":[{\"statement\":\"ok\",\"evidence\":[]}]}\n```";
 		let response = parse_response(raw).unwrap();
 		assert_eq!(response.claims.len(), 1);
 		assert!(parse_response("no json here").is_err());
@@ -565,8 +582,7 @@ mod tests {
 	#[test]
 	fn batches_fit_the_budget_and_keep_order() {
 		let record = |text: &str| {
-			Record::new("memory.note".parse().unwrap(), quant_core::DeviceId::new())
-				.with_text(text)
+			Record::new("memory.note".parse().unwrap(), quant_core::DeviceId::new()).with_text(text)
 		};
 		let small = record("short");
 		let batches = split_batches(vec![small.clone(), small]);
@@ -582,7 +598,7 @@ mod tests {
 	fn prompts_carry_the_records_and_the_shape() {
 		let record = Record::new("memory.note".parse().unwrap(), quant_core::DeviceId::new())
 			.with_text("espresso at 14:02");
-		let prompt = build_prompt(&[record.clone()]);
+		let prompt = build_prompt(std::slice::from_ref(&record));
 		assert!(prompt.contains("espresso at 14:02"), "{prompt}");
 		assert!(prompt.contains(&record.id.to_string()), "{prompt}");
 		assert!(prompt.contains("\"evidence\""));

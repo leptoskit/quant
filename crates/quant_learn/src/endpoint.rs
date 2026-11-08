@@ -24,11 +24,7 @@ impl ModelEndpoint {
 	/// address, a path or query, a port that is not a number — is refused.
 	pub fn parse(s: &str) -> Result<Self, String> {
 		let rest = s.strip_prefix("http://").unwrap_or(s);
-		if rest.is_empty()
-			|| rest
-				.contains(['/', '?', '#', ' '])
-			|| s.starts_with("https://")
-		{
+		if rest.is_empty() || rest.contains(['/', '?', '#', ' ']) || s.starts_with("https://") {
 			return Err(format!(
 				"the model endpoint `{s}` is not a plain http:// loopback address"
 			));
@@ -41,9 +37,7 @@ impl ModelEndpoint {
 			(host, port)
 		} else {
 			match rest.rsplit_once(':') {
-				Some((host, port)) if !host.contains(':') && !port.is_empty() => {
-					(host, Some(port))
-				}
+				Some((host, port)) if !host.contains(':') && !port.is_empty() => (host, Some(port)),
 				_ => (rest, None),
 			}
 		};
@@ -60,9 +54,10 @@ impl ModelEndpoint {
 			));
 		}
 		let port = match port {
-			Some(port) => port
-				.parse::<u16>()
-				.map_err(|_| format!("bad port in `{s}`"))?,
+			Some(port) => {
+				port.parse::<u16>()
+					.map_err(|_| format!("bad port in `{s}`"))?
+			}
 			None => 80,
 		};
 		Ok(Self { addr, port })
