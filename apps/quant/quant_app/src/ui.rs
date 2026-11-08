@@ -913,9 +913,11 @@ pub(crate) mod touch_id {
 	}
 
 	/// Unlock with the Secure Enclave key. On `Cancelled`, `LockedOut`, or
-	/// `Unavailable` the passphrase field is left in place; on `Invalidated`
-	/// or a daemon refusal the key and settings are cleared and setup starts
-	/// over.
+	/// `Unavailable` the passphrase field is left in place, and so it is when
+	/// the daemon refuses: a lapsed challenge or a busy daemon is no reason
+	/// to throw the key away. Only `Invalidated` or a missing key clears it
+	/// and starts setup over; a device revoked elsewhere is forgotten the
+	/// next time the window loads the device list.
 	pub async fn unlock(state: State) {
 		let Some(device) = state.snapshot.get().touch_id.device_id.clone() else {
 			return;
@@ -942,8 +944,6 @@ pub(crate) mod touch_id {
 				})
 				.await;
 				if !reply.ok {
-					let _ = keys.delete(ALIAS).await;
-					state.send(Command::TouchIdOff);
 					state.problem.set(reply.error);
 				}
 			}

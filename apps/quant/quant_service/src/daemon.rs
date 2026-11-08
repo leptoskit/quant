@@ -632,7 +632,6 @@ impl Worker {
 		let device: OwnerDeviceId = device
 			.parse()
 			.map_err(|_| "No such Touch ID device".to_owned())?;
-		let had_key = self.touch_id.is_some();
 		self.secure_socket()?;
 		let result = OwnerSession::open_with_device_signature(
 			self.config.endpoint.clone(),
@@ -645,14 +644,14 @@ impl Worker {
 			Ok(session) => session,
 			Err(error) => {
 				let text = match error.code() {
-					// The daemon refused the device: it was revoked, the
-					// challenge lapsed, or the signature was wrong. With a key
-					// still enrolled here, treat that as needing setup again.
-					Some("unauthenticated") if had_key => {
-						self.forget_touch_id();
-						"Touch ID needs setting up again".to_owned()
+					// The daemon refused: the challenge lapsed while the
+					// prompt was open, the device was revoked, or the
+					// signature was wrong — it does not say which. Keep the
+					// key; a revoked device is forgotten when the device list
+					// next loads.
+					Some("unauthenticated") => {
+						"Touch ID didn't unlock Quant; try again or use your passphrase".to_owned()
 					}
-					Some("unauthenticated") => "This Mac's Touch ID is not enrolled".to_owned(),
 					_ => problem(&error),
 				};
 				return Err(text);
