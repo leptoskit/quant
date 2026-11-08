@@ -78,16 +78,6 @@ mod other {
 
 	/// The guest's own screen is the window.
 	pub fn open_window() {}
-
-	/// Not here.
-	pub fn set_opens_at_login(_: bool) -> Option<bool> {
-		None
-	}
-
-	/// Not here.
-	pub fn opens_at_login() -> Option<bool> {
-		None
-	}
 }
 
 #[cfg(target_os = "macos")]
@@ -467,59 +457,6 @@ mod macos {
 		if let Some(main) = MainThreadMarker::new() {
 			NSApplication::sharedApplication(main).terminate(None);
 		}
-	}
-
-	/// Whether `SMAppService` is available. objc2 finds classes at run time,
-	/// and the host links only the frameworks Swift imports, so load
-	/// `ServiceManagement` here before asking it anything.
-	fn service_management() -> bool {
-		use objc2::runtime::AnyClass;
-		use objc2_foundation::NSBundle;
-		use objc2_foundation::NSString;
-
-		if AnyClass::get(c"SMAppService").is_none() {
-			let path = NSString::from_str("/System/Library/Frameworks/ServiceManagement.framework");
-			if let Some(bundle) = NSBundle::bundleWithPath(&path) {
-				// SAFETY: loading a system framework runs only its own
-				// initialisers.
-				unsafe { bundle.load() };
-			}
-		}
-		AnyClass::get(c"SMAppService").is_some()
-	}
-
-	/// Open at login, or stop, through `SMAppService.mainApp`. Returns the
-	/// state afterwards.
-	pub fn set_opens_at_login(enabled: bool) -> Option<bool> {
-		use objc2_service_management::SMAppService;
-
-		if !service_management() {
-			return None;
-		}
-		// SAFETY: plain Objective-C calls on the shared main-app service.
-		let service = unsafe { SMAppService::mainAppService() };
-		let result = if enabled {
-			unsafe { service.registerAndReturnError() }
-		} else {
-			unsafe { service.unregisterAndReturnError() }
-		};
-		if let Err(error) = result {
-			eprintln!("quant: open at login: {}", error.localizedDescription());
-		}
-		opens_at_login()
-	}
-
-	/// Whether Quant opens at login.
-	pub fn opens_at_login() -> Option<bool> {
-		use objc2_service_management::SMAppService;
-		use objc2_service_management::SMAppServiceStatus;
-
-		if !service_management() {
-			return None;
-		}
-		// SAFETY: plain Objective-C calls on the shared main-app service.
-		let status = unsafe { SMAppService::mainAppService().status() };
-		Some(status == SMAppServiceStatus::Enabled)
 	}
 
 	#[cfg(test)]

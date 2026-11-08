@@ -25,6 +25,7 @@ use quant_model::Command;
 use quant_model::GrantRow;
 use quant_model::Link;
 use quant_model::Moment;
+use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
 use quant_model::ScopeChoice;
@@ -40,18 +41,27 @@ pub enum Tab {
 	Moments,
 	/// Pending pairings and live grants.
 	Agents,
+	/// Owner devices: Touch ID and enrolled phones.
+	Devices,
 	/// The audit log.
 	Audit,
 }
 
 impl Tab {
-	const ALL: [Tab; 4] = [Tab::Status, Tab::Moments, Tab::Agents, Tab::Audit];
+	const ALL: [Tab; 5] = [
+		Tab::Status,
+		Tab::Moments,
+		Tab::Agents,
+		Tab::Devices,
+		Tab::Audit,
+	];
 
 	fn label(self) -> &'static str {
 		match self {
 			Tab::Status => "Status",
 			Tab::Moments => "Saved moments",
 			Tab::Agents => "Agents",
+			Tab::Devices => "Devices",
 			Tab::Audit => "Audit",
 		}
 	}
@@ -67,6 +77,15 @@ pub struct Approval {
 
 /// Sends a command to the service.
 pub type Send = Arc<dyn Fn(Command) + std::marker::Send + Sync>;
+
+/// Whether this Mac can set up Touch ID, as `device-keys` reports it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TouchIdAvailability {
+	/// Whether there is a Secure Enclave with enrolled biometrics.
+	pub available: bool,
+	/// Why not, for the window to show.
+	pub reason: Option<String>,
+}
 
 /// The window's state.
 #[derive(Clone)]
@@ -85,6 +104,8 @@ pub struct State {
 	pub approvals: RwSignal<Vec<Approval>>,
 	/// Why the last command failed.
 	pub problem: RwSignal<Option<String>>,
+	/// This Mac's Touch ID hardware and enrollment.
+	pub touch_id: RwSignal<TouchIdAvailability>,
 	send: Send,
 }
 
@@ -99,6 +120,7 @@ impl State {
 			title: RwSignal::new(String::new()),
 			approvals: RwSignal::new(Vec::new()),
 			problem: RwSignal::new(None),
+			touch_id: RwSignal::new(TouchIdAvailability::default()),
 			send,
 		}
 	}
@@ -198,8 +220,13 @@ fn tabs(state: &State) -> Element {
 
 fn body(state: &State) -> Element {
 	let tab = state.tab;
-	let (status, moments, agents, audit) =
-		(state.clone(), state.clone(), state.clone(), state.clone());
+	let (status, moments, agents, devices, audit) = (
+		state.clone(),
+		state.clone(),
+		state.clone(),
+		state.clone(),
+		state.clone(),
+	);
 	View()
 		.class("gap-3")
 		.child(Show(
@@ -213,6 +240,10 @@ fn body(state: &State) -> Element {
 		.child(Show(
 			move || tab.get() == Tab::Agents,
 			move || agents_tab(&agents),
+		))
+		.child(Show(
+			move || tab.get() == Tab::Devices,
+			move || devices_tab(&devices),
 		))
 		.child(Show(
 			move || tab.get() == Tab::Audit,
@@ -650,6 +681,119 @@ fn grant_card(state: &State, grant: &GrantRow) -> Element {
 		.child(Text(format!("Sees back {}{expires}", grant.lookback)).class(MUTED))
 }
 
+fn devices_tab(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let touch_id = state.touch_id;
+	let state = state.clone();
+	For(
+		move || {
+			let s = snapshot.get();
+			vec![(s.owner, s.touch_id.device_id, touch_id.get())]
+		},
+		Clone::clone,
+		move |(owner, device_id, availability)| {
+			match owner {
+				Some(owner) => devices_view(&state, &owner, device_id.as_deref(), &availability),
+				None => locked("Unlock to manage owner devices."),
+			}
+		},
+	)
+}
+
+fn devices_view(
+	state: &State,
+	owner: &OwnerView,
+	device_id: Option<&str>,
+	availability: &TouchIdAvailability,
+) -> Element {
+	View()
+		.class("gap-3")
+		.child(touch_id_card(state, owner, device_id, availability))
+		.child(Text("Owner devices").class(HEADING))
+		.children(
+			owner
+				.devices
+				.iter()
+				.map(|device| device_card(state, device, device_id == Some(device.id.as_str()))),
+		)
+		.children(
+			owner
+				.devices
+				.is_empty()
+				.then(|| Text("No owner devices enrolled.").class(MUTED)),
+		)
+}
+
+fn touch_id_card(
+	state: &State,
+	owner: &OwnerView,
+	device_id: Option<&str>,
+	availability: &TouchIdAvailability,
+) -> Element {
+	let state = state.clone();
+	let set_up = device_id.is_some();
+	let label = owner
+		.devices
+		.iter()
+		.find(|device| device_id == Some(device.id.as_str()))
+		.map(|device| device.label.clone());
+	let mut card = View().class(CARD).child(Text("Touch ID").class(HEADING));
+	if set_up {
+		let shown = label.unwrap_or_else(|| "this Mac".to_owned());
+		card = card
+			.child(
+				Text(format!("Touch ID is on for {shown}."))
+					.class(BODY)
+					.test_id("touch-id-on"),
+			)
+			.child(
+				View().class("flex-row gap-2").child(
+					Button("Turn off")
+						.test_id("touch-id-off")
+						.on_press(move || turn_off_touch_id(&state)),
+				),
+			);
+	} else if availability.available && owner.passphrase_session {
+		card = card
+			.child(Text("Unlock with a fingerprint instead of the passphrase.").class(MUTED))
+			.child(
+				Button("Set up Touch ID")
+					.test_id("touch-id-set-up")
+					.on_press(move || start_set_up_touch_id(&state)),
+			);
+	} else if let Some(reason) = &availability.reason {
+		card = card.child(Text(reason).class(MUTED).test_id("touch-id-unavailable"));
+	} else if !owner.passphrase_session {
+		card = card.child(Text("Unlock with your passphrase to set up Touch ID.").class(MUTED));
+	} else {
+		card = card.child(Text("Touch ID isn't available on this Mac.").class(MUTED));
+	}
+	card
+}
+
+fn device_card(state: &State, device: &OwnerDeviceRow, this_mac: bool) -> Element {
+	let state = state.clone();
+	let id = device.id.clone();
+	let last_used = device.last_used.as_deref().map_or_else(
+		|| "never used".to_owned(),
+		|when| format!("last used {when}"),
+	);
+	let is_this = this_mac;
+	View()
+		.class(CARD)
+		.child(
+			View()
+				.class("flex-row items-center justify-between gap-2")
+				.child(Text(&device.label).class(HEADING))
+				.child(
+					Button("Revoke")
+						.test_id(format!("revoke-device-{id}"))
+						.on_press(move || revoke_device(&state, &id, is_this)),
+				),
+		)
+		.child(Text(format!("fingerprint {} · {last_used}", device.fingerprint)).class(MUTED))
+}
+
 fn audit_tab(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	For(
@@ -720,6 +864,198 @@ fn locked(text: &str) -> Element {
 	View().class(CARD).child(Text(text).class(MUTED))
 }
 
+/// Touch ID flows that need the native guest's Secure Enclave key. They run
+/// only on the native guest; there is no software-key fallback anywhere.
+#[cfg(all(target_arch = "wasm32", feature = "native"))]
+pub(crate) mod touch_id {
+	use leptoskit::prelude::Get;
+	use leptoskit::prelude::Set;
+	use leptoskit_plugin_device_keys::Biometry;
+	use leptoskit_plugin_device_keys::Hardware;
+	use leptoskit_plugin_device_keys::KeyError;
+	use leptoskit_plugin_device_keys::Policy;
+	use leptoskit_plugin_device_keys::guest::DeviceKeys;
+	use quant_model::Command;
+	use quant_model::ReplyData;
+
+	use super::State;
+	use super::TouchIdAvailability;
+
+	/// The Secure Enclave key alias.
+	const ALIAS: &str = "quant-owner";
+
+	/// Check the hardware and enrollment, and record it on `state`.
+	pub async fn check(state: State) {
+		let Ok(keys) = DeviceKeys::new() else {
+			state.touch_id.set(TouchIdAvailability {
+				available: false,
+				reason: Some("Touch ID is not available on this Mac.".to_owned()),
+			});
+			return;
+		};
+		let available = keys.available().await;
+		let (ok, reason) = if available.hardware != Hardware::SecureEnclave {
+			(false, Some("This Mac has no Secure Enclave.".to_owned()))
+		} else if available.biometry == Biometry::None {
+			(false, Some("This Mac has no Touch ID sensor.".to_owned()))
+		} else if !available.enrolled {
+			(
+				false,
+				Some("Add a fingerprint in System Settings, then set up Touch ID.".to_owned()),
+			)
+		} else {
+			(true, None)
+		};
+		state.touch_id.set(TouchIdAvailability {
+			available: ok,
+			reason,
+		});
+	}
+
+	/// Unlock with the Secure Enclave key. On `Cancelled`, `LockedOut`, or
+	/// `Unavailable` the passphrase field is left in place; on `Invalidated`
+	/// or a daemon refusal the key and settings are cleared and setup starts
+	/// over.
+	pub async fn unlock(state: State) {
+		let Some(device) = state.snapshot.get().touch_id.device_id.clone() else {
+			return;
+		};
+		let Ok(keys) = DeviceKeys::new() else {
+			state
+				.problem
+				.set(Some("Touch ID is not available.".to_owned()));
+			return;
+		};
+		let reply = crate::bridge::send(&Command::TouchIdChallenge).await;
+		let Some(ReplyData::TouchIdChallenge { challenge, message }) =
+			reply.ok.then(|| reply.data).flatten()
+		else {
+			state.problem.set(reply.error);
+			return;
+		};
+		match keys.sign(ALIAS, &message, "Unlock Quant").await {
+			Ok(signature) => {
+				let reply = crate::bridge::send(&Command::UnlockWithDevice {
+					device,
+					challenge,
+					signature: signature.der().to_vec(),
+				})
+				.await;
+				if !reply.ok {
+					let _ = keys.delete(ALIAS).await;
+					state.send(Command::TouchIdOff);
+					state.problem.set(reply.error);
+				}
+			}
+			Err(KeyError::Cancelled) => {
+				state
+					.problem
+					.set(Some("Touch ID cancelled; use your passphrase.".to_owned()));
+			}
+			Err(KeyError::LockedOut) => {
+				state.problem.set(Some(
+					"Touch ID is locked out; use your passphrase.".to_owned(),
+				));
+			}
+			Err(KeyError::Unavailable) | Err(KeyError::NotEnrolled) => {
+				state.problem.set(Some(
+					"Touch ID is unavailable; use your passphrase.".to_owned(),
+				));
+			}
+			Err(KeyError::Invalidated) => {
+				let _ = keys.delete(ALIAS).await;
+				state.send(Command::TouchIdOff);
+				state.problem.set(Some(
+					"Your fingerprints changed; set up Touch ID again.".to_owned(),
+				));
+			}
+			Err(KeyError::NotFound) => {
+				state.send(Command::TouchIdOff);
+				state
+					.problem
+					.set(Some("Touch ID needs setting up again.".to_owned()));
+			}
+			Err(KeyError::AlreadyExists) | Err(KeyError::Failed) => {
+				state
+					.problem
+					.set(Some("Touch ID failed; use your passphrase.".to_owned()));
+			}
+		}
+	}
+
+	/// Create the Secure Enclave key and enrol its public half. The window
+	/// offers this only with a passphrase session and enrolled biometrics.
+	pub async fn set_up(state: State) {
+		let Ok(keys) = DeviceKeys::new() else {
+			state
+				.problem
+				.set(Some("Touch ID is not available.".to_owned()));
+			return;
+		};
+		// An earlier attempt may have left a key; start clean.
+		let _ = keys.delete(ALIAS).await;
+		match keys.generate(ALIAS, Policy::Biometry).await {
+			Ok(public) => {
+				let reply = crate::bridge::send(&Command::EnrolTouchId {
+					public_key: public.sec1().to_vec(),
+				})
+				.await;
+				if !reply.ok {
+					state.problem.set(reply.error);
+				}
+			}
+			Err(error) => {
+				state.problem.set(Some(match error {
+					KeyError::Cancelled => "Touch ID cancelled.".to_owned(),
+					KeyError::LockedOut => "Touch ID is locked out.".to_owned(),
+					KeyError::NotEnrolled => {
+						"Add a fingerprint in System Settings first.".to_owned()
+					}
+					KeyError::Unavailable => "Touch ID is not available.".to_owned(),
+					_ => "Touch ID could not be set up.".to_owned(),
+				}));
+			}
+		}
+	}
+
+	/// Delete the Secure Enclave key, best effort.
+	pub async fn delete_key() {
+		if let Ok(keys) = DeviceKeys::new() {
+			let _ = keys.delete(ALIAS).await;
+		}
+	}
+}
+
+fn start_unlock_touch_id(state: &State) {
+	#[cfg(all(target_arch = "wasm32", feature = "native"))]
+	leptoskit::guest::spawn(touch_id::unlock(state.clone()));
+	#[cfg(not(all(target_arch = "wasm32", feature = "native")))]
+	let _ = state;
+}
+
+fn start_set_up_touch_id(state: &State) {
+	#[cfg(all(target_arch = "wasm32", feature = "native"))]
+	leptoskit::guest::spawn(touch_id::set_up(state.clone()));
+	#[cfg(not(all(target_arch = "wasm32", feature = "native")))]
+	let _ = state;
+}
+
+fn turn_off_touch_id(state: &State) {
+	state.send(Command::TouchIdOff);
+	#[cfg(all(target_arch = "wasm32", feature = "native"))]
+	leptoskit::guest::spawn(touch_id::delete_key());
+}
+
+fn revoke_device(state: &State, id: &str, this_mac: bool) {
+	state.send(Command::RevokeDevice {
+		device: id.to_owned(),
+	});
+	if this_mac {
+		#[cfg(all(target_arch = "wasm32", feature = "native"))]
+		leptoskit::guest::spawn(touch_id::delete_key());
+	}
+}
+
 fn owner_bar(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let (unlock, lock) = (state.clone(), state.clone());
@@ -742,6 +1078,7 @@ fn unlock_form(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let passphrase = state.passphrase;
 	let submit = state.clone();
+	let touch = state.clone();
 	View()
 		.class("gap-2")
 		.child(
@@ -755,6 +1092,17 @@ fn unlock_form(state: &State) -> Element {
 			.class(MUTED)
 			.test_id("unlock-reason"),
 		)
+		.child(Show(
+			move || snapshot.get().touch_id.device_id.is_some(),
+			move || {
+				let touch = touch.clone();
+				View().class("flex-row items-center gap-2").child(
+					Button("Unlock with Touch ID")
+						.test_id("unlock-touch-id")
+						.on_press(move || start_unlock_touch_id(&touch)),
+				)
+			},
+		))
 		.child(
 			View()
 				.class("flex-row items-center gap-2")
@@ -885,6 +1233,13 @@ mod tests {
 					outcome: "allowed".into(),
 				}],
 				chain_ok: Some(true),
+				devices: vec![OwnerDeviceRow {
+					id: "owd-1".into(),
+					label: "MacBook Touch ID".into(),
+					fingerprint: "a1b2c3d4e5f6a7b8".into(),
+					last_used: Some("Today 13:30".into()),
+				}],
+				passphrase_session: true,
 			}),
 			..ready()
 		}
@@ -993,5 +1348,64 @@ mod tests {
 			.unwrap();
 		tester.get_by_text("grant.create c1").unwrap();
 		tester.get_by_text("Unlocked until 15:42").unwrap();
+	}
+
+	#[test]
+	fn touch_id_unlock_appears_once_set_up() {
+		let mut snapshot = ready();
+		snapshot.touch_id.device_id = Some("owd-1".into());
+		let (tester, ..) = harness(snapshot);
+		tester.get_by_test_id("unlock-touch-id").unwrap();
+	}
+
+	#[test]
+	fn devices_offer_set_up_and_list_devices() {
+		let (mut tester, state, ..) = harness(unlocked());
+		state.touch_id.set(TouchIdAvailability {
+			available: true,
+			reason: None,
+		});
+		tester.tap(&Finder::test_id("tab-Devices")).unwrap();
+		tester.get_by_text("Set up Touch ID").unwrap();
+		tester.get_by_text("MacBook Touch ID").unwrap();
+		tester
+			.get_by_text("fingerprint a1b2c3d4e5f6a7b8 · last used Today 13:30")
+			.unwrap();
+	}
+
+	#[test]
+	fn touch_id_turn_off_and_revoke_send_commands() {
+		let mut snapshot = unlocked();
+		snapshot.touch_id.device_id = Some("owd-1".into());
+		let (mut tester, state, sent) = harness(snapshot);
+		state.touch_id.set(TouchIdAvailability {
+			available: true,
+			reason: None,
+		});
+		tester.tap(&Finder::test_id("tab-Devices")).unwrap();
+		tester.tap(&Finder::test_id("touch-id-off")).unwrap();
+		tester.tap(&Finder::test_id("revoke-device-owd-1")).unwrap();
+		assert_eq!(
+			sent.lock().unwrap().as_slice(),
+			[
+				Command::TouchIdOff,
+				Command::RevokeDevice {
+					device: "owd-1".into()
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn touch_id_without_hardware_shows_why() {
+		let (mut tester, state, ..) = harness(unlocked());
+		state.touch_id.set(TouchIdAvailability {
+			available: false,
+			reason: Some("This Mac has no Touch ID sensor.".into()),
+		});
+		tester.tap(&Finder::test_id("tab-Devices")).unwrap();
+		tester
+			.get_by_text("This Mac has no Touch ID sensor.")
+			.unwrap();
 	}
 }

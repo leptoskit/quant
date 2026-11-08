@@ -116,6 +116,7 @@ impl Service {
 						&Reply {
 							ok: true,
 							error: None,
+							data: None,
 						},
 					)?;
 					Ok(true)
@@ -158,10 +159,25 @@ impl Service {
 				return None;
 			}
 			Command::OpenAtLogin { enabled } => {
-				let now = crate::desktop::set_opens_at_login(enabled);
+				let now = crate::autostart::set_registered(enabled);
 				self.core.shared.update(|s| s.opens_at_login = now);
 				return None;
 			}
+			Command::TouchIdChallenge => Job::TouchIdChallenge,
+			Command::UnlockWithDevice {
+				device,
+				challenge,
+				signature,
+			} => {
+				Job::UnlockWithDevice {
+					device,
+					challenge,
+					signature,
+				}
+			}
+			Command::EnrolTouchId { public_key } => Job::EnrolTouchId { public_key },
+			Command::TouchIdOff => Job::TouchIdOff,
+			Command::RevokeDevice { device } => Job::RevokeDevice(device),
 		})
 	}
 

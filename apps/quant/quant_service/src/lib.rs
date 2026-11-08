@@ -11,6 +11,7 @@
 //! first opens. The guest's leptoskit service, from [`from_app_dirs`],
 //! attaches to that core; on a host without a menu bar it starts the core.
 
+mod autostart;
 mod daemon;
 mod desktop;
 mod playback;

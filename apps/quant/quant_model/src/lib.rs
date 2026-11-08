@@ -49,6 +49,16 @@ pub struct Snapshot {
 	pub notice: Option<Notice>,
 	/// Whether Quant opens at login, when the system can say.
 	pub opens_at_login: Option<bool>,
+	/// Touch ID on this Mac.
+	pub touch_id: TouchId,
+}
+
+/// Touch ID on this Mac: a hardware key in the Secure Enclave that signs the
+/// unlock challenge after a fingerprint check.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TouchId {
+	/// This Mac's enrolled owner device id, when Touch ID is set up.
+	pub device_id: Option<String>,
 }
 
 /// How this app stands with the daemon.
@@ -149,6 +159,25 @@ pub struct OwnerView {
 	pub audit: Vec<AuditRow>,
 	/// Whether the audit log's hash chain verifies.
 	pub chain_ok: Option<bool>,
+	/// Enrolled owner devices (this Mac's Touch ID, phones, …).
+	pub devices: Vec<OwnerDeviceRow>,
+	/// Whether the session was opened with the passphrase, so it may enrol a
+	/// new device.
+	pub passphrase_session: bool,
+}
+
+/// An enrolled owner device: a hardware key that unlocks owner sessions after
+/// a biometric check.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OwnerDeviceRow {
+	/// Its id.
+	pub id: String,
+	/// Its label, such as "`MacBook` Touch ID".
+	pub label: String,
+	/// A short hash of its public key, to tell devices apart at a glance.
+	pub fingerprint: String,
+	/// When it last opened a session, such as "Today 14:03".
+	pub last_used: Option<String>,
 }
 
 /// A client waiting for the owner.
@@ -276,6 +305,48 @@ pub enum Command {
 		/// Whether to.
 		enabled: bool,
 	},
+	/// Fetch a challenge for this Mac's Touch ID key to sign. Answers a
+	/// [`Reply`] whose data carries the challenge and the message.
+	TouchIdChallenge,
+	/// Open an owner session with an enrolled device's signature.
+	UnlockWithDevice {
+		/// The enrolled device id.
+		device: String,
+		/// The challenge the signature answers, base64, as the daemon gave it.
+		challenge: String,
+		/// The ECDSA P-256/SHA-256 signature over the unlock message, DER.
+		signature: Vec<u8>,
+	},
+	/// Enrol this Mac's Touch ID key as an owner device. The key is created in
+	/// the Secure Enclave and signed through the biometric prompt; only its
+	/// public half leaves the machine.
+	EnrolTouchId {
+		/// Its P-256 public key: an uncompressed SEC1 point (65 bytes).
+		public_key: Vec<u8>,
+	},
+	/// Turn off Touch ID on this Mac: revoke the device on the daemon and
+	/// forget it here.
+	TouchIdOff,
+	/// Revoke an enrolled owner device.
+	RevokeDevice {
+		/// Its id.
+		device: String,
+	},
+}
+
+/// Extra data a [`Command`]'s [`Reply`] can carry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReplyData {
+	/// A Touch ID unlock challenge: the bytes the window's key signs, and the
+	/// challenge to send back with the signature.
+	TouchIdChallenge {
+		/// The daemon's challenge, base64, to send back unchanged.
+		challenge: String,
+		/// `quant_api::owner_unlock_message(vault id, challenge)`: the exact
+		/// bytes to sign.
+		message: Vec<u8>,
+	},
 }
 
 /// The answer to a [`Command`]. Details arrive in the next [`Snapshot`].
@@ -285,6 +356,8 @@ pub struct Reply {
 	pub ok: bool,
 	/// What went wrong.
 	pub error: Option<String>,
+	/// Extra data for commands that answer more than success.
+	pub data: Option<ReplyData>,
 }
 
 /// How far back an approved client may see.
@@ -435,5 +508,19 @@ mod tests {
 				.ends_with("?Privacy_ScreenCapture")
 		);
 		assert!(Settings::Microphone.url().ends_with("?Privacy_Microphone"));
+	}
+
+	#[test]
+	fn reply_data_round_trips_as_tagged_json() {
+		let data = ReplyData::TouchIdChallenge {
+			challenge: "Q0hBTExFTkdF".into(),
+			message: vec![1, 2, 3],
+		};
+		let json = serde_json::to_string(&data).unwrap();
+		assert_eq!(
+			json,
+			r#"{"kind":"touch_id_challenge","challenge":"Q0hBTExFTkdF","message":[1,2,3]}"#
+		);
+		assert_eq!(serde_json::from_str::<ReplyData>(&json).unwrap(), data);
 	}
 }

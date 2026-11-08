@@ -34,6 +34,7 @@ pub async fn send(command: &Command) -> Reply {
 		Reply {
 			ok: false,
 			error: Some(error),
+			data: None,
 		}
 	})
 }
@@ -59,5 +60,6 @@ pub async fn send(_command: &Command) -> Reply {
 	Reply {
 		ok: false,
 		error: Some("no native service".to_owned()),
+		data: None,
 	}
 }

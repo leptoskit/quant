@@ -55,6 +55,7 @@ mod entry {
 		let mut state = State::new(send);
 		state.problem = problem;
 		leptoskit::guest::spawn(follow(state.clone()));
+		leptoskit::guest::spawn(ui::touch_id::check(state.clone()));
 		leptoskit::guest::mount(move || ui::screen(&state));
 	}
 
