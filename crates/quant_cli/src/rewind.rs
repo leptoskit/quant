@@ -119,6 +119,7 @@ pub async fn run(cx: &Ctx, action: RewindAction) -> Result<()> {
 					search: None,
 					limit: Some(200),
 					oldest_first: false,
+				mode: None,
 				})
 				.await?;
 			if clips.records.is_empty() {
@@ -181,6 +182,7 @@ pub async fn run(cx: &Ctx, action: RewindAction) -> Result<()> {
 					search: None,
 					limit: Some(500),
 					oldest_first: false,
+				mode: None,
 				})
 				.await?;
 			let now = Timestamp::now();
@@ -238,6 +240,7 @@ async fn export(cx: &Ctx, clip: &str) -> Result<Vec<u8>> {
 			search: None,
 			limit: Some(500),
 			oldest_first: false,
+				mode: None,
 		})
 		.await?;
 	let record = found

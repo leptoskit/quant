@@ -24,6 +24,7 @@ quant_capture_macos = { workspace = true }
 quant_core = { workspace = true }
 quant_derive = { workspace = true }
 quant_relay = { workspace = true, default-features = false, features = ["dial"] }
+quant_learn = { workspace = true }
 quant_store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

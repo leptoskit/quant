@@ -11,6 +11,7 @@ pub mod capture;
 mod claims;
 mod error;
 mod ingest;
+pub mod learning;
 mod memory;
 mod owner;
 pub mod query;
@@ -71,6 +72,14 @@ pub fn router(state: Arc<State>) -> Router {
 			get(owner::capture_config).post(owner::set_capture_config),
 		)
 		.route(routes::OWNER_CAPTURE_PAUSE, post(owner::pause_capture))
+		.route(
+			routes::OWNER_LEARN,
+			get(learning::learn_config).post(learning::set_learn_config),
+		)
+		.route(
+			&format!("{}/off", routes::OWNER_LEARN),
+			post(learning::learn_off),
+		)
 		.route(routes::MEMORY_PROFILE, get(memory::profile))
 		.route(routes::MEMORY_PROPOSALS, post(memory::propose))
 		.route(routes::CONTEXT, post(memory::context))
@@ -108,7 +117,10 @@ pub fn spawn_maintenance(state: Arc<State>) -> tokio::task::JoinHandle<()> {
 }
 
 /// Keep derived memory (posture spans, daily summaries) up to date, every
-/// ten minutes. The configuration lives in the vault under `derive.config`.
+/// ten minutes, then run the learning jobs — the embedding backfill and,
+/// once a day after the day's summary exists, claim extraction. The
+/// derivation configuration lives in the vault under `derive.config`, the
+/// learning settings under `learn.config`.
 pub fn spawn_derivation(state: Arc<State>) -> tokio::task::JoinHandle<()> {
 	tokio::spawn(async move {
 		let mut tick = tokio::time::interval(Duration::from_mins(10));
@@ -133,6 +145,10 @@ pub fn spawn_derivation(state: Arc<State>) -> tokio::task::JoinHandle<()> {
 				Ok(Ok(report)) => tracing::debug!(?report, "derived"),
 				Ok(Err(error)) => tracing::warn!(%error, "derivation failed"),
 				Err(error) => tracing::warn!(%error, "derivation panicked"),
+			}
+			let learning = Arc::clone(&state);
+			if let Err(error) = crate::learning::tick(&learning).await {
+				tracing::warn!(%error, "learning failed");
 			}
 		}
 	})

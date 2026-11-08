@@ -360,6 +360,43 @@ impl Store {
 		}
 	}
 
+	/// Change a claim's confidence, touching its `updated_at`.
+	pub fn set_claim_confidence(&self, id: ClaimId, confidence: f32) -> Result<()> {
+		let changed = self.conn().execute(
+			"UPDATE claims SET confidence = ?2, updated_at_us = ?3 WHERE id = ?1",
+			params![
+				id.0.as_bytes().as_slice(),
+				confidence,
+				micros(Timestamp::now())
+			],
+		)?;
+		if changed == 0 {
+			Err(StoreError::NotFound)
+		} else {
+			Ok(())
+		}
+	}
+
+	/// Add evidence records to a claim, ignoring ones it already cites.
+	pub fn add_claim_evidence(&self, id: ClaimId, evidence: &[RecordId]) -> Result<()> {
+		let mut conn = self.conn();
+		let tx = conn.transaction()?;
+		{
+			let mut insert = tx.prepare_cached(
+				"INSERT OR IGNORE INTO claim_evidence (claim, record)
+				 SELECT (SELECT rowid FROM claims WHERE id = ?1), rowid FROM records WHERE id = ?2",
+			)?;
+			for record in evidence {
+				insert.execute(params![
+					id.0.as_bytes().as_slice(),
+					record.0.as_bytes().as_slice()
+				])?;
+			}
+		}
+		tx.commit()?;
+		Ok(())
+	}
+
 	/// Mark `old` as superseded by `new`.
 	pub fn supersede(&self, old: ClaimId, new: ClaimId) -> Result<()> {
 		let changed = self.conn().execute(

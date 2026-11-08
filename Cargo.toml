@@ -20,6 +20,7 @@ quant_api = { path = "crates/quant_api" }
 quant_client = { path = "crates/quant_client" }
 quant_daemon = { path = "crates/quant_daemon" }
 quant_derive = { path = "crates/quant_derive" }
+quant_learn = { path = "crates/quant_learn" }
 quant_mcp = { path = "crates/quant_mcp" }
 quant_relay = { path = "crates/quant_relay" }
 quant_capture_macos = { path = "crates/quant_capture_macos" }
@@ -73,6 +74,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 whisper-rs = "0.16"
 zeroize = { version = "1", features = ["derive"] }

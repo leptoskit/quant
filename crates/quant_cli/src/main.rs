@@ -162,6 +162,10 @@ enum Command {
 		/// Most results.
 		#[arg(long, default_value_t = 20)]
 		limit: usize,
+		/// How to match: keyword, similar (on-device embeddings), or hybrid
+		/// (both fused; the default when embeddings exist).
+		#[arg(long, value_enum)]
+		mode: Option<SearchModeArg>,
 	},
 	/// A numeric stream, summarised.
 	Series {
@@ -243,6 +247,13 @@ enum Command {
 	Derive {
 		#[command(subcommand)]
 		action: hardware::DeriveAction,
+	},
+	/// Configure on-device learning (asks for the passphrase): a loopback
+	/// embedding endpoint for similarity search and a loopback chat model
+	/// that proposes claims, grounded in the records it read.
+	Learn {
+		#[command(subcommand)]
+		action: LearnAction,
 	},
 	/// Send samples or records from stdin: pipe a serial port, a script, or
 	/// an export into the vault. Needs a profile with `<stream>:write`.
@@ -393,6 +404,64 @@ impl From<StatusArg> for ClaimStatus {
 			StatusArg::Superseded => ClaimStatus::Superseded,
 		}
 	}
+}
+
+/// A search mode, on the command line.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SearchModeArg {
+	Keyword,
+	Similar,
+	Hybrid,
+}
+
+impl From<SearchModeArg> for quant_api::SearchMode {
+	fn from(mode: SearchModeArg) -> Self {
+		match mode {
+			SearchModeArg::Keyword => quant_api::SearchMode::Keyword,
+			SearchModeArg::Similar => quant_api::SearchMode::Similar,
+			SearchModeArg::Hybrid => quant_api::SearchMode::Hybrid,
+		}
+	}
+}
+
+/// What to do with on-device learning.
+#[derive(Subcommand)]
+enum LearnAction {
+	/// Show the learning settings.
+	Show,
+	/// Set the embedding or extraction endpoint. Endpoints must be literal
+	/// loopback addresses (127.0.0.1 or [::1]), so vault text can never
+	/// leave the machine through a changed DNS name or a proxy.
+	Set {
+		/// The embedding endpoint, such as `http://127.0.0.1:11434`
+		/// (Ollama or llama.cpp server).
+		#[arg(long)]
+		embed_endpoint: Option<String>,
+		/// The embedding model name.
+		#[arg(long)]
+		embed_model: Option<String>,
+		/// The embedding model's dimensions.
+		#[arg(long)]
+		embed_dims: Option<usize>,
+		/// The extraction endpoint, such as `http://127.0.0.1:8080`.
+		#[arg(long)]
+		extract_endpoint: Option<String>,
+		/// The extraction model name.
+		#[arg(long)]
+		extract_model: Option<String>,
+		/// Hard cap on extraction calls per day.
+		#[arg(long)]
+		calls_per_day: Option<u32>,
+		/// Hard cap on claims stored per extraction run.
+		#[arg(long)]
+		claims_per_run: Option<usize>,
+		/// Streams or families to embed; defaults to screen text, speech
+		/// transcripts, and memory records.
+		#[arg(long = "stream")]
+		streams: Vec<String>,
+	},
+	/// Turn on-device learning off.
+	Off,
 }
 
 /// What to do with claims.
@@ -597,6 +666,7 @@ async fn main() -> Result<()> {
 				search: None,
 				limit: Some(limit),
 				oldest_first: false,
+				mode: None,
 			};
 			let records = cx.client()?.records(&request).await?;
 			cx.show(&records, print::records);
@@ -607,6 +677,7 @@ async fn main() -> Result<()> {
 			window,
 			streams,
 			limit,
+			mode,
 		} => {
 			let (from, to) = window.resolve()?;
 			let request = RecordsRequest {
@@ -616,6 +687,7 @@ async fn main() -> Result<()> {
 				search: Some(terms.join(" ")),
 				limit: Some(limit),
 				oldest_first: false,
+				mode: mode.map(quant_api::SearchMode::from),
 			};
 			let records = cx.client()?.search(&request).await?;
 			cx.show(&records, print::records);
@@ -689,6 +761,7 @@ async fn main() -> Result<()> {
 		Command::Relay(args) => relay::run(&cx, args).await,
 		Command::Rewind { action } => rewind::run(&cx, action).await,
 		Command::Derive { action } => hardware::derive(&cx, action).await,
+		Command::Learn { action } => learn(&cx, action).await,
 		Command::Ingest {
 			stream,
 			format,
@@ -904,6 +977,88 @@ async fn profile(cx: &Ctx) -> Result<()> {
 			.then(b.updated_at.cmp(&a.updated_at))
 	});
 	cx.show(&claims, |c| print::claims(c));
+	Ok(())
+}
+
+async fn learn(cx: &Ctx, action: LearnAction) -> Result<()> {
+	let owner = cx.owner().await?;
+	match action {
+		LearnAction::Show => {
+			let config = owner.learn_config().await?;
+			cx.show(&config, print::learn_config);
+		}
+		LearnAction::Off => {
+			owner.learn_off().await?;
+			println!("On-device learning is off.");
+		}
+		LearnAction::Set {
+			embed_endpoint,
+			embed_model,
+			embed_dims,
+			extract_endpoint,
+			extract_model,
+			calls_per_day,
+			claims_per_run,
+			streams,
+		} => {
+			let mut config: quant_learn::LearnConfig =
+				serde_json::from_value(owner.learn_config().await?)?;
+			let embed_flags = [&embed_endpoint, &embed_model]
+				.iter()
+				.any(|flag| flag.is_some())
+				|| embed_dims.is_some();
+			if embed_flags && config.embed.is_none() {
+				bail!(
+					"new embedding settings need --embed-endpoint, --embed-model, and \
+					 --embed-dims together"
+				);
+			}
+			if let Some(embed) = &mut config.embed {
+				if let Some(endpoint) = embed_endpoint {
+					embed.endpoint = endpoint;
+				}
+				if let Some(model) = embed_model {
+					embed.model = model;
+				}
+				if let Some(dims) = embed_dims {
+					embed.dims = dims;
+				}
+			}
+			let extract_flags = [&extract_endpoint, &extract_model]
+				.iter()
+				.any(|flag| flag.is_some())
+				|| calls_per_day.is_some()
+				|| claims_per_run.is_some();
+			if extract_flags && config.extract.is_none() {
+				bail!(
+					"new extraction settings need --extract-endpoint and --extract-model \
+					 together"
+				);
+			}
+			if let Some(extract) = &mut config.extract {
+				if let Some(endpoint) = extract_endpoint {
+					extract.endpoint = endpoint;
+				}
+				if let Some(model) = extract_model {
+					extract.model = model;
+				}
+				if let Some(calls) = calls_per_day {
+					extract.calls_per_day = calls;
+				}
+				if let Some(claims) = claims_per_run {
+					extract.claims_per_run = claims;
+				}
+			}
+			if !streams.is_empty() {
+				config.streams = Some(streams);
+			}
+			config.validate().map_err(anyhow::Error::msg)?;
+			let answer = owner
+				.set_learn_config(&serde_json::to_value(&config)?)
+				.await?;
+			cx.show(&answer, print::learn_config);
+		}
+	}
 	Ok(())
 }
 

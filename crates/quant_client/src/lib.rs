@@ -768,6 +768,28 @@ impl OwnerSession {
 			.await
 	}
 
+	/// The on-device learning settings, as JSON.
+	pub async fn learn_config(&self) -> Result<serde_json::Value> {
+		self.call::<(), _>(Method::GET, routes::OWNER_LEARN, None)
+			.await
+	}
+
+	/// Replace the on-device learning settings. Endpoints must be literal
+	/// loopback addresses; anything else is refused.
+	pub async fn set_learn_config(
+		&self,
+		config: &serde_json::Value,
+	) -> Result<serde_json::Value> {
+		self.call(Method::POST, routes::OWNER_LEARN, Some(config))
+			.await
+	}
+
+	/// Turn on-device learning off.
+	pub async fn learn_off(&self) -> Result<()> {
+		let path = format!("{}/off", routes::OWNER_LEARN);
+		self.call::<(), _>(Method::POST, &path, None).await
+	}
+
 	/// Save a moment from the rolling audio buffer.
 	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
 		self.call(Method::POST, routes::OWNER_AUDIO_SAVE, Some(request))

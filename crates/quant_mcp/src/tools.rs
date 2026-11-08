@@ -279,12 +279,15 @@ impl Tool {
 					"Search",
 					"Full-text search over everything readable: on-screen text, transcripts, \
 					 notes. Terms are ANDed; end a term with * for prefix match. Returns matches \
-					 with snippets, best first.",
+					 with snippets, best first. Mode: keyword, similar (vector similarity over \
+					 on-device embeddings), or hybrid (both fused); defaults to hybrid when \
+					 embeddings exist.",
 					schema(
 						&json!({
 							"query": { "type": "string", "description": "Search terms." },
 							"streams": { "type": "array", "items": { "type": "string" } },
 							"limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "Default 20." },
+							"mode": { "type": "string", "enum": ["keyword", "similar", "hybrid"], "description": "How to match; defaults to hybrid when embeddings exist for the vault's current space." },
 						}),
 						&["query"],
 					),
@@ -460,6 +463,13 @@ impl Tool {
 			}
 			Tool::Timeline | Tool::Search => {
 				let search = self == Tool::Search;
+				let mode = match args.get("mode").and_then(Value::as_str) {
+					Some("keyword") => Some(quant_api::SearchMode::Keyword),
+					Some("similar") => Some(quant_api::SearchMode::Similar),
+					Some("hybrid") => Some(quant_api::SearchMode::Hybrid),
+					Some(_) => return Err("`mode` is keyword, similar, or hybrid".into()),
+					None => None,
+				};
 				let request = RecordsRequest {
 					streams: streams_arg(args),
 					from,
@@ -474,6 +484,7 @@ impl Tool {
 						.get("oldest_first")
 						.and_then(Value::as_bool)
 						.unwrap_or(false),
+					mode,
 				};
 				let records = if search {
 					client.search(&request).await

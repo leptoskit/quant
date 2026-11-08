@@ -29,6 +29,7 @@ use quant_api::OverviewItem;
 use quant_api::OverviewRequest;
 use quant_api::Records;
 use quant_api::RecordsRequest;
+use quant_api::SearchMode;
 use quant_api::Series;
 use quant_api::SeriesRequest;
 use quant_api::ServedRecord;
@@ -372,7 +373,7 @@ pub async fn overview(
 	respond(&state, caller, "overview", "*".into(), detail, 0, &answer)
 }
 
-fn records_or_search(
+async fn records_or_search(
 	state: &State,
 	request: Signed<RecordsRequest>,
 	search: bool,
@@ -394,9 +395,10 @@ fn records_or_search(
 		return Err(Error::Invalid("search needs terms".into()));
 	}
 	let range = window(&caller.grant, body.from, body.to)?;
-	let specs = state.specs_lock();
-	let (selector, withheld) = resolve(&caller.grant, &specs, &body.streams, Level::Read)?;
-	drop(specs);
+	let (selector, withheld) = {
+		let specs = state.specs_lock();
+		resolve(&caller.grant, &specs, &body.streams, Level::Read)?
+	};
 
 	let allowance =
 		state
@@ -420,8 +422,48 @@ fn records_or_search(
 	if let Some(terms) = terms {
 		query = query.search(terms);
 	}
-	let mut hits = if terms.is_some() {
-		state.vault.store.search(&query)?
+	// The search mode: what the caller asked for, or hybrid when
+	// embeddings exist for the vault's current space, keyword otherwise.
+	let space = crate::learning::space(&state)?;
+	let mode = match body.mode {
+		Some(mode) => mode,
+		None => {
+			let hybrid = space
+				.as_deref()
+				.is_some_and(|space| state.vault.store.has_embeddings(space).unwrap_or(false));
+			if hybrid {
+				SearchMode::Hybrid
+			} else {
+				SearchMode::Keyword
+			}
+		}
+	};
+	let mut hits = if let Some(terms) = terms {
+		match mode {
+			SearchMode::Keyword => state.vault.store.search(&query)?,
+			SearchMode::Similar => {
+				let space = space.ok_or_else(|| {
+					Error::Invalid(
+						"similarity search needs an embedding endpoint; configure one with \
+						 `quant learn set`"
+							.into(),
+					)
+				})?;
+				let vector = crate::learning::embed_query(&state, terms).await?;
+				state.vault.store.similar(&query, &space, &vector)?
+			}
+			SearchMode::Hybrid => match space {
+				Some(space) => {
+					match crate::learning::embed_query(&state, terms).await {
+						Ok(vector) => state.vault.store.hybrid(&query, &space, &vector)?,
+						// Without the endpoint, hybrid degrades to the
+						// keyword ranking rather than failing the search.
+						Err(_) => state.vault.store.search(&query)?,
+					}
+				}
+				None => state.vault.store.search(&query)?,
+			},
+		}
 	} else {
 		state
 			.vault
@@ -452,6 +494,7 @@ fn records_or_search(
 		"to": range.end,
 		"limit": wanted,
 		"search": terms,
+		"mode": mode,
 		"withheld": withheld,
 	});
 	let answer = Records {
@@ -469,7 +512,7 @@ pub async fn records(
 	AxumState(state): Shared,
 	request: Signed<RecordsRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-	records_or_search(&state, request, false)
+	records_or_search(&state, request, false).await
 }
 
 /// `POST /v1/query/search`
@@ -477,7 +520,7 @@ pub async fn search(
 	AxumState(state): Shared,
 	request: Signed<RecordsRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-	records_or_search(&state, request, true)
+	records_or_search(&state, request, true).await
 }
 
 fn parse_stream(name: &str) -> ApiResult<StreamId> {
