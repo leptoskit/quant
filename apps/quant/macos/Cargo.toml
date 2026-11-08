@@ -11,8 +11,15 @@ crate-type = ["staticlib"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
+# A direct dependency only so the leptoskit CLI discovers the `device-keys`
+# plugin from this package's metadata and registers its Swift handler. The
+# Rust host never names it.
+leptoskit_plugin_device_keys = { workspace = true }
 quant_service = { workspace = true }
 
 # The generated registrant exports C entry points, which the workspace's
 # `unsafe_code = "deny"` would refuse.
 [lints]
+
+[lints.cargo]
+unused_dependencies = "allow"
