@@ -24,7 +24,7 @@ fn stream(name: &str) -> StreamId {
 	name.parse().expect("built-in stream")
 }
 
-fn day_range(date: Date, tz: &TimeZone) -> Result<TimeRange, StoreError> {
+pub(crate) fn day_range(date: Date, tz: &TimeZone) -> Result<TimeRange, StoreError> {
 	let start = date
 		.to_datetime(Time::midnight())
 		.to_zoned(tz.clone())
@@ -38,7 +38,7 @@ fn day_range(date: Date, tz: &TimeZone) -> Result<TimeRange, StoreError> {
 
 /// Sleep is counted for the night that ends on `date`: 18:00 the evening
 /// before to 18:00 on the day.
-fn night_range(day: TimeRange) -> TimeRange {
+pub(crate) fn night_range(day: TimeRange) -> TimeRange {
 	let six_hours = SignedDuration::from_hours(6);
 	TimeRange {
 		start: day.start - six_hours,
@@ -69,6 +69,28 @@ fn hm(seconds: f64) -> String {
 	} else {
 		format!("{}h {:02}m", minutes / 60, minutes % 60)
 	}
+}
+
+/// The resting heart rate estimate for `range`: the mean of the lowest
+/// tenth of minute averages, if any heart rate was captured.
+pub(crate) fn resting_heart_rate(
+	store: &Store,
+	range: TimeRange,
+) -> Result<Option<f64>, StoreError> {
+	let minutes = store.series_summary(
+		&stream("health.heart_rate"),
+		range,
+		SignedDuration::from_mins(1),
+	)?;
+	let mut means: Vec<f64> = minutes
+		.iter()
+		.filter_map(|b| b.channels.get("bpm")?.mean())
+		.collect();
+	means.sort_by(f64::total_cmp);
+	Ok((!means.is_empty()).then(|| {
+		let lowest = &means[..means.len().div_ceil(10)];
+		lowest.iter().sum::<f64>() / lowest.len() as f64
+	}))
 }
 
 /// Summarise `date` (in `tz`) into a `memory.daily` record.
@@ -108,21 +130,14 @@ pub fn summarize(store: &Store, date: Date, tz: &TimeZone) -> Result<Record, Sto
 		range,
 		SignedDuration::from_mins(1),
 	)?;
-	let mut means: Vec<f64> = minutes
-		.iter()
-		.filter_map(|b| b.channels.get("bpm")?.mean())
-		.collect();
-	means.sort_by(f64::total_cmp);
-	let heart = (!means.is_empty()).then(|| {
-		let lowest = &means[..means.len().div_ceil(10)];
-		let resting = lowest.iter().sum::<f64>() / lowest.len() as f64;
+	let heart = resting_heart_rate(store, range)?.map(|resting| {
 		let min = minutes.iter().filter_map(|b| b.channels.get("bpm")).map(|s| s.min).fold(f64::INFINITY, f64::min);
 		let max = minutes.iter().filter_map(|b| b.channels.get("bpm")).map(|s| s.max).fold(f64::NEG_INFINITY, f64::max);
 		let (sum, count) = minutes
 			.iter()
 			.filter_map(|b| b.channels.get("bpm"))
 			.fold((0.0, 0u64), |(sum, count), s| (sum + s.sum, count + s.count));
-		json!({ "min": min, "max": max, "mean": sum / count.max(1) as f64, "resting_estimate": resting, "minutes": means.len() })
+		json!({ "min": min, "max": max, "mean": sum / count.max(1) as f64, "resting_estimate": resting, "minutes": minutes.iter().filter(|b| b.channels.contains_key("bpm")).count() })
 	});
 
 	let frames = store

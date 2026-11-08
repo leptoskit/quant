@@ -18,6 +18,7 @@ use crate::gait;
 use crate::posture;
 use crate::posture::Placement;
 use crate::posture::Source;
+use crate::weekly;
 
 /// What to derive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +53,8 @@ pub struct Report {
 	pub days: usize,
 	/// Hourly episodes written.
 	pub episodes: usize,
+	/// Weekly summaries written.
+	pub weeks: usize,
 }
 
 const MAX_ROWS: usize = 2_000_000;
@@ -172,5 +175,17 @@ pub fn run(
 		report.days += store.replace_records(&[record])?.stored;
 	}
 	report.episodes = episode::update(store, now, config.first_run_days, tz)?;
+	// The current week's summary, recomputed each run so purged sources
+	// stop being quoted. No data means no record, and any earlier one for
+	// the week goes away with it.
+	let weekly_stream: StreamId = "memory.weekly".parse().expect("built-in stream");
+	let monday = weekly::monday_of(now, tz);
+	let start = daily::day_range(monday, tz)?.start;
+	match weekly::summarize_week(store, monday, tz)? {
+		Some(record) => report.weeks += store.replace_records(&[record])?.stored,
+		None => {
+			store.delete_derived(&weekly_stream, "weekly", start)?;
+		}
+	}
 	Ok(report)
 }

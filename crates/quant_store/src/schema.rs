@@ -170,6 +170,27 @@ const MIGRATIONS: &[&str] = &[
 			SELECT new.rowid, new.statement WHERE new.statement IS NOT NULL;
 	END;
 	",
+	// 4: on-device learning: embedding vectors for records and claims, keyed
+	// by the space they were embedded in. A space is a short hash of the
+	// embedding model, its dimensions, and the chunking version, so changing
+	// the model re-embeds instead of mixing vectors.
+	"
+	CREATE TABLE embeddings (
+		record INTEGER NOT NULL REFERENCES records (rowid) ON DELETE CASCADE,
+		space TEXT NOT NULL,
+		vector BLOB NOT NULL,
+		PRIMARY KEY (record, space)
+	) STRICT, WITHOUT ROWID;
+	CREATE INDEX embeddings_by_space ON embeddings (space, record);
+
+	CREATE TABLE claim_embeddings (
+		claim INTEGER NOT NULL REFERENCES claims (rowid) ON DELETE CASCADE,
+		space TEXT NOT NULL,
+		vector BLOB NOT NULL,
+		PRIMARY KEY (claim, space)
+	) STRICT, WITHOUT ROWID;
+	CREATE INDEX claim_embeddings_by_space ON claim_embeddings (space, claim);
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

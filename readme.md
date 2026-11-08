@@ -153,6 +153,21 @@ quant approve K7QD-M2XA --scope memory.profile:read --scope health:summary --den
 
 The MCP server offers `quant_profile`, `quant_propose`, and `quant_context` (a budgeted packet of claims, recent memory, and matching records sized to one task) only to grants that can use them.
 
+## Learning on the device
+
+Quant can also learn, using models that run on your own machine only:
+
+```sh
+quant learn set --embed-endpoint http://127.0.0.1:11434 --embed-model nomic-embed-text --embed-dims 768 \
+                --extract-endpoint http://127.0.0.1:8080 --extract-model llama3.2
+quant search "when do I focus best" --mode hybrid   # or `keyword` / `similar`
+quant learn show                                   # or `quant learn off`
+```
+
+The embedding endpoint (an OpenAI-compatible server such as Ollama or a llama.cpp server) powers similarity search over your screens, transcripts, and memory — hybrid by default once embeddings exist, fusing keyword and meaning rankings. The extraction endpoint reads the day's summary each evening and proposes claims about you, each grounded word-for-word in the records it read; anything touching credentials, access, grants, or money movement waits for your approval as a held claim, and every claim stays traceable to the evidence behind it. Weekly reviews (`memory.weekly`) sum up sleep, heart rate, steps, focus, and the plain correlations between them, with the numbers behind each finding.
+
+Endpoints must be literal loopback addresses (`127.0.0.1` or `[::1]`), so vault text can never leave the machine through a changed DNS name or a proxy — and everything is off until you configure it.
+
 ## Scopes
 
 A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a stream and its children (`sensor.vest`). Read permissions nest: `raw` includes `read`, which includes `summary`.
@@ -178,7 +193,7 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `device`   | `device.battery`, `device.state`                                                            |
 | `comms`    | `comms.notification`                                                                        |
 | `sensor`   | Anything from custom hardware: `sensor.<vendor>.<channel>`                                   |
-| `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |
+| `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.weekly`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |
 
 ## Inspiration
 

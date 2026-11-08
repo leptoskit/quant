@@ -7,6 +7,8 @@
 //! `memory.profile:write` lets an agent propose claims for the owner to
 //! approve.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
@@ -355,37 +357,94 @@ pub async fn context(
 			.record_allowance(caller.grant.id, &caller.grant.limits, Timestamp::now());
 	let mut item_allowance = allowance;
 
+	// The task's embedding, when an embedding space exists and holds
+	// vectors. One call serves both the claims and the records sections;
+	// without it each falls back to keyword search.
+	let space = crate::learning::space(&state)?;
+	let task_vec = match &space {
+		Some(space)
+			if state.vault.store.has_embeddings(space)?
+				|| state.vault.store.has_claim_embeddings(space)? =>
+		{
+			crate::learning::embed_query(&state, task).await.ok()
+		}
+		_ => None,
+	};
+
 	// (a) Profile claims: those matching the task's terms first, then the
-	// rest by authority and confidence.
+	// rest by authority and confidence. With embeddings, the keyword and
+	// vector rankings are fused.
 	let profile_section = match profile_for(&state, caller) {
-		Ok((level, served)) => {
+		Ok((level, _)) => {
 			let filter = ClaimFilter::new()
 				.status(ClaimStatus::Active)
 				.exclude_classes(&caller.grant.deny_classes);
-			let matching: Vec<ClaimView> = match quant_store::fts_any(task) {
-				Some(query) => {
-					state
+			let all = state.vault.store.claims(&filter)?;
+			let ordered: Vec<Claim> = match &task_vec {
+				Some(vector)
+					if space.as_deref().is_some_and(|space| {
+						state
+							.vault
+							.store
+							.has_claim_embeddings(space)
+							.unwrap_or(false)
+					}) =>
+				{
+					let space = space.clone().expect("the space was just checked");
+					let keyword = match quant_store::fts_any(task) {
+						Some(query) => state.vault.store.claims_matching(&filter, &query)?,
+						None => Vec::new(),
+					};
+					let similar = state
 						.vault
 						.store
-						.claims_matching(&filter, &query)?
+						.similar_claims(&space, &filter, vector, 200)?;
+					let keyword_ids: Vec<ClaimId> = keyword.iter().map(|claim| claim.id).collect();
+					let similar_ids: Vec<ClaimId> = similar.iter().map(|claim| claim.id).collect();
+					let mut by_id: HashMap<ClaimId, Claim> = keyword
 						.into_iter()
-						.flat_map(|claim| shape_claims(&state, caller, level, &[claim]))
-						.collect()
+						.chain(similar)
+						.map(|claim| (claim.id, claim))
+						.collect();
+					let mut fused: Vec<Claim> =
+						quant_store::rrf_fuse(&keyword_ids, &similar_ids, 60)
+							.into_iter()
+							.filter_map(|(id, _)| by_id.remove(&id))
+							.collect();
+					let fused_ids: HashSet<ClaimId> = fused.iter().map(|claim| claim.id).collect();
+					let mut rest: Vec<Claim> = all
+						.into_iter()
+						.filter(|claim| !fused_ids.contains(&claim.id))
+						.collect();
+					rest.sort_by(|a, b| {
+						b.authority
+							.cmp(&a.authority)
+							.then(b.confidence.total_cmp(&a.confidence))
+					});
+					fused.extend(rest);
+					fused
 				}
-				None => Vec::new(),
+				_ => {
+					let mut matching: Vec<Claim> = match quant_store::fts_any(task) {
+						Some(query) => state.vault.store.claims_matching(&filter, &query)?,
+						None => Vec::new(),
+					};
+					let matched: Vec<ClaimId> = matching.iter().map(|claim| claim.id).collect();
+					let mut rest: Vec<Claim> = all
+						.into_iter()
+						.filter(|claim| !matched.contains(&claim.id))
+						.collect();
+					rest.sort_by(|a, b| {
+						b.authority
+							.cmp(&a.authority)
+							.then(b.confidence.total_cmp(&a.confidence))
+					});
+					matching.extend(rest);
+					matching
+				}
 			};
-			let matched: Vec<ClaimId> = matching.iter().map(|c| c.id).collect();
-			let mut rest: Vec<ClaimView> = served
-				.into_iter()
-				.filter(|claim| !matched.contains(&claim.id))
-				.collect();
-			rest.sort_by(|a, b| {
-				b.authority
-					.cmp(&a.authority)
-					.then(b.confidence.total_cmp(&a.confidence))
-			});
-			let ordered = matching.into_iter().chain(rest);
-			let (items, cut) = fill(ordered, claim_tokens, &mut left, &mut item_allowance);
+			let views: Vec<ClaimView> = shape_claims(&state, caller, level, &ordered);
+			let (items, cut) = fill(views, claim_tokens, &mut left, &mut item_allowance);
 			section(items, false, cut)
 		}
 		Err(_) => section(Vec::new(), true, false),
@@ -430,14 +489,16 @@ pub async fn context(
 		}
 	};
 
-	// (c) Records matching the task's terms, through the search path.
+	// (c) Records matching the task's terms, through the search path: hybrid
+	// when the task has an embedding and the space holds vectors.
 	let records_section = match searchable(&state, caller) {
 		Ok(selector) if !selector.is_empty() => {
 			let range = window(&caller.grant, None, None)?;
-			let hits: Vec<SearchHit> = state
-				.vault
-				.store
-				.search(&RecordQuery::new(selector, range).search(task).limit(500))?;
+			let query = RecordQuery::new(selector, range).search(task).limit(500);
+			let hits: Vec<SearchHit> = match (&space, &task_vec) {
+				(Some(space), Some(vector)) => state.vault.store.hybrid(&query, space, vector)?,
+				_ => state.vault.store.search(&query)?,
+			};
 			let cost = |hit: &SearchHit| {
 				hit.record.text.as_deref().map_or(0, tokens) + tokens(&hit.snippet)
 			};

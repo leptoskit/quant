@@ -21,6 +21,7 @@ quant_client = { workspace = true }
 quant_core = { workspace = true }
 quant_crypto = { workspace = true }
 quant_daemon = { workspace = true }
+quant_learn = { workspace = true }
 quant_mcp = { workspace = true }
 quant_relay = { workspace = true, default-features = false }
 quant_store = { workspace = true }

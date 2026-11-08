@@ -148,10 +148,10 @@ pub fn fts_any(terms: &str) -> Option<String> {
 	(!quoted.is_empty()).then(|| quoted.join(" OR "))
 }
 
-const COLUMNS: &str = "r.id, r.stream, r.device, r.start_us, r.end_us, r.text, r.data, \
-                       r.media_hash, r.media_mime, r.media_size";
+pub(crate) const COLUMNS: &str = "r.id, r.stream, r.device, r.start_us, r.end_us, r.text, r.data, \
+                                  r.media_hash, r.media_mime, r.media_size";
 
-fn record_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Record>> {
+pub(crate) fn record_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Record>> {
 	let id: Vec<u8> = row.get(0)?;
 	let stream: String = row.get(1)?;
 	let device: Vec<u8> = row.get(2)?;
@@ -325,6 +325,13 @@ impl Store {
 		Ok(())
 	}
 
+	/// Remove a value from the store's key/value state.
+	pub fn remove_meta(&self, key: &str) -> Result<()> {
+		self.conn()
+			.execute("DELETE FROM meta WHERE key = ?1", [key])?;
+		Ok(())
+	}
+
 	/// Distinct devices that sent `stream` (or its children) in `range`.
 	pub fn series_devices(
 		&self,
@@ -478,11 +485,12 @@ impl Store {
 	}
 
 	/// Permanently delete records and series rows in `range` from the
-	/// selected streams, and any media only they referenced. Returns how many
-	/// records and series batches went.
-	pub fn purge(&self, selector: &Selector, range: TimeRange) -> Result<(usize, usize)> {
+	/// selected streams, any derived records that summarised them, and any
+	/// media only they referenced. Returns how many source records, series
+	/// batches, and derived records went.
+	pub fn purge(&self, selector: &Selector, range: TimeRange) -> Result<(usize, usize, usize)> {
 		if selector.is_empty() {
-			return Ok((0, 0));
+			return Ok((0, 0, 0));
 		}
 		let mut conn = self.conn();
 		let tx = conn.transaction()?;
@@ -505,14 +513,123 @@ impl Store {
 			&format!("DELETE FROM series WHERE start_us >= ? AND start_us < ? AND {condition}"),
 			params_from_iter(params.iter()),
 		)?;
+		let derived = Self::delete_derived_after_purge(&tx, selector, range)?;
 		tx.execute(
 			"UPDATE media SET expires_us = 0
 			 WHERE hash NOT IN (SELECT media_hash FROM records WHERE media_hash IS NOT NULL)",
 			[],
 		)?;
 		Self::prune_claims_after_purge(&tx, &had_evidence)?;
+		if records > 0 || series > 0 || derived > 0 {
+			Self::reset_derive_watermarks(&tx, selector, range)?;
+		}
 		tx.commit()?;
-		Ok((records, series))
+		Ok((records, series, derived))
+	}
+
+	/// Delete derived records whose time span overlaps `range` and whose
+	/// `derived_from` attribute names a stream or family the purge deleted
+	/// (daily, weekly, and episode summaries, posture and gait spans, and
+	/// anything Quant derived from the purged source).
+	fn delete_derived_after_purge(
+		tx: &rusqlite::Transaction<'_>,
+		selector: &Selector,
+		range: TimeRange,
+	) -> Result<usize> {
+		let mut params: Vec<Value> = vec![
+			Uuid::nil().as_bytes().to_vec().into(),
+			micros(range.end).into(),
+			micros(range.start).into(),
+		];
+		let named = Self::derived_condition(selector, &mut params);
+		let sql = format!(
+			"DELETE FROM records WHERE device = ?1
+			 AND start_us < ?2 AND coalesce(end_us, start_us) > ?3
+			 AND (stream IN ('memory.daily', 'memory.episode', 'memory.weekly', 'motion.posture', \
+			 'motion.gait')
+			   OR (json_extract(data, '$.derived_from') IS NOT NULL AND {named}))"
+		);
+		Ok(tx.execute(&sql, params_from_iter(params))?)
+	}
+
+	/// A SQL condition matching a record's `derived_from` attribute against
+	/// the purge's selector: a derived record goes when its source stream
+	/// (or family) was purged.
+	fn derived_condition(selector: &Selector, params: &mut Vec<Value>) -> String {
+		if selector.all {
+			return "1".into();
+		}
+		let mut clauses = Vec::new();
+		for family in &selector.families {
+			params.push(format!("{}.%", family.as_str()).into());
+			clauses.push("json_extract(data, '$.derived_from') LIKE ?".to_owned());
+		}
+		for stream in &selector.streams {
+			params.push(stream.as_str().to_owned().into());
+			params.push(format!("{}.%", stream.as_str()).into());
+			clauses.push(
+				"(json_extract(data, '$.derived_from') = ? OR json_extract(data, \
+				 '$.derived_from') LIKE ?)"
+					.to_owned(),
+			);
+		}
+		if clauses.is_empty() {
+			"0".to_owned()
+		} else {
+			format!("({})", clauses.join(" OR "))
+		}
+	}
+
+	/// Point the derivation watermarks back at the start of a purged range,
+	/// so the next run recomputes derived records from what remains.
+	fn reset_derive_watermarks(
+		tx: &rusqlite::Transaction<'_>,
+		selector: &Selector,
+		range: TimeRange,
+	) -> Result<()> {
+		let reset = |tx: &rusqlite::Transaction<'_>, key: &str| -> Result<()> {
+			let existing = tx
+				.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| {
+					r.get::<_, String>(0)
+				})
+				.optional()?;
+			let earliest = existing
+				.and_then(|value| value.parse::<Timestamp>().ok())
+				.map_or(range.start, |watermark| watermark.min(range.start));
+			tx.execute(
+				"INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET \
+				 value = excluded.value",
+				params![key, earliest.to_string()],
+			)?;
+			Ok(())
+		};
+		// Posture and gait watermarks, for sources the purge named.
+		let keys: Vec<String> = {
+			let mut statement = tx.prepare(
+				"SELECT key FROM meta WHERE key LIKE 'derive.posture.%' OR key LIKE \
+				 'derive.gait.%'",
+			)?;
+			let rows = statement.query_map([], |r| r.get::<_, String>(0))?;
+			rows.map(|row| row.map_err(Into::into))
+				.collect::<Result<_>>()?
+		};
+		for key in keys {
+			let source = key
+				.strip_prefix("derive.posture.")
+				.or_else(|| key.strip_prefix("derive.gait."))
+				.unwrap_or_default();
+			if source
+				.parse::<StreamId>()
+				.is_ok_and(|stream| selector.selects(&stream))
+			{
+				reset(tx, &key)?;
+			}
+		}
+		// Episodes quote everything, so any purge that touched their span
+		// restarts them. Daily summaries have no watermark: the last two
+		// days are always recomputed.
+		reset(tx, "derive.episode")?;
+		Ok(())
 	}
 
 	/// Sum the time event records in `stream` cover, grouped by the record
@@ -777,7 +894,7 @@ mod tests {
 		assert_eq!(overview[0].count, 5);
 		assert_eq!(overview[0].first, at(0));
 
-		let (records, _) = store
+		let (records, ..) = store
 			.purge(&Selector::family(Family::Screen), range(0, 3))
 			.unwrap();
 		assert_eq!(records, 3);

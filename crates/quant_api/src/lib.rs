@@ -130,6 +130,10 @@ pub mod routes {
 	/// The relay settings: `GET` reads them, `POST` sets or clears them
 	/// (owner).
 	pub const OWNER_RELAY: &str = "/v1/owner/relay";
+	/// `GET` or `POST` the on-device learning settings (the embedding and
+	/// extraction endpoints). Endpoints must be literal loopback addresses,
+	/// so vault text can never leave the machine.
+	pub const OWNER_LEARN: &str = "/v1/owner/learn";
 	/// Header carrying an owner session token.
 	pub const OWNER_HEADER: &str = "x-quant-owner";
 }
@@ -301,6 +305,21 @@ pub struct Overview {
 	pub streams: Vec<OverviewItem>,
 }
 
+/// How a search matches records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+	/// Full-text matching only.
+	Keyword,
+	/// Vector similarity only, over the records embedded for the vault's
+	/// current embedding space.
+	Similar,
+	/// Keyword and vector rankings fused with reciprocal rank fusion. The
+	/// default when embeddings exist for the current space.
+	#[default]
+	Hybrid,
+}
+
 /// Ask for records.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RecordsRequest {
@@ -322,6 +341,11 @@ pub struct RecordsRequest {
 	/// Oldest first instead of newest first.
 	#[serde(default)]
 	pub oldest_first: bool,
+	/// How a search matches. Defaults to hybrid when embeddings exist for
+	/// the vault's current space, keyword otherwise. Ignored for
+	/// [`routes::RECORDS`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mode: Option<SearchMode>,
 }
 
 /// A record as served to a client: text sanitised and, unless the grant is
@@ -648,14 +672,23 @@ pub struct PurgeRequest {
 }
 
 /// Answer to a purge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Purged {
 	/// Records deleted.
 	pub records: usize,
 	/// Series batches deleted.
 	pub series: usize,
+	/// Derived records deleted with their sources.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub derived: usize,
 	/// Media files deleted.
 	pub media: usize,
+}
+
+/// Whether a purge count is zero, so fresh answers stay short.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &usize) -> bool {
+	*n == 0
 }
 
 /// State of one capture source.

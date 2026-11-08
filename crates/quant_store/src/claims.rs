@@ -111,11 +111,12 @@ impl ClaimFilter {
 }
 
 /// One stored claim's columns, in table order after `rowid`.
-const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic, c.authority, c.confidence, \
-                       c.classes, c.status, c.valid_from_us, c.valid_to_us, c.proposed_by, \
-                       c.created_at_us, c.updated_at_us, c.superseded_by";
+pub(crate) const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic, c.authority, \
+                                  c.confidence, c.classes, c.status, c.valid_from_us, \
+                                  c.valid_to_us, c.proposed_by, c.created_at_us, c.updated_at_us, \
+                                  c.superseded_by";
 
-fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
+pub(crate) fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
 	let id: Vec<u8> = row.get(0)?;
 	let subject: String = row.get(1)?;
 	let kind: String = row.get(2)?;
@@ -166,7 +167,7 @@ fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
 	})())
 }
 
-fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
+pub(crate) fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
 	let mut clauses = Vec::new();
 	if let Some(status) = filter.status {
 		params.push(status.as_str().to_owned().into());
@@ -199,7 +200,7 @@ fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> String {
 	}
 }
 
-fn attach_evidence(conn: &rusqlite::Connection, claims: &mut [Claim]) -> Result<()> {
+pub(crate) fn attach_evidence(conn: &rusqlite::Connection, claims: &mut [Claim]) -> Result<()> {
 	let mut statement = conn.prepare_cached(
 		"SELECT r.id FROM claim_evidence ce JOIN records r ON r.rowid = ce.record
 		 WHERE ce.claim IN (SELECT rowid FROM claims WHERE id = ?1)",
@@ -357,6 +358,43 @@ impl Store {
 		} else {
 			Ok(())
 		}
+	}
+
+	/// Change a claim's confidence, touching its `updated_at`.
+	pub fn set_claim_confidence(&self, id: ClaimId, confidence: f32) -> Result<()> {
+		let changed = self.conn().execute(
+			"UPDATE claims SET confidence = ?2, updated_at_us = ?3 WHERE id = ?1",
+			params![
+				id.0.as_bytes().as_slice(),
+				confidence,
+				micros(Timestamp::now())
+			],
+		)?;
+		if changed == 0 {
+			Err(StoreError::NotFound)
+		} else {
+			Ok(())
+		}
+	}
+
+	/// Add evidence records to a claim, ignoring ones it already cites.
+	pub fn add_claim_evidence(&self, id: ClaimId, evidence: &[RecordId]) -> Result<()> {
+		let mut conn = self.conn();
+		let tx = conn.transaction()?;
+		{
+			let mut insert = tx.prepare_cached(
+				"INSERT OR IGNORE INTO claim_evidence (claim, record)
+				 SELECT (SELECT rowid FROM claims WHERE id = ?1), rowid FROM records WHERE id = ?2",
+			)?;
+			for record in evidence {
+				insert.execute(params![
+					id.0.as_bytes().as_slice(),
+					record.0.as_bytes().as_slice()
+				])?;
+			}
+		}
+		tx.commit()?;
+		Ok(())
 	}
 
 	/// Mark `old` as superseded by `new`.
