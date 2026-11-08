@@ -7,8 +7,10 @@ use quant_api::ClientView;
 use quant_api::Durations;
 use quant_api::Me;
 use quant_api::Overview;
+use quant_api::OwnerDeviceView;
 use quant_api::Records;
 use quant_api::Series;
+use quant_api::SessionSource;
 use quant_api::Status;
 use quant_api::StreamAccess;
 
@@ -80,6 +82,13 @@ pub fn status(status: &Status) {
 	println!("quantd {} — vault {}", status.version, status.vault_id);
 	println!("running since {}", local(status.started_at));
 	println!(
+		"session opened with {}",
+		match status.session {
+			SessionSource::Passphrase => "the passphrase",
+			SessionSource::Device => "an owner device",
+		}
+	);
+	println!(
 		"{} active grants, {} pairings waiting",
 		status.active_grants, status.pending_clients
 	);
@@ -104,6 +113,35 @@ pub fn status(status: &Status) {
 				.map(|d| format!(" — {d}"))
 				.unwrap_or_default(),
 		);
+	}
+}
+
+/// One enrolled owner device, for the owner.
+pub fn owner_device(device: &OwnerDeviceView) {
+	println!(
+		"{}  {:<8} {:<22} {} ({})",
+		device.fingerprint,
+		if device.revoked_at.is_some() {
+			"revoked"
+		} else {
+			"active"
+		},
+		device.policy.as_str(),
+		device.label,
+		device.id
+	);
+	if let Some(used) = device.last_used {
+		println!("    last used: {}", local(used));
+	}
+}
+
+/// The enrolled owner devices, for the owner.
+pub fn owner_devices(devices: &[OwnerDeviceView]) {
+	if devices.is_empty() {
+		println!("No owner devices. `quant owner devices add …` enrols one.");
+	}
+	for device in devices {
+		self::owner_device(device);
 	}
 }
 

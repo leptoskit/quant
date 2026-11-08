@@ -40,6 +40,7 @@ use quant_core::ClaimKind;
 use quant_core::ClaimStatus;
 use quant_core::Class;
 use quant_core::DeviceId;
+use quant_core::OwnerDeviceId;
 use quant_core::Record;
 use quant_store::VaultPaths;
 
@@ -98,6 +99,12 @@ enum Command {
 	},
 	/// Approve a pairing (asks for the passphrase).
 	Approve(ApproveArgs),
+	/// Manage the owner devices that unlock owner actions with a hardware
+	/// key (asks for the passphrase).
+	Owner {
+		#[command(subcommand)]
+		action: OwnerAction,
+	},
 	/// Refuse a pairing (asks for the passphrase).
 	Deny {
 		/// Pairing code or client id.
@@ -464,6 +471,58 @@ enum LearnAction {
 	Off,
 }
 
+/// What to do with owner devices.
+#[derive(Subcommand)]
+enum OwnerAction {
+	/// List, enrol, or revoke the hardware keys that can unlock owner
+	/// actions.
+	Devices {
+		#[command(subcommand)]
+		action: OwnerDevicesAction,
+	},
+}
+
+/// What to do with the enrolled owner devices.
+#[derive(Subcommand)]
+enum OwnerDevicesAction {
+	/// List them (asks for the passphrase).
+	List,
+	/// Enrol one by its public key (asks for the passphrase). The device
+	/// prints the key; the CLI has no hardware key of its own.
+	Add {
+		/// A name for the device, 1 to 64 characters.
+		#[arg(long)]
+		label: String,
+		/// The device's P-256 public key: uncompressed SEC1, base64.
+		#[arg(long)]
+		public_key: String,
+		/// How the device protects the key. Informational.
+		#[arg(long, value_enum, default_value_t = PolicyArg::Biometry)]
+		policy: PolicyArg,
+	},
+	/// Revoke one (asks for the passphrase). Its key stops working at once.
+	Revoke {
+		/// The device id, as `owner devices list` shows it.
+		id: OwnerDeviceId,
+	},
+}
+
+/// An owner device's policy hint, on the command line.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum PolicyArg {
+	Biometry,
+	BiometryOrPasscode,
+}
+
+impl From<PolicyArg> for quant_access::OwnerDevicePolicy {
+	fn from(policy: PolicyArg) -> Self {
+		match policy {
+			PolicyArg::Biometry => Self::Biometry,
+			PolicyArg::BiometryOrPasscode => Self::BiometryOrPasscode,
+		}
+	}
+}
+
 /// What to do with claims.
 #[derive(Subcommand)]
 enum ClaimsAction {
@@ -602,6 +661,7 @@ async fn main() -> Result<()> {
 		Command::Service { action } => service::run(&cx.paths, &action),
 		Command::Pair { name, kind, scopes } => pair(&cx, name, kind, &scopes).await,
 		Command::Approve(args) => approve(&cx, args).await,
+		Command::Owner { action } => owner_devices(&cx, action).await,
 		Command::Deny { client } => {
 			cx.owner().await?.deny(&client).await?;
 			println!("Refused {client}.");
@@ -841,6 +901,37 @@ fn scope_flags(scopes: &[String]) -> String {
 		let _ = std::fmt::Write::write_fmt(&mut out, format_args!(" --scope {s}"));
 		out
 	})
+}
+
+async fn owner_devices(cx: &Ctx, action: OwnerAction) -> Result<()> {
+	let OwnerAction::Devices { action } = action;
+	match action {
+		OwnerDevicesAction::List => {
+			let devices = cx.owner().await?.owner_devices().await?;
+			cx.show(&devices, |d| print::owner_devices(d));
+		}
+		OwnerDevicesAction::Add {
+			label,
+			public_key,
+			policy,
+		} => {
+			let device = cx
+				.owner()
+				.await?
+				.owner_device_add(&quant_api::EnrolDeviceRequest {
+					label,
+					public_key,
+					policy: policy.into(),
+				})
+				.await?;
+			cx.show(&device, print::owner_device);
+		}
+		OwnerDevicesAction::Revoke { id } => {
+			let device = cx.owner().await?.owner_device_revoke(id).await?;
+			println!("Revoked {} ({}).", device.label, device.id);
+		}
+	}
+	Ok(())
 }
 
 async fn approve(cx: &Ctx, args: ApproveArgs) -> Result<()> {
