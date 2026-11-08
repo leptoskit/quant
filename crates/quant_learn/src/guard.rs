@@ -65,11 +65,25 @@ const TOOL_PATTERNS: &[&str] = &[
 /// syntax. Statements and quotes both pass through here, so a captured
 /// screen or transcript cannot plant orders in a claim.
 pub fn looks_like_instruction(text: &str) -> bool {
-	let lower = text.to_lowercase();
+	// Compare on normalised text with invisible characters removed, so a
+	// zero-width space or a full-width letter cannot hide a pattern.
+	let visible: String = text.chars().filter(|c| !invisible(*c)).collect();
+	let lower = crate::ground::normalize(&visible);
 	INSTRUCTION_PATTERNS
 		.iter()
 		.any(|pattern| lower.contains(pattern))
 		|| TOOL_PATTERNS.iter().any(|pattern| lower.contains(pattern))
+}
+
+/// Characters that render as nothing: zero-width and joiner characters,
+/// direction overrides, the soft hyphen, the byte-order mark, Unicode tags,
+/// and controls other than whitespace.
+fn invisible(c: char) -> bool {
+	matches!(c,
+		'\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+		| '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+		| '\u{E0000}'..='\u{E007F}')
+		|| (c.is_control() && !c.is_whitespace())
 }
 
 /// Subject matter that always lands a claim in Held for the owner to
@@ -127,7 +141,9 @@ const SENSITIVE_PATTERNS: &[&str] = &[
 /// topic like `banking.habits` holds the claim even when the statement is
 /// innocuous.
 pub fn is_sensitive(topic: Option<&str>, statement: &str) -> bool {
-	let lower = format!("{} {}", topic.unwrap_or_default(), statement).to_lowercase();
+	let text = format!("{} {}", topic.unwrap_or_default(), statement);
+	let visible: String = text.chars().filter(|c| !invisible(*c)).collect();
+	let lower = format!("{} ", crate::ground::normalize(&visible));
 	SENSITIVE_PATTERNS
 		.iter()
 		.any(|pattern| lower.contains(pattern))
@@ -136,6 +152,17 @@ pub fn is_sensitive(topic: Option<&str>, statement: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn hidden_characters_do_not_hide_instructions() {
+		assert!(looks_like_instruction("ign\u{200B}ore previous notes"));
+		assert!(looks_like_instruction(
+			"ＩＧＮＯＲＥ ＰＲＥＶＩＯＵＳ notes"
+		));
+		assert!(looks_like_instruction("system\u{00A0}\u{00A0}prompt"));
+		assert!(is_sensitive(None, "uses a pass\u{200D}word manager"));
+		assert!(!looks_like_instruction("Walks to the office on Fridays"));
+	}
 
 	#[test]
 	fn instruction_shapes_are_caught() {

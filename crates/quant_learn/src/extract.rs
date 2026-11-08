@@ -324,6 +324,20 @@ fn parse_response(content: &str) -> Result<ModelResponse, String> {
 	serde_json::from_str(&cleaned[start..=end]).map_err(|error| error.to_string())
 }
 
+/// The classes of `stream`'s spec, or of its nearest registered ancestor.
+fn stream_classes(specs: &[quant_core::StreamSpec], stream: &StreamId) -> Vec<Class> {
+	let mut name = stream.as_str();
+	loop {
+		if let Some(spec) = specs.iter().find(|spec| spec.id.as_str() == name) {
+			return spec.classes.clone();
+		}
+		let Some((parent, _)) = name.rsplit_once('.') else {
+			return Vec::new();
+		};
+		name = parent;
+	}
+}
+
 /// Check one proposed claim against its evidence and the rules, and store
 /// it: grounded, instruction-free, sensitive content held, the rest
 /// Observed — Active only when grounded in at least two distinct records
@@ -393,6 +407,19 @@ fn store_claim(
 		}
 		if !evidence.contains(&id) {
 			evidence.push(id);
+		}
+	}
+
+	// A claim carries at least the classes of the records it rests on, so a
+	// model that forgets to tag a heart-rate fact as health cannot hand it
+	// to a grant that denies health.
+	let mut specs = quant_core::builtin_streams();
+	specs.extend(store.custom_streams()?);
+	for record in batch.iter().filter(|record| evidence.contains(&record.id)) {
+		for class in stream_classes(&specs, &record.stream) {
+			if !classes.contains(&class) {
+				classes.push(class);
+			}
 		}
 	}
 
@@ -569,6 +596,17 @@ async fn embed_claim(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn claims_inherit_the_classes_of_their_streams() {
+		let specs = quant_core::builtin_streams();
+		let heart: StreamId = "health.heart_rate".parse().unwrap();
+		assert!(stream_classes(&specs, &heart).contains(&Class::Health));
+		let daily: StreamId = "memory.daily".parse().unwrap();
+		assert!(stream_classes(&specs, &daily).contains(&Class::Health));
+		let note: StreamId = "memory.note".parse().unwrap();
+		assert!(stream_classes(&specs, &note).is_empty());
+	}
 
 	#[test]
 	fn responses_parse_with_or_without_fences() {
