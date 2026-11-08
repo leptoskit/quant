@@ -17,10 +17,13 @@ use std::sync::atomic::Ordering;
 use std::task::Waker;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jiff::SignedDuration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use quant_access::Grant;
+use quant_access::OwnerDevicePolicy;
 use quant_access::audit::Actor;
 use quant_access::audit::AuditEntry;
 use quant_access::audit::Outcome;
@@ -30,12 +33,14 @@ use quant_api::CaptureState;
 use quant_api::ClientKind;
 use quant_api::ClientStatus;
 use quant_api::ClientView;
+use quant_api::EnrolDeviceRequest;
 use quant_api::PauseRequest;
 use quant_api::Paused;
 use quant_api::RecordsRequest;
 use quant_api::RenameClip;
 use quant_api::SaveAudio;
 use quant_api::ServedRecord;
+use quant_api::SessionSource;
 use quant_api::Status;
 use quant_client::Client;
 use quant_client::ClientError;
@@ -43,14 +48,17 @@ use quant_client::Endpoint;
 use quant_client::Identity;
 use quant_client::OwnerSession;
 use quant_core::MediaRef;
+use quant_core::OwnerDeviceId;
 use quant_model::AuditRow;
 use quant_model::GrantRow;
 use quant_model::Link;
 use quant_model::Moment;
 use quant_model::Notice;
+use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
 use quant_model::Reply;
+use quant_model::ReplyData;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
 use tokio::sync::mpsc;
@@ -79,6 +87,8 @@ pub struct Config {
 	pub vault: Option<PathBuf>,
 	/// This app's identity file.
 	pub identity: PathBuf,
+	/// Where the Touch ID owner device id is kept (app-private, not a secret).
+	pub touch_id: PathBuf,
 	/// Where played clips are written for the moment they play.
 	pub cache: PathBuf,
 	/// The time zone times are shown in.
@@ -103,10 +113,12 @@ impl Config {
 				)
 			}
 		};
+		let identity = Identity::path(&Identity::default_dir(), "desktop");
 		Self {
 			endpoint,
 			vault,
-			identity: Identity::path(&Identity::default_dir(), "desktop"),
+			touch_id: identity.with_file_name("desktop.touch-id.json"),
+			identity,
 			cache,
 			tz: TimeZone::system(),
 		}
@@ -153,6 +165,26 @@ pub enum Job {
 		/// The new title.
 		title: String,
 	},
+	/// Fetch a challenge for this Mac's Touch ID key to sign.
+	TouchIdChallenge,
+	/// Open an owner session with an enrolled device's signature.
+	UnlockWithDevice {
+		/// The enrolled device id.
+		device: String,
+		/// The challenge the signature answers, base64, as the daemon gave it.
+		challenge: String,
+		/// The ECDSA P-256/SHA-256 signature over the unlock message, DER.
+		signature: Vec<u8>,
+	},
+	/// Enrol this Mac's Touch ID key as an owner device.
+	EnrolTouchId {
+		/// The key's uncompressed SEC1 public point (65 bytes).
+		public_key: Vec<u8>,
+	},
+	/// Turn off Touch ID on this Mac: revoke the device and forget it.
+	TouchIdOff,
+	/// Revoke an enrolled owner device.
+	RevokeDevice(String),
 }
 
 impl Job {
@@ -166,6 +198,8 @@ impl Job {
 			Job::Approve { .. } | Job::Deny(_) | Job::Revoke(_) => {
 				"Unlock to manage agents".to_owned()
 			}
+			Job::EnrolTouchId { .. } => "Unlock with your passphrase to set up Touch ID".to_owned(),
+			Job::TouchIdOff | Job::RevokeDevice(_) => "Unlock to manage Touch ID".to_owned(),
 			_ => return None,
 		})
 	}
@@ -349,8 +383,19 @@ struct OwnerData {
 	status: Option<Status>,
 	clients: Vec<ClientView>,
 	grants: Vec<Grant>,
+	devices: Vec<quant_api::OwnerDeviceView>,
 	audit: Vec<AuditEntry>,
 	chain_ok: Option<bool>,
+}
+
+/// What a job finished with: an optional notice, and optional reply data.
+enum Done {
+	/// Nothing to say, nothing to return.
+	Quiet,
+	/// A notice to show.
+	Say(String),
+	/// Reply data to hand back to the window.
+	Data(ReplyData),
 }
 
 struct Worker {
@@ -368,10 +413,13 @@ struct Worker {
 	media: HashMap<String, MediaRef>,
 	notice: Option<(Notice, Timestamp)>,
 	playing: Option<(String, Child, PathBuf)>,
+	/// This Mac's enrolled Touch ID owner device id, when set up.
+	touch_id: Option<String>,
 }
 
 impl Worker {
 	fn new(config: Config, shared: Arc<Shared>) -> Self {
+		let touch_id = read_touch_id(&config.touch_id);
 		Self {
 			config,
 			shared,
@@ -386,6 +434,7 @@ impl Worker {
 			media: HashMap::new(),
 			notice: None,
 			playing: None,
+			touch_id,
 		}
 	}
 
@@ -406,11 +455,18 @@ impl Worker {
 		);
 		let outcome = self.run(job).await;
 		let reply = match outcome {
-			Ok(Some(text)) => {
+			Ok(Done::Say(text)) => {
 				self.say(text, false);
 				ok()
 			}
-			Ok(None) => ok(),
+			Ok(Done::Quiet) => ok(),
+			Ok(Done::Data(data)) => {
+				Reply {
+					ok: true,
+					error: None,
+					data: Some(data),
+				}
+			}
 			Err(text) => {
 				self.say(text.clone(), true);
 				failed(text)
@@ -425,11 +481,12 @@ impl Worker {
 		}
 	}
 
-	/// Run one job: a notice to show on success, or what went wrong.
-	async fn run(&mut self, job: Job) -> Result<Option<String>, String> {
+	/// Run one job: a notice to show on success, reply data to hand back, or
+	/// what went wrong.
+	async fn run(&mut self, job: Job) -> Result<Done, String> {
 		match job {
-			Job::Refresh { .. } => Ok(None),
-			Job::Unlock(passphrase) => self.unlock(&passphrase).await.map(Some),
+			Job::Refresh { .. } => Ok(Done::Quiet),
+			Job::Unlock(passphrase) => self.unlock(&passphrase).await.map(Done::Say),
 			Job::Lock => {
 				self.deferred = None;
 				self.unlock_reason = None;
@@ -437,7 +494,7 @@ impl Worker {
 				if let Some(owner) = self.owner.take() {
 					let _ = owner.lock().await;
 				}
-				Ok(Some("Locked".to_owned()))
+				Ok(Done::Say("Locked".to_owned()))
 			}
 			Job::Pause(minutes) => {
 				let owner = self.owner.as_ref().ok_or("Unlock first")?;
@@ -448,7 +505,7 @@ impl Worker {
 					})
 					.await
 					.map_err(|e| problem(&e))?;
-				Ok(Some(match status.paused {
+				Ok(Done::Say(match status.paused {
 					Some(Paused::Until(until)) => {
 						format!("Paused until {}", words::clock(until, &self.config.tz))
 					}
@@ -464,9 +521,9 @@ impl Worker {
 					})
 					.await
 					.map_err(|e| problem(&e))?;
-				Ok(Some("Recording again".to_owned()))
+				Ok(Done::Say("Recording again".to_owned()))
 			}
-			Job::Save(minutes) => self.save(minutes).await.map(Some),
+			Job::Save(minutes) => self.save(minutes).await.map(Done::Say),
 			Job::Approve {
 				client,
 				scopes,
@@ -482,22 +539,27 @@ impl Worker {
 						expires_in_hours: None,
 						limits: None,
 						unredacted: false,
+						deny_classes: None,
 					})
 					.await
 					.map_err(|e| problem(&e))?;
-				Ok(Some(format!("Approved {}", approved.name)))
+				Ok(Done::Say(format!("Approved {}", approved.name)))
 			}
 			Job::Deny(client) => {
 				let owner = self.owner.as_ref().ok_or("Unlock first")?;
 				owner.deny(&client).await.map_err(|e| problem(&e))?;
-				Ok(Some("Refused the pairing".to_owned()))
+				Ok(Done::Say("Refused the pairing".to_owned()))
 			}
 			Job::Revoke(grant) => {
 				let owner = self.owner.as_ref().ok_or("Unlock first")?;
 				let revoked = owner.revoke(&grant).await.map_err(|e| problem(&e))?;
-				Ok(Some(format!("Revoked {}", revoked.label)))
+				Ok(Done::Say(format!("Revoked {}", revoked.label)))
 			}
-			Job::Play(id) => self.play(&id).await,
+			Job::Play(id) => {
+				self.play(&id)
+					.await
+					.map(|notice| notice.map_or(Done::Quiet, Done::Say))
+			}
 			Job::Rename { id, title } => {
 				let title = title.trim().to_owned();
 				if title.is_empty() {
@@ -509,8 +571,20 @@ impl Worker {
 					.rename_clip(&RenameClip { id, title })
 					.await
 					.map_err(|e| problem(&e))?;
-				Ok(Some("Renamed".to_owned()))
+				Ok(Done::Say("Renamed".to_owned()))
 			}
+			Job::TouchIdChallenge => self.touch_id_challenge().await,
+			Job::UnlockWithDevice {
+				device,
+				challenge,
+				signature,
+			} => {
+				self.unlock_with_device(&device, &challenge, &signature)
+					.await
+			}
+			Job::EnrolTouchId { public_key } => self.enrol_touch_id(&public_key).await,
+			Job::TouchIdOff => self.touch_id_off().await,
+			Job::RevokeDevice(device) => self.revoke_device(&device).await,
 		}
 	}
 
@@ -534,6 +608,117 @@ impl Worker {
 		self.owner = Some(session);
 		self.unlock_reason = None;
 		Ok(format!("Unlocked until {until}"))
+	}
+
+	/// The challenge and message the window's Touch ID key signs.
+	async fn touch_id_challenge(&mut self) -> Result<Done, String> {
+		let client = self.client()?.clone();
+		let hello = client.hello().await.map_err(|e| problem(&e))?;
+		let challenge = client.owner_challenge().await.map_err(|e| problem(&e))?;
+		let message = quant_api::owner_unlock_message(&hello.vault_id, &challenge.challenge);
+		Ok(Done::Data(ReplyData::TouchIdChallenge {
+			challenge: challenge.challenge,
+			message,
+		}))
+	}
+
+	/// Open an owner session with an enrolled device's signature.
+	async fn unlock_with_device(
+		&mut self,
+		device: &str,
+		challenge: &str,
+		signature: &[u8],
+	) -> Result<Done, String> {
+		let device: OwnerDeviceId = device
+			.parse()
+			.map_err(|_| "No such Touch ID device".to_owned())?;
+		self.secure_socket()?;
+		let result = OwnerSession::open_with_device_signature(
+			self.config.endpoint.clone(),
+			device,
+			challenge.to_owned(),
+			URL_SAFE_NO_PAD.encode(signature),
+		)
+		.await;
+		let session = match result {
+			Ok(session) => session,
+			Err(error) => {
+				let text = match error.code() {
+					// The daemon refused: the challenge lapsed while the
+					// prompt was open, the device was revoked, or the
+					// signature was wrong — it does not say which. Keep the
+					// key; a revoked device is forgotten when the device list
+					// next loads.
+					Some("unauthenticated") => {
+						"Touch ID didn't unlock Quant; try again or use your passphrase".to_owned()
+					}
+					_ => problem(&error),
+				};
+				return Err(text);
+			}
+		};
+		let until = words::clock(session.expires_at, &self.config.tz);
+		self.owner = Some(session);
+		self.unlock_reason = None;
+		Ok(Done::Say(format!("Unlocked until {until}")))
+	}
+
+	/// Enrol this Mac's Touch ID key. Only a passphrase session may, so a
+	/// stolen device cannot gather more keys under the owner's name.
+	async fn enrol_touch_id(&mut self, public_key: &[u8]) -> Result<Done, String> {
+		let owner = self.owner.clone().ok_or("Unlock first")?;
+		let passphrase_session = self
+			.owner_data
+			.as_ref()
+			.and_then(|data| data.status.as_ref())
+			.is_some_and(|status| status.session == SessionSource::Passphrase);
+		if !passphrase_session {
+			return Err("Set up Touch ID with your passphrase session".to_owned());
+		}
+		let enrolled = owner
+			.owner_device_add(&EnrolDeviceRequest {
+				label: touch_id_label(),
+				public_key: URL_SAFE_NO_PAD.encode(public_key),
+				policy: OwnerDevicePolicy::Biometry,
+			})
+			.await
+			.map_err(|e| problem(&e))?;
+		let id = enrolled.id.to_string();
+		write_touch_id(&self.config.touch_id, Some(&id))?;
+		self.touch_id = Some(id);
+		Ok(Done::Say(format!("Touch ID is on for {}", enrolled.label)))
+	}
+
+	/// Turn off Touch ID on this Mac: revoke the device (best effort) and
+	/// forget it here.
+	async fn touch_id_off(&mut self) -> Result<Done, String> {
+		if let (Some(owner), Some(device)) = (self.owner.clone(), self.touch_id.as_deref())
+			&& let Ok(id) = device.parse::<OwnerDeviceId>()
+		{
+			let _ = owner.owner_device_revoke(id).await;
+		}
+		self.forget_touch_id();
+		Ok(Done::Say("Touch ID is off".to_owned()))
+	}
+
+	/// Revoke an enrolled owner device, by id.
+	async fn revoke_device(&mut self, device: &str) -> Result<Done, String> {
+		let owner = self.owner.clone().ok_or("Unlock first")?;
+		let id: OwnerDeviceId = device.parse().map_err(|_| "No such device".to_owned())?;
+		let revoked = owner
+			.owner_device_revoke(id)
+			.await
+			.map_err(|e| problem(&e))?;
+		if self.touch_id.as_deref() == Some(device) {
+			self.forget_touch_id();
+		}
+		Ok(Done::Say(format!("Revoked {}", revoked.label)))
+	}
+
+	/// Forget this Mac's Touch ID device, on disk and here.
+	fn forget_touch_id(&mut self) {
+		self.touch_id = None;
+		let _ = write_touch_id(&self.config.touch_id, None);
 	}
 
 	async fn save(&mut self, minutes: u32) -> Result<String, String> {
@@ -781,6 +966,16 @@ impl Worker {
 			self.owner_data = None;
 			return;
 		}
+		let devices = owner.owner_devices().await.unwrap_or_default();
+		// If this Mac's device was revoked on the daemon (from the CLI or
+		// another device), forget it here so the window stops offering it.
+		let touch_id = self.touch_id.clone();
+		if let Some(device) = touch_id
+			&& let Ok(id) = device.parse::<OwnerDeviceId>()
+			&& !devices.iter().any(|d| d.id == id && d.revoked_at.is_none())
+		{
+			self.forget_touch_id();
+		}
 		let audit = owner
 			.audit(&AuditRequest {
 				limit: Some(50),
@@ -793,6 +988,7 @@ impl Worker {
 			status: status.ok(),
 			clients: owner.clients().await.unwrap_or_default(),
 			grants: owner.grants().await.unwrap_or_default(),
+			devices,
 			chain_ok: audit.as_ref().and_then(|a| a.chain_ok),
 			audit: audit.map(|a| a.entries).unwrap_or_default(),
 		});
@@ -821,6 +1017,7 @@ impl Worker {
 		};
 		let link = self.link.clone();
 		let moments = self.moments.clone();
+		let touch_id = self.touch_id.clone();
 		self.shared.update(move |snapshot| {
 			snapshot.headline = headline;
 			snapshot.link = link;
@@ -831,6 +1028,7 @@ impl Worker {
 			snapshot.owner = owner;
 			snapshot.unlock_reason = unlock_reason;
 			snapshot.notice = notice;
+			snapshot.touch_id.device_id = touch_id;
 		});
 	}
 }
@@ -852,6 +1050,7 @@ fn ok() -> Reply {
 	Reply {
 		ok: true,
 		error: None,
+		data: None,
 	}
 }
 
@@ -859,21 +1058,54 @@ fn failed(error: String) -> Reply {
 	Reply {
 		ok: false,
 		error: Some(error),
+		data: None,
 	}
 }
 
-fn device_name() -> String {
-	let host = std::process::Command::new("/bin/hostname")
+/// The machine's short hostname, or nothing when `/bin/hostname` is missing.
+fn short_hostname() -> Option<String> {
+	std::process::Command::new("/bin/hostname")
 		.arg("-s")
 		.output()
 		.ok()
 		.and_then(|out| String::from_utf8(out.stdout).ok())
 		.map(|name| name.trim().to_owned())
-		.filter(|name| !name.is_empty());
-	match host {
+		.filter(|name| !name.is_empty())
+}
+
+fn device_name() -> String {
+	match short_hostname() {
 		Some(host) => format!("Quant desktop on {host}"),
 		None => "Quant desktop".to_owned(),
 	}
+}
+
+/// The label this Mac's Touch ID key is enrolled under, at most 64 characters.
+fn touch_id_label() -> String {
+	let host = short_hostname().unwrap_or_else(|| "This Mac".to_owned());
+	format!("{host} Touch ID").chars().take(64).collect()
+}
+
+/// The Touch ID settings on disk: the enrolled owner device id, or none.
+fn read_touch_id(path: &std::path::Path) -> Option<String> {
+	let bytes = std::fs::read(path).ok()?;
+	let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+	value.get("device_id")?.as_str().map(ToOwned::to_owned)
+}
+
+/// Store this Mac's Touch ID device id, or clear the settings when `None`.
+fn write_touch_id(path: &std::path::Path, device_id: Option<&str>) -> Result<(), String> {
+	let Some(device_id) = device_id else {
+		// Clearing removes the file; a missing file is not an error.
+		let _ = std::fs::remove_file(path);
+		return Ok(());
+	};
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+	}
+	let bytes = serde_json::to_vec(&serde_json::json!({ "device_id": device_id }))
+		.map_err(|e| e.to_string())?;
+	std::fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
 /// Capture sources: the owner's detailed view when unlocked, otherwise the
@@ -1020,11 +1252,30 @@ fn owner_view(
 			}
 		})
 		.collect();
+	let devices = data
+		.devices
+		.iter()
+		.filter(|device| device.revoked_at.is_none())
+		.map(|device| {
+			OwnerDeviceRow {
+				id: device.id.to_string(),
+				label: device.label.clone(),
+				fingerprint: device.fingerprint.clone(),
+				last_used: device.last_used.map(|at| words::when(at, now, tz)),
+			}
+		})
+		.collect();
+	let passphrase_session = data
+		.status
+		.as_ref()
+		.is_some_and(|status| status.session == SessionSource::Passphrase);
 	OwnerView {
 		until: words::clock(session.expires_at, tz),
 		pending,
 		grants,
 		audit,
 		chain_ok: data.chain_ok,
+		devices,
+		passphrase_session,
 	}
 }

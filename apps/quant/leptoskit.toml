@@ -21,8 +21,9 @@ client_package = "quant_app"
 package_id = "dev.leptoskit.quant"
 viewport_width = 520.0
 viewport_height = 640.0
-# The app's one native service: quant_service's `quant` runtime package.
-plugins = ["quant"]
+# The app's native service (`quant`) and the Secure Enclave signing keys the
+# window uses for Touch ID (`device-keys`).
+plugins = ["quant", "device-keys"]
 
 [codepush]
 enabled = false

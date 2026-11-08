@@ -15,10 +15,12 @@ name = "quant"
 rust-service-factory = "from_app_dirs"
 
 [dependencies]
+base64 = { workspace = true }
 jiff = { workspace = true }
 leptoskit_bridge = { workspace = true }
 leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
 leptoskit_native = { workspace = true }
+leptoskit_plugin_autostart = { workspace = true }
 leptoskit_wasm = { workspace = true }
 quant_access = { workspace = true }
 quant_api = { workspace = true }
@@ -35,8 +37,6 @@ leptoskit_plugin_menu = { workspace = true }
 leptoskit_plugin_tray = { workspace = true }
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
-objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSBundle", "NSError", "NSString"] }
-objc2-service-management = { workspace = true, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
 [build-dependencies]
 png = { workspace = true }

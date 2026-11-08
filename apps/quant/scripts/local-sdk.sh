@@ -29,7 +29,8 @@ mkdir -p .cargo
 	echo "# Written by scripts/local-sdk.sh; remove with --off."
 	echo '[patch."https://github.com/leptoskit/leptoskit"]'
 	for crate in leptoskit leptoskit_bridge leptoskit_bridge_ffi leptoskit_build \
-		leptoskit_native leptoskit_plugin_menu leptoskit_plugin_tray leptoskit_testing leptoskit_wasm; do
+		leptoskit_native leptoskit_plugin_autostart leptoskit_plugin_device_keys \
+		leptoskit_plugin_menu leptoskit_plugin_tray leptoskit_testing leptoskit_wasm; do
 		echo "$crate = { path = \"$sdk/crates/$crate\" }"
 	done
 } >"$config"

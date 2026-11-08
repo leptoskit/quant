@@ -58,7 +58,7 @@ pub fn start(config: Config) -> std::io::Result<Handle> {
 		return Ok(handle);
 	}
 	let shared = Arc::new(Shared::default());
-	shared.update(|s| s.opens_at_login = crate::desktop::opens_at_login());
+	shared.update(|s| s.opens_at_login = crate::autostart::is_registered());
 	shared.set_notify(Arc::new(crate::desktop::poll_soon));
 	let desktop = Desktop::install(Arc::clone(&shared));
 	let (jobs, worker) = daemon::spawn(config, Arc::clone(&shared))?;
