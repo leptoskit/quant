@@ -71,6 +71,12 @@ uuid_id!(
 	ClaimId,
 	"clm"
 );
+uuid_id!(
+	/// Identifies an owner device: a hardware key enrolled to unlock owner
+	/// sessions.
+	OwnerDeviceId,
+	"owd"
+);
 
 #[cfg(test)]
 mod tests {

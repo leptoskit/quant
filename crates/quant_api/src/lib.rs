@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use quant_access::Grant;
 use quant_access::Level;
 use quant_access::Limits;
+use quant_access::OwnerDevicePolicy;
 use quant_access::audit::AuditEntry;
 use quant_access::auth::PublicKey;
 use quant_core::Authority;
@@ -21,6 +22,7 @@ use quant_core::Class;
 use quant_core::ClientId;
 use quant_core::DeviceId;
 use quant_core::MediaRef;
+use quant_core::OwnerDeviceId;
 use quant_core::Record;
 use quant_core::RecordId;
 use quant_core::SeriesBatch;
@@ -100,6 +102,18 @@ pub mod routes {
 	pub const OWNER_CLAIM_CORRECT: &str = "/v1/owner/memory/claims/correct";
 	/// `POST` [`UnlockRequest`](super::UnlockRequest): start an owner session.
 	pub const OWNER_UNLOCK: &str = "/v1/owner/unlock";
+	/// `GET`: a challenge for an owner device to sign. Unauthenticated.
+	pub const OWNER_CHALLENGE: &str = "/v1/owner/challenge";
+	/// `POST` [`DeviceUnlockRequest`](super::DeviceUnlockRequest): start an
+	/// owner session with an enrolled device's signature. Unauthenticated.
+	pub const OWNER_UNLOCK_DEVICE: &str = "/v1/owner/unlock/device";
+	/// `GET`: the enrolled owner devices (any owner session). `POST`
+	/// [`EnrolDeviceRequest`](super::EnrolDeviceRequest): enrol one (needs a
+	/// session opened with the passphrase).
+	pub const OWNER_DEVICES: &str = "/v1/owner/devices";
+	/// `POST` [`RevokeDeviceRequest`](super::RevokeDeviceRequest): revoke an
+	/// owner device (any owner session).
+	pub const OWNER_DEVICE_REVOKE: &str = "/v1/owner/devices/revoke";
 	/// `POST`: end the owner session.
 	pub const OWNER_LOCK: &str = "/v1/owner/lock";
 	/// `GET`: every client.
@@ -617,6 +631,91 @@ pub struct OwnerSession {
 	pub expires_at: Timestamp,
 }
 
+/// How an owner session was opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSource {
+	/// With the vault passphrase.
+	Passphrase,
+	/// With an enrolled owner device: a hardware key that signed the unlock
+	/// challenge after a biometric check.
+	Device,
+}
+
+/// The bytes an owner device signs to open an owner session: a fixed label,
+/// then the vault's id, then the challenge, each on its own line. Binding the
+/// vault id makes a signature answer this vault's challenge and no other, so
+/// a challenge from elsewhere can never be replayed here.
+pub fn owner_unlock_message(vault_id: &str, challenge: &str) -> Vec<u8> {
+	format!("quant owner unlock v1\n{vault_id}\n{challenge}").into_bytes()
+}
+
+/// `GET` [`routes::OWNER_CHALLENGE`]: 32 random bytes for an owner device's
+/// key to sign. Each works once and stops working after 60 seconds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerChallenge {
+	/// The challenge, base64.
+	pub challenge: String,
+	/// When it stops working.
+	pub expires_at: Timestamp,
+}
+
+/// `POST` [`routes::OWNER_UNLOCK_DEVICE`]: open an owner session with an
+/// enrolled device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceUnlockRequest {
+	/// The enrolled device.
+	pub device: OwnerDeviceId,
+	/// The challenge this signature answers, base64, as
+	/// [`OwnerChallenge`](super::OwnerChallenge) gave it.
+	pub challenge: String,
+	/// ECDSA P-256/SHA-256 over [`owner_unlock_message`], DER or raw `r‖s`,
+	/// base64.
+	pub signature: String,
+}
+
+/// `POST` [`routes::OWNER_DEVICES`]: enrol an owner device. Needs a session
+/// opened with the passphrase.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrolDeviceRequest {
+	/// A name for the device, 1 to 64 characters.
+	pub label: String,
+	/// The device's P-256 public key: uncompressed SEC1 (65 bytes,
+	/// `04 ‖ X ‖ Y`), base64.
+	pub public_key: String,
+	/// How the device protects its key, as it reports it. Informational.
+	pub policy: OwnerDevicePolicy,
+}
+
+/// An enrolled owner device, as the owner sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OwnerDeviceView {
+	/// Its id.
+	pub id: OwnerDeviceId,
+	/// Its label.
+	pub label: String,
+	/// Short hash of the public key, so two enrolled devices can be told
+	/// apart at a glance.
+	pub fingerprint: String,
+	/// How the device protects its key, as it reported at enrolment.
+	pub policy: OwnerDevicePolicy,
+	/// When it was enrolled.
+	pub created_at: Timestamp,
+	/// When it last opened a session.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub last_used: Option<Timestamp>,
+	/// When the owner revoked it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub revoked_at: Option<Timestamp>,
+}
+
+/// `POST` [`routes::OWNER_DEVICE_REVOKE`]: revoke an owner device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeDeviceRequest {
+	/// The device.
+	pub id: OwnerDeviceId,
+}
+
 /// Approve a pairing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ApproveRequest {
@@ -715,6 +814,8 @@ pub struct Status {
 	pub version: String,
 	/// Vault id.
 	pub vault_id: String,
+	/// How the session that asked was opened.
+	pub session: SessionSource,
 	/// When the daemon started.
 	pub started_at: Timestamp,
 	/// Capture sources.
@@ -1043,6 +1144,17 @@ pub struct ClaimCorrectRequest {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_device_message_binds_the_vault_and_challenge() {
+		let message = owner_unlock_message("abc123", "Q0hBTExFTkdF");
+		assert_eq!(
+			message,
+			b"quant owner unlock v1\nabc123\nQ0hBTExFTkdF".to_vec()
+		);
+		assert_ne!(message, owner_unlock_message("other", "Q0hBTExFTkdF"));
+		assert_ne!(message, owner_unlock_message("abc123", "WRONG"));
+	}
 
 	#[test]
 	fn permission_details_name_the_missing_permission() {

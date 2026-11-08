@@ -27,6 +27,7 @@ use quant_api::PauseRequest;
 use quant_api::PurgeRequest;
 use quant_api::Purged;
 use quant_api::RevokeRequest;
+use quant_api::SessionSource;
 use quant_api::Status;
 use quant_api::UnlockRequest;
 use quant_core::StreamSpec;
@@ -174,7 +175,9 @@ pub async fn unlock(
 		))?;
 		return Err(Error::Unauthenticated("wrong passphrase".into()));
 	}
-	let (token, expires_at) = state.owner().open(Timestamp::now());
+	let (token, expires_at) = state
+		.owner()
+		.open(SessionSource::Passphrase, Timestamp::now());
 	owner_audit(&state, "owner.unlock", "", serde_json::Value::Null)?;
 	Ok(Json(OwnerSession { token, expires_at }))
 }
@@ -459,11 +462,12 @@ pub async fn set_derive_config(
 }
 
 /// `GET /v1/owner/status`
-pub async fn status(AxumState(state): Shared, _owner: Owner) -> ApiResult<Json<Status>> {
+pub async fn status(AxumState(state): Shared, owner: Owner) -> ApiResult<Json<Status>> {
 	let clients = state.vault.store.clients()?;
 	Ok(Json(Status {
 		version: env!("CARGO_PKG_VERSION").into(),
 		vault_id: state.vault.manifest.vault_id.clone(),
+		session: owner.via,
 		started_at: state.started_at,
 		capture: state.capture_status(),
 		pending_clients: clients

@@ -4,7 +4,8 @@
 //! that never leaves this machine. Every request is signed with it. Pair a
 //! new identity with [`Client::pair`], have the owner approve it, then query
 //! within the grant they chose. Owner actions go through an [`OwnerSession`]
-//! opened with the passphrase.
+//! opened with the passphrase, or with an enrolled owner device whose
+//! hardware key signs the unlock challenge.
 
 mod identity;
 mod pinned;
@@ -13,6 +14,8 @@ pub mod when;
 
 use std::path::PathBuf;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Full;
@@ -36,8 +39,10 @@ use quant_api::ClientView;
 use quant_api::Context;
 use quant_api::ContextRequest;
 use quant_api::DenyRequest;
+use quant_api::DeviceUnlockRequest;
 use quant_api::Durations;
 use quant_api::DurationsRequest;
+use quant_api::EnrolDeviceRequest;
 use quant_api::Hello;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
@@ -45,7 +50,9 @@ use quant_api::Ingested;
 use quant_api::Me;
 use quant_api::Overview;
 use quant_api::OverviewRequest;
+use quant_api::OwnerChallenge;
 use quant_api::OwnerClaimRequest;
+use quant_api::OwnerDeviceView;
 use quant_api::PairRequest;
 use quant_api::PairResponse;
 use quant_api::ProfileClaims;
@@ -56,6 +63,7 @@ use quant_api::Purged;
 use quant_api::Records;
 use quant_api::RecordsRequest;
 use quant_api::RenameClip;
+use quant_api::RevokeDeviceRequest;
 use quant_api::RevokeRequest;
 use quant_api::SaveAudio;
 use quant_api::SavedClip;
@@ -68,6 +76,7 @@ use quant_api::routes;
 use quant_core::Claim;
 use quant_core::ClientId;
 use quant_core::MediaRef;
+use quant_core::OwnerDeviceId;
 use quant_core::StreamId;
 use quant_core::StreamSpec;
 use serde::Serialize;
@@ -605,6 +614,17 @@ impl Client {
 	pub async fn unlock(&self, passphrase: &str) -> Result<OwnerSession> {
 		OwnerSession::open(self.endpoint.clone(), passphrase).await
 	}
+
+	/// A challenge for an owner device's key to sign, for
+	/// [`OwnerSession::open_with_device`]. Unauthenticated: a challenge is
+	/// 32 random bytes that mean nothing until a valid signature answers it.
+	pub async fn owner_challenge(&self) -> Result<OwnerChallenge> {
+		let request = builder(Method::GET, routes::OWNER_CHALLENGE)
+			.body(Full::new(Bytes::new()))
+			.map_err(|e| ClientError::Http(e.to_string()))?;
+		let (status, body) = send(&self.endpoint, request).await?;
+		decode(status, &body)
+	}
 }
 
 /// An open owner session.
@@ -623,6 +643,67 @@ impl OwnerSession {
 			passphrase: passphrase.to_owned(),
 		})?;
 		let request = builder(Method::POST, routes::OWNER_UNLOCK)
+			.header("content-type", "application/json")
+			.body(Full::new(Bytes::from(body)))
+			.map_err(|e| ClientError::Http(e.to_string()))?;
+		let (status, answer) = send(&endpoint, request).await?;
+		let session: quant_api::OwnerSession = decode(status, &answer)?;
+		Ok(Self {
+			endpoint,
+			token: session.token,
+			expires_at: session.expires_at,
+		})
+	}
+
+	/// Open a session at `endpoint` with an enrolled owner device: fetch the
+	/// vault's id and a challenge, have `signer` sign the unlock message with
+	/// the device's hardware key (ECDSA P-256/SHA-256, DER or raw `r‖s`), and
+	/// post the signature. The signer runs where the private key lives; it
+	/// never leaves it.
+	pub async fn open_with_device(
+		endpoint: Endpoint,
+		device: OwnerDeviceId,
+		signer: impl FnOnce(&[u8]) -> Vec<u8>,
+	) -> Result<Self> {
+		let hello: Hello = {
+			let request = builder(Method::GET, routes::HELLO)
+				.body(Full::new(Bytes::new()))
+				.map_err(|e| ClientError::Http(e.to_string()))?;
+			let (status, body) = send(&endpoint, request).await?;
+			decode(status, &body)?
+		};
+		let challenge: OwnerChallenge = {
+			let request = builder(Method::GET, routes::OWNER_CHALLENGE)
+				.body(Full::new(Bytes::new()))
+				.map_err(|e| ClientError::Http(e.to_string()))?;
+			let (status, body) = send(&endpoint, request).await?;
+			decode(status, &body)?
+		};
+		let message = quant_api::owner_unlock_message(&hello.vault_id, &challenge.challenge);
+		let signature = signer(&message);
+		Self::open_with_device_signature(
+			endpoint,
+			device,
+			challenge.challenge,
+			URL_SAFE_NO_PAD.encode(signature),
+		)
+		.await
+	}
+
+	/// Open one with a signature already computed over
+	/// [`quant_api::owner_unlock_message`] for this vault and challenge.
+	pub async fn open_with_device_signature(
+		endpoint: Endpoint,
+		device: OwnerDeviceId,
+		challenge: String,
+		signature: String,
+	) -> Result<Self> {
+		let body = serde_json::to_vec(&DeviceUnlockRequest {
+			device,
+			challenge,
+			signature,
+		})?;
+		let request = builder(Method::POST, routes::OWNER_UNLOCK_DEVICE)
 			.header("content-type", "application/json")
 			.body(Full::new(Bytes::from(body)))
 			.map_err(|e| ClientError::Http(e.to_string()))?;
@@ -839,6 +920,29 @@ impl OwnerSession {
 	pub async fn claim_correct(&self, request: &ClaimCorrectRequest) -> Result<Claim> {
 		self.call(Method::POST, routes::OWNER_CLAIM_CORRECT, Some(request))
 			.await
+	}
+
+	/// Every enrolled owner device.
+	pub async fn owner_devices(&self) -> Result<Vec<OwnerDeviceView>> {
+		self.call::<(), _>(Method::GET, routes::OWNER_DEVICES, None)
+			.await
+	}
+
+	/// Enrol an owner device with the passphrase session this was opened
+	/// with. A session opened with a device cannot enrol others.
+	pub async fn owner_device_add(&self, request: &EnrolDeviceRequest) -> Result<OwnerDeviceView> {
+		self.call(Method::POST, routes::OWNER_DEVICES, Some(request))
+			.await
+	}
+
+	/// Revoke an owner device; its key stops working at once.
+	pub async fn owner_device_revoke(&self, id: OwnerDeviceId) -> Result<OwnerDeviceView> {
+		self.call(
+			Method::POST,
+			routes::OWNER_DEVICE_REVOKE,
+			Some(&RevokeDeviceRequest { id }),
+		)
+		.await
 	}
 
 	/// End the session.

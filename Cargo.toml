@@ -47,6 +47,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 jiff = { version = "0.2", features = ["serde"] }
 qrcode = { version = "0.14", default-features = false }
 rcgen = "0.14"
+p256 = { version = "0.13", features = ["ecdsa"] }
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-av-foundation = "0.3"
