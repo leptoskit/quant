@@ -11,6 +11,7 @@ use quant_access::audit::Actor;
 use quant_access::audit::AuditEvent;
 use quant_access::audit::Outcome;
 use quant_access::auth::SignedHeaders;
+use quant_api::SessionSource;
 use quant_api::routes::OWNER_HEADER;
 use quant_store::Client;
 use serde::de::DeserializeOwned;
@@ -166,6 +167,9 @@ impl FromRequest<Arc<State>> for SignedBytes {
 pub struct Owner {
 	/// The session token.
 	pub token: String,
+	/// How this session was opened: with the passphrase, or with an owner
+	/// device.
+	pub via: SessionSource,
 }
 
 impl FromRequestParts<Arc<State>> for Owner {
@@ -181,14 +185,18 @@ impl FromRequestParts<Arc<State>> for Owner {
 			.get(OWNER_HEADER)
 			.and_then(|v| v.to_str().ok())
 			.ok_or_else(|| Error::Unauthenticated("owner session required; unlock first".into()))?;
-		if state.owner().check(token, Timestamp::now()) {
-			Ok(Owner {
-				token: token.to_owned(),
-			})
-		} else {
-			Err(Error::Unauthenticated(
-				"owner session expired or invalid; unlock again".into(),
-			))
+		match state.owner().check(token, Timestamp::now()) {
+			Some(via) => {
+				Ok(Owner {
+					token: token.to_owned(),
+					via,
+				})
+			}
+			None => {
+				Err(Error::Unauthenticated(
+					"owner session expired or invalid; unlock again".into(),
+				))
+			}
 		}
 	}
 }

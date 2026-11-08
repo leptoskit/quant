@@ -3,7 +3,8 @@
 //! It holds the unlocked vault, runs capture sources, and serves the API in
 //! [`quant_api`] on a Unix socket only the owner's account can open. Clients
 //! sign every request with their own key and are held to the grant the owner
-//! approved; owner actions need the passphrase.
+//! approved; owner actions need the passphrase, or an enrolled owner device
+//! that signs after a biometric check.
 
 pub mod audio_save;
 mod authn;
@@ -14,6 +15,7 @@ mod ingest;
 pub mod learning;
 mod memory;
 mod owner;
+mod owner_devices;
 pub mod query;
 pub mod relay;
 mod state;
@@ -53,6 +55,16 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::AUDIO_RENAME, post(audio_save::rename))
 		.route(routes::CAPTURE_STATUS, get(query::capture_status))
 		.route(routes::OWNER_UNLOCK, post(owner::unlock))
+		.route(routes::OWNER_CHALLENGE, get(owner_devices::challenge))
+		.route(
+			routes::OWNER_UNLOCK_DEVICE,
+			post(owner_devices::unlock_device),
+		)
+		.route(
+			routes::OWNER_DEVICES,
+			get(owner_devices::devices).post(owner_devices::enrol),
+		)
+		.route(routes::OWNER_DEVICE_REVOKE, post(owner_devices::revoke))
 		.route(routes::OWNER_LOCK, post(owner::lock))
 		.route(routes::OWNER_CLIENTS, get(owner::clients))
 		.route(routes::OWNER_GRANTS, get(owner::grants))

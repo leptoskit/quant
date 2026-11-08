@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use quant_access::Limiter;
 use quant_access::auth::RequestVerifier;
 use quant_api::CaptureStatus;
+use quant_api::SessionSource;
 use quant_core::Class;
 use quant_core::MediaRef;
 use quant_core::Record;
@@ -22,6 +23,9 @@ use quant_store::Vault;
 
 /// How long an owner session lasts.
 pub const OWNER_SESSION: SignedDuration = SignedDuration::from_mins(15);
+
+/// How long an owner-device challenge stays usable.
+pub const CHALLENGE_TTL: SignedDuration = SignedDuration::from_secs(60);
 
 /// Everything the daemon shares between requests and capture.
 pub struct State {
@@ -47,12 +51,27 @@ pub struct State {
 	pub relay_key: quant_relay::RelayKey,
 }
 
-/// Owner sessions, keyed by token hash, and the unlock throttle.
+/// Most device challenges outstanding at once, so an unauthenticated caller
+/// cannot grow the table without end.
+const MAX_CHALLENGES: usize = 64;
+
+/// Owner sessions, keyed by token hash, the unlock throttle, and the
+/// outstanding device challenges.
 #[derive(Debug, Default)]
 pub struct OwnerGate {
-	sessions: HashMap<[u8; 32], Timestamp>,
+	sessions: HashMap<[u8; 32], LiveSession>,
+	challenges: HashMap<[u8; 32], Timestamp>,
 	failures: u32,
 	locked_until: Option<Timestamp>,
+}
+
+/// One live owner session.
+#[derive(Debug)]
+struct LiveSession {
+	/// When it lapses.
+	expires: Timestamp,
+	/// How it was opened.
+	via: SessionSource,
 }
 
 impl OwnerGate {
@@ -65,7 +84,9 @@ impl OwnerGate {
 		})
 	}
 
-	/// Note a wrong passphrase: each failure doubles the wait, up to an hour.
+	/// Note a wrong passphrase or device unlock: each failure doubles the
+	/// wait, up to an hour. The counter is shared, so alternating between the
+	/// two gains nothing.
 	pub fn fail(&mut self, now: Timestamp) {
 		self.failures += 1;
 		let seconds = 2_i64.saturating_pow(self.failures.min(12)).min(3600);
@@ -73,30 +94,60 @@ impl OwnerGate {
 	}
 
 	/// Start a session, returning its token.
-	pub fn open(&mut self, now: Timestamp) -> (String, Timestamp) {
+	pub fn open(&mut self, via: SessionSource, now: Timestamp) -> (String, Timestamp) {
 		self.failures = 0;
 		self.locked_until = None;
 		let mut token = [0u8; 32];
 		getrandom::fill(&mut token).expect("the OS random source is available");
 		let token = hex::encode(token);
 		let expires = now + OWNER_SESSION;
-		self.sessions.retain(|_, expiry| *expiry > now);
-		self.sessions
-			.insert(*blake3::hash(token.as_bytes()).as_bytes(), expires);
+		self.sessions.retain(|_, session| session.expires > now);
+		self.sessions.insert(
+			*blake3::hash(token.as_bytes()).as_bytes(),
+			LiveSession { expires, via },
+		);
 		(token, expires)
 	}
 
-	/// Whether `token` is a live session.
-	pub fn check(&mut self, token: &str, now: Timestamp) -> bool {
-		self.sessions.retain(|_, expiry| *expiry > now);
+	/// Whether `token` is a live session, and how it was opened.
+	pub fn check(&mut self, token: &str, now: Timestamp) -> Option<SessionSource> {
+		self.sessions.retain(|_, session| session.expires > now);
 		self.sessions
-			.contains_key(blake3::hash(token.as_bytes()).as_bytes())
+			.get(blake3::hash(token.as_bytes()).as_bytes())
+			.map(|session| session.via)
 	}
 
 	/// End a session.
 	pub fn close(&mut self, token: &str) {
 		self.sessions
 			.remove(blake3::hash(token.as_bytes()).as_bytes());
+	}
+
+	/// Mint a challenge for an owner device to sign. Outstanding challenges
+	/// are bounded; when the table is full the soonest-expiring one is
+	/// dropped, and a dropped challenge fails exactly like an unknown one.
+	pub fn issue_challenge(&mut self, now: Timestamp) -> ([u8; 32], Timestamp) {
+		let mut challenge = [0u8; 32];
+		getrandom::fill(&mut challenge).expect("the OS random source is available");
+		self.challenges.retain(|_, expires| *expires > now);
+		if self.challenges.len() >= MAX_CHALLENGES
+			&& let Some(oldest) = self
+				.challenges
+				.iter()
+				.min_by_key(|(_, expires)| **expires)
+				.map(|(challenge, _)| *challenge)
+		{
+			self.challenges.remove(&oldest);
+		}
+		let expires = now + CHALLENGE_TTL;
+		self.challenges.insert(challenge, expires);
+		(challenge, expires)
+	}
+
+	/// Consume a challenge, returning whether it was outstanding and still
+	/// live. Each challenge works once, even when the unlock fails.
+	pub fn take_challenge(&mut self, challenge: &[u8; 32], now: Timestamp) -> bool {
+		matches!(self.challenges.remove(challenge), Some(expires) if expires > now)
 	}
 }
 
@@ -321,12 +372,71 @@ mod tests {
 	fn sessions_expire_and_close() {
 		let mut gate = OwnerGate::default();
 		let now = Timestamp::now();
-		let (token, _) = gate.open(now);
-		assert!(gate.check(&token, now));
-		assert!(!gate.check("forged", now));
-		assert!(!gate.check(&token, now + OWNER_SESSION + SignedDuration::from_secs(1)));
-		let (token, _) = gate.open(now);
+		let (token, _) = gate.open(SessionSource::Passphrase, now);
+		assert_eq!(gate.check(&token, now), Some(SessionSource::Passphrase));
+		assert_eq!(gate.check("forged", now), None);
+		assert_eq!(
+			gate.check(&token, now + OWNER_SESSION + SignedDuration::from_secs(1)),
+			None
+		);
+		let (token, _) = gate.open(SessionSource::Device, now);
+		assert_eq!(gate.check(&token, now), Some(SessionSource::Device));
 		gate.close(&token);
-		assert!(!gate.check(&token, now));
+		assert_eq!(gate.check(&token, now), None);
+	}
+
+	#[test]
+	fn a_successful_unlock_clears_the_backoff() {
+		let mut gate = OwnerGate::default();
+		let now = Timestamp::now();
+		gate.fail(now);
+		gate.open(SessionSource::Device, now);
+		assert_eq!(gate.wait(now), None);
+	}
+
+	#[test]
+	fn challenges_work_once_and_expire() {
+		let mut gate = OwnerGate::default();
+		let now = Timestamp::now();
+		let (challenge, expires) = gate.issue_challenge(now);
+		assert_eq!(expires, now + CHALLENGE_TTL);
+		assert!(gate.take_challenge(&challenge, now));
+		// A second attempt, successful or not, finds nothing left.
+		assert!(!gate.take_challenge(&challenge, now));
+		assert!(!gate.take_challenge(&challenge, now + CHALLENGE_TTL));
+	}
+
+	#[test]
+	fn an_expired_challenge_is_refused_and_consumed() {
+		let mut gate = OwnerGate::default();
+		let now = Timestamp::now();
+		let before = now - CHALLENGE_TTL - SignedDuration::from_secs(1);
+		let (challenge, _) = gate.issue_challenge(before);
+		assert!(!gate.take_challenge(&challenge, now));
+		// And it is gone, not merely expired.
+		assert!(!gate.take_challenge(&challenge, now));
+	}
+
+	#[test]
+	fn outstanding_challenges_are_bounded() {
+		let mut gate = OwnerGate::default();
+		let now = Timestamp::now();
+		let mut latest = None;
+		for _ in 0..(MAX_CHALLENGES + 10) {
+			latest = Some(gate.issue_challenge(now).0);
+		}
+		assert_eq!(gate.challenges.len(), MAX_CHALLENGES);
+		// The table stays bounded and keeps serving.
+		assert!(gate.take_challenge(&latest.unwrap(), now));
+
+		// Expired challenges are pruned rather than displacing live ones.
+		let mut gate = OwnerGate::default();
+		let stale = now - CHALLENGE_TTL - SignedDuration::from_secs(1);
+		for _ in 0..MAX_CHALLENGES {
+			gate.issue_challenge(stale);
+		}
+		assert_eq!(gate.challenges.len(), MAX_CHALLENGES);
+		gate.issue_challenge(now);
+		assert_eq!(gate.challenges.len(), 1);
 	}
 }
