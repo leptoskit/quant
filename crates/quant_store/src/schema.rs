@@ -191,6 +191,19 @@ const MIGRATIONS: &[&str] = &[
 	) STRICT, WITHOUT ROWID;
 	CREATE INDEX claim_embeddings_by_space ON claim_embeddings (space, claim);
 	",
+	// 5: owner devices: hardware keys that open owner sessions after a
+	// biometric check. Only the public halves are stored.
+	"
+	CREATE TABLE owner_devices (
+		id BLOB PRIMARY KEY,
+		label TEXT NOT NULL,
+		public_key BLOB NOT NULL,
+		policy TEXT NOT NULL,
+		created_us INTEGER NOT NULL,
+		last_used_us INTEGER,
+		revoked_us INTEGER
+	) STRICT;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

@@ -11,11 +11,13 @@
 
 pub mod audit;
 pub mod auth;
+mod device;
 mod grant;
 mod limiter;
 pub mod redact;
 mod scope;
 
+pub use device::*;
 pub use grant::*;
 pub use limiter::*;
 pub use scope::*;

@@ -89,6 +89,10 @@ pub enum Denied {
 	/// A rate limit was hit; retry later.
 	#[error("rate limit reached")]
 	RateLimited,
+	/// The route needs an owner session opened with the passphrase, not
+	/// one opened with an owner device.
+	#[error("this needs an owner session opened with the passphrase")]
+	PassphraseSession,
 }
 
 /// What a read may return once authorised.
