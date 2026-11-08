@@ -2,13 +2,19 @@
 
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jiff::SignedDuration;
 use jiff::Timestamp;
+use p256::ecdsa::SigningKey;
+use p256::ecdsa::signature::Signer as _;
 use quant_access::Limits;
+use quant_access::OwnerDevicePolicy;
 use quant_api::ApproveRequest;
 use quant_api::ClientKind;
 use quant_api::ClientStatus;
 use quant_api::DurationsRequest;
+use quant_api::EnrolDeviceRequest;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
 use quant_api::OverviewRequest;
@@ -21,6 +27,7 @@ use quant_client::Identity;
 use quant_client::OwnerSession;
 use quant_core::Class;
 use quant_core::DeviceId;
+use quant_core::OwnerDeviceId;
 use quant_core::Record;
 use quant_core::SeriesBatch;
 use quant_core::Sink;
@@ -101,6 +108,48 @@ fn approve(scopes: &[&str]) -> ApproveRequest {
 		unredacted: false,
 		deny_classes: None,
 	}
+}
+
+/// A software P-256 key standing in for the hardware key of an owner device.
+fn device_key() -> SigningKey {
+	let mut seed = [0u8; 32];
+	getrandom::fill(&mut seed).unwrap();
+	SigningKey::from_bytes((&seed).into()).unwrap()
+}
+
+/// The key's uncompressed SEC1 public half, as enrolment wants it.
+fn device_public_key(key: &SigningKey) -> String {
+	URL_SAFE_NO_PAD.encode(key.verifying_key().to_sec1_bytes())
+}
+
+/// Sign with a device key, naming the signature type once.
+fn device_sign(key: &SigningKey, message: &[u8]) -> p256::ecdsa::Signature {
+	key.sign(message)
+}
+
+/// Enrol a device's key with a passphrase session.
+async fn enrol_device(h: &Harness, key: &SigningKey, label: &str) -> quant_api::OwnerDeviceView {
+	h.owner()
+		.await
+		.owner_device_add(&EnrolDeviceRequest {
+			label: label.to_owned(),
+			public_key: device_public_key(key),
+			policy: OwnerDevicePolicy::Biometry,
+		})
+		.await
+		.unwrap()
+}
+
+/// Open an owner session with an enrolled device, DER-signing the challenge.
+async fn unlock_device(
+	h: &Harness,
+	device: OwnerDeviceId,
+	key: &SigningKey,
+) -> Result<OwnerSession, quant_client::ClientError> {
+	OwnerSession::open_with_device(h.endpoint.clone(), device, |message| {
+		device_sign(key, message).to_der().as_bytes().to_vec()
+	})
+	.await
 }
 
 fn seed(state: &State) -> DeviceId {
@@ -1426,4 +1475,268 @@ async fn tell_with_a_topic_supersedes_earlier_claims_on_it() {
 	// Serving skips superseded claims entirely.
 	let profile = agent.profile().await.unwrap();
 	assert!(profile.claims.iter().all(|c| c.id != held));
+}
+
+#[tokio::test]
+async fn owner_devices_unlock_sessions_that_cannot_enrol_others() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	assert_eq!(device.label, "MacBook Touch ID");
+	assert_eq!(device.fingerprint.len(), 16);
+	assert!(device.revoked_at.is_none());
+	assert!(device.last_used.is_none());
+
+	// The device opens the same kind of session the passphrase does, marked
+	// as opened via device, and it works for everything but enrolment.
+	let session = unlock_device(&h, device.id, &key).await.unwrap();
+	assert_eq!(
+		session.status().await.unwrap().session,
+		quant_api::SessionSource::Device
+	);
+	let listed = session.owner_devices().await.unwrap();
+	assert_eq!(
+		listed.iter().map(|d| d.id).collect::<Vec<_>>(),
+		vec![device.id]
+	);
+	assert!(
+		session
+			.owner_device_add(&EnrolDeviceRequest {
+				label: "Another".into(),
+				public_key: device_public_key(&device_key()),
+				policy: OwnerDevicePolicy::Biometry,
+			})
+			.await
+			.unwrap_err()
+			.to_string()
+			.contains("passphrase"),
+		"enrolment through a device session must ask for the passphrase"
+	);
+
+	// The passphrase's own session says how it was opened, and the device's
+	// key use was noted.
+	let passphrase = h.owner().await.status().await.unwrap();
+	assert_eq!(passphrase.session, quant_api::SessionSource::Passphrase);
+	let stored = h
+		.owner()
+		.await
+		.owner_devices()
+		.await
+		.unwrap()
+		.into_iter()
+		.find(|d| d.id == device.id)
+		.unwrap();
+	assert!(stored.last_used.is_some());
+	assert_eq!(stored.fingerprint, device.fingerprint);
+
+	// Enrolment and the unlock were audited.
+	let owner = h.owner().await;
+	let audit = owner
+		.audit(&quant_api::AuditRequest::default())
+		.await
+		.unwrap();
+	assert!(audit.entries.iter().any(|e| {
+		e.action == "owner.device.add"
+			&& e.target == device.id.to_string()
+			&& e.detail["label"] == "MacBook Touch ID"
+			&& e.detail["fingerprint"] == device.fingerprint.as_str()
+	}));
+	assert!(
+		audit
+			.entries
+			.iter()
+			.any(|e| e.action == "owner.device.unlock" && e.target == device.id.to_string())
+	);
+}
+
+#[tokio::test]
+async fn a_wrong_device_signature_fails_and_shares_the_passphrase_backoff() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	let wrong = device_key();
+	let refused = unlock_device(&h, device.id, &wrong).await.unwrap_err();
+	assert_eq!(refused.code(), Some("unauthenticated"));
+	assert!(refused.to_string().contains("owner device unlock failed"));
+
+	// The failure counter is shared with the passphrase, so alternating the
+	// two gains nothing.
+	let locked = OwnerSession::open(h.endpoint.clone(), PASS)
+		.await
+		.unwrap_err();
+	assert_eq!(locked.code(), Some("locked"));
+
+	// The refusal was audited, without saying which part failed.
+	let tail = h.state.vault.store.audit_tail(5).unwrap();
+	let denial = tail
+		.iter()
+		.find(|e| e.action == "owner.device.unlock")
+		.expect("the failed unlock was audited");
+	assert!(matches!(
+		denial.outcome,
+		quant_access::audit::Outcome::Denied { .. }
+	));
+	assert_eq!(denial.target, "");
+	assert_eq!(denial.detail, serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn a_replayed_challenge_fails() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	let client = Client::new(h.endpoint.clone(), Identity::generate("device"));
+	let challenge = client.owner_challenge().await.unwrap();
+	let hello = client.hello().await.unwrap();
+	let message = quant_api::owner_unlock_message(&hello.vault_id, &challenge.challenge);
+	// Raw r‖s works as well as DER.
+	let signature = URL_SAFE_NO_PAD.encode(device_sign(&key, &message).to_bytes());
+	let opened = OwnerSession::open_with_device_signature(
+		h.endpoint.clone(),
+		device.id,
+		challenge.challenge.clone(),
+		signature.clone(),
+	)
+	.await
+	.unwrap();
+	assert!(opened.status().await.is_ok());
+
+	let replay = OwnerSession::open_with_device_signature(
+		h.endpoint.clone(),
+		device.id,
+		challenge.challenge,
+		signature,
+	)
+	.await
+	.unwrap_err();
+	assert_eq!(replay.code(), Some("unauthenticated"));
+	assert!(replay.to_string().contains("owner device unlock failed"));
+}
+
+#[tokio::test]
+async fn an_expired_challenge_fails() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	// A challenge minted 61 seconds ago is already past its 60 seconds.
+	let past = Timestamp::now() - SignedDuration::from_secs(61);
+	let (challenge, _) = h.state.owner().issue_challenge(past);
+	let text = URL_SAFE_NO_PAD.encode(challenge);
+	let message = quant_api::owner_unlock_message(&h.state.vault.manifest.vault_id, &text);
+	let signature = URL_SAFE_NO_PAD.encode(device_sign(&key, &message).to_der().as_bytes());
+	let refused =
+		OwnerSession::open_with_device_signature(h.endpoint.clone(), device.id, text, signature)
+			.await
+			.unwrap_err();
+	assert_eq!(refused.code(), Some("unauthenticated"));
+	assert!(refused.to_string().contains("owner device unlock failed"));
+}
+
+#[tokio::test]
+async fn a_challenge_answered_for_another_vault_fails() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	let client = Client::new(h.endpoint.clone(), Identity::generate("device"));
+	let challenge = client.owner_challenge().await.unwrap();
+	let message = quant_api::owner_unlock_message("some-other-vault", &challenge.challenge);
+	let signature = URL_SAFE_NO_PAD.encode(device_sign(&key, &message).to_der().as_bytes());
+	let refused = OwnerSession::open_with_device_signature(
+		h.endpoint.clone(),
+		device.id,
+		challenge.challenge,
+		signature,
+	)
+	.await
+	.unwrap_err();
+	assert_eq!(refused.code(), Some("unauthenticated"));
+	assert!(refused.to_string().contains("owner device unlock failed"));
+}
+
+#[tokio::test]
+async fn an_unknown_device_fails_exactly_like_a_bad_signature() {
+	let h = start().await;
+	let key = device_key();
+	enrol_device(&h, &key, "MacBook Touch ID").await;
+	// An unknown device id answers exactly like the wrong signature the
+	// next test checks: same code, same message, and the backoff it trips.
+	let refused = unlock_device(&h, OwnerDeviceId::new(), &key)
+		.await
+		.unwrap_err();
+	assert_eq!(refused.code(), Some("unauthenticated"));
+	assert!(refused.to_string().contains("owner device unlock failed"));
+	let locked = OwnerSession::open(h.endpoint.clone(), PASS)
+		.await
+		.unwrap_err();
+	assert_eq!(locked.code(), Some("locked"));
+}
+
+#[tokio::test]
+async fn a_revoked_device_fails_like_a_bad_signature() {
+	let h = start().await;
+	let key = device_key();
+	let device = enrol_device(&h, &key, "MacBook Touch ID").await;
+	let session = unlock_device(&h, device.id, &key).await.unwrap();
+	session.lock().await.unwrap();
+
+	let owner = h.owner().await;
+	let revoked = owner.owner_device_revoke(device.id).await.unwrap();
+	assert!(revoked.revoked_at.is_some());
+	let refused = unlock_device(&h, device.id, &key).await.unwrap_err();
+	assert_eq!(refused.code(), Some("unauthenticated"));
+	assert!(refused.to_string().contains("owner device unlock failed"));
+
+	let audit = owner
+		.audit(&quant_api::AuditRequest::default())
+		.await
+		.unwrap();
+	assert!(
+		audit
+			.entries
+			.iter()
+			.any(|e| e.action == "owner.device.revoke")
+	);
+	assert!(audit.entries.iter().any(|e| {
+		e.action == "owner.device.unlock"
+			&& matches!(e.outcome, quant_access::audit::Outcome::Denied { .. })
+	}));
+}
+
+#[tokio::test]
+async fn at_most_eight_owner_devices_are_active_at_once() {
+	let h = start().await;
+	let owner = h.owner().await;
+	let mut ids = Vec::new();
+	for index in 0..8 {
+		let device = enrol_device(&h, &device_key(), &format!("Key {}", index + 1)).await;
+		ids.push(device.id);
+	}
+	let ninth = owner
+		.owner_device_add(&EnrolDeviceRequest {
+			label: "Ninth".into(),
+			public_key: device_public_key(&device_key()),
+			policy: OwnerDevicePolicy::Biometry,
+		})
+		.await
+		.unwrap_err();
+	assert_eq!(ninth.code(), Some("invalid"));
+
+	// Revoking one leaves room for another.
+	owner.owner_device_revoke(ids[0]).await.unwrap();
+	let added = owner
+		.owner_device_add(&EnrolDeviceRequest {
+			label: "Ninth".into(),
+			public_key: device_public_key(&device_key()),
+			policy: OwnerDevicePolicy::BiometryOrPasscode,
+		})
+		.await
+		.unwrap();
+	let listed = owner.owner_devices().await.unwrap();
+	assert_eq!(listed.len(), 9);
+	assert_eq!(listed.iter().filter(|d| d.revoked_at.is_none()).count(), 8);
+	assert!(
+		listed
+			.iter()
+			.any(|d| d.id == added.id && d.policy == OwnerDevicePolicy::BiometryOrPasscode)
+	);
 }
