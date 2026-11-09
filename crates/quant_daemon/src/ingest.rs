@@ -56,11 +56,34 @@ pub async fn records(
 	request: Signed<IngestRecords>,
 ) -> ApiResult<Json<Ingested>> {
 	let caller = &request.caller;
-	let body = request.body;
+	let mut body = request.body;
 	if body.records.len() > MAX_BATCH {
 		return Err(Error::Invalid(format!(
 			"at most {MAX_BATCH} records per request"
 		)));
+	}
+	for record in &mut body.records {
+		if record.stream.as_str() == "audio.ambient" {
+			let duration = record.end.map(|end| end.duration_since(record.start));
+			if !duration.is_some_and(|duration| {
+				duration > jiff::SignedDuration::ZERO
+					&& duration <= jiff::SignedDuration::from_hours(1)
+			}) || !record
+				.media
+				.as_ref()
+				.is_some_and(|media| media.mime == "audio/mp4" && media.size > 0)
+			{
+				return Err(Error::Invalid(
+					"ambient audio needs an AAC m4a and a duration of at most one hour".into(),
+				));
+			}
+			// Only the daemon may mark transcription complete. A retried insert
+			// is ignored and leaves any completed work alone.
+			record
+				.data
+				.insert("transcript_status".into(), "pending".into());
+			record.text = None;
+		}
 	}
 	let streams: Vec<&StreamId> = body.records.iter().map(|r| &r.stream).collect();
 	authorize(&state, caller, &streams, "ingest.records")?;

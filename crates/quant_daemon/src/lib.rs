@@ -6,6 +6,7 @@
 //! approved; owner actions need the passphrase, or an enrolled owner device
 //! that signs after a biometric check.
 
+pub mod ambient;
 pub mod audio_save;
 mod authn;
 pub mod capture;

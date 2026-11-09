@@ -53,6 +53,43 @@ Capture sources write to a `Sink`. In the daemon the sink writes straight into t
 - **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 
+### Phone audio pipeline
+
+`quant_collector::Spool::ambient_audio` accepts finalized AAC `.m4a` segments and
+recorder measurements. The native recorder's default boundary is five minutes;
+interruptions and stopping can produce shorter segments. A segment with zero
+active milliseconds is discarded before anything is written to the encrypted
+spool or uploaded. Activity means sound above the configured level, not speech.
+Even a brief detected sound is retained. Stable ids derived from the device,
+capture time, duration and content make crash recovery idempotent. The native
+adapter must remove the plaintext file only after the spool write succeeds (or
+returns that the segment is silent).
+
+The signed uploader delivers these as `audio.ambient`. Inserting a segment and
+its transcription job is one database transaction. A single low-priority daemon
+worker transcribes pending segments on device, using the existing configured
+Whisper model or Apple's on-device recognizer. Failures retry with exponential
+backoff, from one minute to one hour, without blocking other segments. Jobs and
+retry times survive restarts; offline uploads are processed even when their
+capture time precedes already completed work.
+
+Completion atomically stores an `audio.transcript` linked by `chunk_id`, marks
+the source's `transcript_status`, and removes the job. Transcripts retain the
+phone's device and capture span, enter full-text search immediately, and are
+picked up by the existing embedding backfill when configured. They carry the
+`others` sensitivity class, just like other microphone transcripts. Deleting a
+source cancels its pending job: recognition already running cannot recreate
+purged data. Empty recognition results are marked `no speech found` without a
+search record.
+
+Ambient raw audio defaults to seven days of retention through the stream spec's
+`media_retention_hours`; the owner can override that spec. Transcript records
+have no media attachment or automatic expiry, so deleting expired audio does
+not delete searchable text. If recognition remains unavailable until raw audio
+expires, the segment is marked `media expired` and cannot be transcribed. The
+mobile AppService adapter and permission UI still need to connect the native
+recorder to this pipeline; adding the pipeline alone does not start recording.
+
 ### Rewind
 
 The rolling buffer is a source like the others, designed around one number: the CPU it may spend while recording. Everything runs at utility priority on background threads. Each track (microphone, and system audio through a ScreenCaptureKit `SCStream` that excludes this process's own output) is downmixed, resampled to 16 kHz, measured by the same energy VAD the speech path uses, and encoded as mono 24 kbps AAC into 60-second `audio.buffer` chunks; a chunk's record carries `source`, `device`, `speech_ms`, `peak_dbfs` and its size. When both the `audio` source and `rewind` want the microphone they share one cpal stream rather than opening the device twice.

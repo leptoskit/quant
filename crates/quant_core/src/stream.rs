@@ -279,6 +279,14 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		.summarise_by(&["source"])
 		.sensitive(&[Class::Others]),
 		StreamSpec::event(
+			"audio.ambient",
+			"A phone microphone segment, normally five minutes. Transcribed automatically; silent \
+			 segments stay on the phone.",
+		)
+		.media_hours(24 * 7)
+		.summarise_by(&["source"])
+		.sensitive(&[Class::Others]),
+		StreamSpec::event(
 			"audio.clip",
 			"A saved moment of audio: rolling-buffer chunks joined into one file, kept until the \
 			 owner deletes it.",
@@ -478,6 +486,7 @@ mod tests {
 		for others in [
 			"audio.transcript",
 			"audio.buffer",
+			"audio.ambient",
 			"audio.clip",
 			"comms.notification",
 		] {

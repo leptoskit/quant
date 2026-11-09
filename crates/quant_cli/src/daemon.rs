@@ -77,6 +77,7 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	let state = Arc::new(State::new(vault)?);
 	let maintenance = quant_daemon::spawn_maintenance(Arc::clone(&state));
 	let derivation = quant_daemon::spawn_derivation(Arc::clone(&state));
+	let transcription = quant_daemon::ambient::spawn(Arc::clone(&state));
 	if !args.no_capture {
 		quant_daemon::capture::start(&state)?;
 	}
@@ -133,6 +134,7 @@ pub async fn run(paths: &VaultPaths, args: DaemonArgs) -> Result<()> {
 	let _ = stop.send(());
 	maintenance.abort();
 	derivation.abort();
+	transcription.abort();
 	for task in tasks {
 		task.await.context("server task")??;
 	}

@@ -204,6 +204,23 @@ const MIGRATIONS: &[&str] = &[
 		revoked_us INTEGER
 	) STRICT;
 	",
+	// 6: pending phone audio. The record insert and enqueue share a transaction;
+	// deleting a source also cancels its job, including during recognition.
+	"
+	CREATE TABLE transcriptions (
+		record INTEGER PRIMARY KEY REFERENCES records (rowid) ON DELETE CASCADE,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_us INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT
+	) STRICT;
+	CREATE INDEX transcriptions_by_retry ON transcriptions (next_us, record);
+	CREATE TRIGGER ambient_audio_enqueue AFTER INSERT ON records
+	WHEN new.stream = 'audio.ambient' AND new.media_hash IS NOT NULL BEGIN
+		INSERT INTO transcriptions (record) VALUES (new.rowid);
+	END;
+	INSERT INTO transcriptions (record)
+		SELECT rowid FROM records WHERE stream = 'audio.ambient' AND media_hash IS NOT NULL;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {
