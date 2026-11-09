@@ -17,13 +17,13 @@
 # The Rust release that builds the app. `1` is the latest stable; pin one,
 # such as 1.96, to build the same way every time.
 ARG RUST_VERSION=1
-# The leptoskit CLI that builds the app. Keep it in step with the `leptoskit`
-# version in Cargo.toml.
-ARG LEPTOSKIT_VERSION=0.3.0
+# The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
+ARG LEPTOSKIT_REV=c0c5013b708e17723cb48062036b40f22f694a57
 
 FROM rust:${RUST_VERSION}-bookworm AS build
-ARG LEPTOSKIT_VERSION
-RUN cargo install leptoskit_cli --version "${LEPTOSKIT_VERSION}" --locked
+ARG LEPTOSKIT_REV
+RUN cargo install --git https://github.com/leptoskit/leptoskit \
+    --rev "${LEPTOSKIT_REV}" --locked leptoskit_cli
 WORKDIR /src
 # The toolchain file picks the toolchain everything below uses.
 COPY apps/relay/rust-toolchain.toml apps/relay/rust-toolchain.toml

@@ -47,7 +47,14 @@ leptoskit build --platform macos            # or --release
 open .leptoskit/macos/App.app
 ```
 
-leptoskit is not on crates.io, so `Cargo.toml` pins a commit of the public repository. To build against a local checkout instead, point `LEPTOSKIT_SDK` at it and run the script, which writes a Cargo `[patch]` to `.cargo/config.toml` (ignored by git); `--off` removes it:
+Keep Leptoskit on the latest `main` commit. From the repository root, run
+`python3 scripts/update-leptoskit.py` before using new SDK features. It updates
+both apps' revision pins and lockfiles and the relay's Docker build CLI together,
+then checks both workspaces (excluding the generated macOS host, which needs
+`leptoskit build` with the matching CLI). Commit those changes together after the app tests
+pass. Install the desktop CLI from the updated revision with the command above.
+
+To build against a local checkout instead, point `LEPTOSKIT_SDK` at it and run the script, which writes a Cargo `[patch]` to `.cargo/config.toml` (ignored by git); `--off` removes it:
 
 ```sh
 LEPTOSKIT_SDK=~/src/leptoskit scripts/local-sdk.sh
