@@ -145,6 +145,47 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 	);
 	assert_eq!(state.vault.get_media(&clip.hash).unwrap(), b"RIFF fake wav");
 
+	// Continuous phone audio follows the same signed spool path and queues
+	// recognition on the daemon without needing a read scope on the phone.
+	let ambient = quant_collector::AmbientAudio {
+		start: now - SignedDuration::from_mins(5),
+		duration_ms: 300_000,
+		active_ms: 1200,
+		peak_dbfs: -18.0,
+	};
+	let chunk_id = spool
+		.ambient_audio(device, ambient, b"AAC phone audio")
+		.unwrap()
+		.unwrap();
+	let delivered = Uploader::new(&spool, &phone).drain().await.unwrap();
+	assert_eq!((delivered.records, delivered.media), (1, 1));
+	let queued = state
+		.vault
+		.store
+		.pending_ambient_audio(now)
+		.unwrap()
+		.unwrap();
+	assert_eq!(queued.id, chunk_id);
+	assert_eq!(queued.start, ambient.start);
+	state
+		.vault
+		.store
+		.finish_ambient_audio(chunk_id, "phone transcript", now)
+		.unwrap();
+	// A recorder's recovery after upload must not enqueue recognition twice.
+	spool
+		.ambient_audio(device, ambient, b"AAC phone audio")
+		.unwrap();
+	Uploader::new(&spool, &phone).drain().await.unwrap();
+	assert!(
+		state
+			.vault
+			.store
+			.pending_ambient_audio(now)
+			.unwrap()
+			.is_none()
+	);
+
 	// Something the grant does not cover stays in the spool.
 	spool
 		.record(Record::new("location.visit".parse().unwrap(), device).with("place", "home"))

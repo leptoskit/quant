@@ -2305,6 +2305,7 @@ dependencies = [
 name = "quant_collector"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "jiff",
  "quant_api",
  "quant_client",

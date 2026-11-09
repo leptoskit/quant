@@ -13,6 +13,7 @@
 //! grant before every call and passes only what the grant allows.
 
 mod access;
+mod ambient;
 mod audit;
 mod claims;
 mod embeddings;

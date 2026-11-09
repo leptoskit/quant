@@ -7,10 +7,13 @@
 //! each item once the vault has it, so the phone keeps only what has not
 //! been delivered yet.
 
+mod ambient;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
+pub use ambient::AmbientAudio;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
 use quant_client::Client;

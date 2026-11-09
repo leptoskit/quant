@@ -1740,3 +1740,82 @@ async fn at_most_eight_owner_devices_are_active_at_once() {
 			.any(|d| d.id == added.id && d.policy == OwnerDevicePolicy::BiometryOrPasscode)
 	);
 }
+
+#[tokio::test]
+async fn uploaded_ambient_audio_is_queued_once_and_transcripts_keep_class_permissions() {
+	let h = start().await;
+	let phone = h
+		.paired("phone", ClientKind::Device, approve(&["audio:write"]))
+		.await;
+	let stream = "audio.ambient".parse().unwrap();
+	let media = phone
+		.ingest_media(&stream, "audio/mp4", b"AAC test fixture".to_vec())
+		.await
+		.unwrap();
+	let now = Timestamp::now();
+	let record = Record::new(stream, DeviceId::new())
+		.starting(now - SignedDuration::from_mins(5))
+		.ending(now)
+		.with("transcript_status", "done")
+		.with_text("untrusted supplied transcript")
+		.with_media(media);
+	let request = IngestRecords {
+		records: vec![record.clone()],
+		device_name: None,
+		platform: Some("android".into()),
+	};
+	phone.ingest_records(&request).await.unwrap();
+	let stored = h.state.vault.store.record(record.id).unwrap().unwrap();
+	assert_eq!(stored.data["transcript_status"], "pending");
+	assert!(stored.text.is_none());
+	assert_eq!(
+		h.state
+			.vault
+			.store
+			.pending_ambient_audio(now)
+			.unwrap()
+			.unwrap()
+			.id,
+		record.id
+	);
+	h.state
+		.vault
+		.store
+		.finish_ambient_audio(record.id, "an entire phone conversation", now)
+		.unwrap();
+	phone.ingest_records(&request).await.unwrap();
+	assert!(
+		h.state
+			.vault
+			.store
+			.pending_ambient_audio(now)
+			.unwrap()
+			.is_none()
+	);
+	let mut invalid = request.clone();
+	invalid.records[0].end = None;
+	assert_eq!(
+		phone.ingest_records(&invalid).await.unwrap_err().code(),
+		Some("invalid")
+	);
+	invalid.records[0].end = Some(record.start + SignedDuration::from_hours(2));
+	assert_eq!(
+		phone.ingest_records(&invalid).await.unwrap_err().code(),
+		Some("invalid")
+	);
+
+	let mut denied = approve(&["audio:read"]);
+	denied.deny_classes = Some(vec![Class::Others]);
+	let reader = h.paired("denied", ClientKind::Agent, denied).await;
+	let result = reader
+		.records(&RecordsRequest {
+			streams: vec!["audio.transcript".into()],
+			from: Some(now - SignedDuration::from_hours(1)),
+			to: Some(now + SignedDuration::from_secs(1)),
+			..RecordsRequest::default()
+		})
+		.await
+		.unwrap();
+	assert!(result.records.is_empty());
+	assert_eq!(result.withheld, vec!["audio.transcript"]);
+}

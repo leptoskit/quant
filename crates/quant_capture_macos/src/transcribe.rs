@@ -163,11 +163,8 @@ fn apple(m4a: &[u8]) -> Result<String, String> {
 			return Err("speech recognition timed out".to_owned());
 		}
 		match receiver.recv_timeout(left) {
-			// Partial results arrive before the final one; the last one
-			// before `isFinal` is the best so far, so keep it.
-			Ok((text, false, None)) if !text.trim().is_empty() => {
-				return Ok(text.trim().to_owned());
-			}
+			// A partial result can contain only the opening words. Wait for
+			// the final result so a five-minute segment is searchable in full.
 			Ok((text, true, None)) => {
 				return Ok(text.trim().to_owned());
 			}
