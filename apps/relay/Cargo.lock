@@ -87,6 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "any_spawner"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1384d3fe1eecb464229fcf6eebb72306591c56bf27b373561489458a7c73027d"
+dependencies = [
+ "futures",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1243,8 +1254,9 @@ dependencies = [
 [[package]]
 name = "leptoskit_axum"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
+ "any_spawner",
  "axum",
  "hyper",
  "hyper-util",
@@ -1261,7 +1273,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_codepush"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
  "axum",
  "base64",
@@ -1284,7 +1296,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_config"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
  "semver",
  "serde",
@@ -1297,7 +1309,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
  "bytes",
  "chrono",
@@ -1323,7 +1335,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db_macros"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
  "convert_case",
  "proc-macro-crate",
@@ -1338,7 +1350,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db_schema"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
+source = "git+https://github.com/leptoskit/leptoskit?rev=0036fe4b9d010f4c568d160e88d4550b2aa5e38a#0036fe4b9d010f4c568d160e88d4550b2aa5e38a"
 dependencies = [
  "serde",
  "serde_json",
@@ -1363,9 +1375,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -1913,9 +1925,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags",
  "fallible-iterator 0.3.0",
