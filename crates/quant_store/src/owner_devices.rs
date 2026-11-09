@@ -114,7 +114,7 @@ impl Store {
 			label: label.to_owned(),
 			public_key: public_key.to_vec(),
 			policy,
-			created_at: Timestamp::now(),
+			created_at: crate::now_micros()?,
 			last_used: None,
 			revoked_at: None,
 		};
