@@ -1243,7 +1243,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_axum"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "axum",
  "hyper",
@@ -1251,6 +1251,7 @@ dependencies = [
  "leptoskit_codepush",
  "leptoskit_config",
  "serde_json",
+ "subtle",
  "thiserror",
  "tokio",
  "tower",
@@ -1260,7 +1261,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_codepush"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "axum",
  "base64",
@@ -1283,7 +1284,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_config"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "semver",
  "serde",
@@ -1296,7 +1297,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "bytes",
  "chrono",
@@ -1322,7 +1323,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db_macros"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "convert_case",
  "proc-macro-crate",
@@ -1337,7 +1338,7 @@ dependencies = [
 [[package]]
 name = "leptoskit_db_schema"
 version = "0.3.0"
-source = "git+https://github.com/leptoskit/leptoskit?rev=2e575b1e7e8100910667e7c2e1472a792d569c95#2e575b1e7e8100910667e7c2e1472a792d569c95"
+source = "git+https://github.com/leptoskit/leptoskit?rev=c0c5013b708e17723cb48062036b40f22f694a57#c0c5013b708e17723cb48062036b40f22f694a57"
 dependencies = [
  "serde",
  "serde_json",

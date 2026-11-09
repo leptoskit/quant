@@ -47,6 +47,11 @@ header, since the handshake signatures cover it.
 
 ## Deploying it
 
+The SDK and Docker build CLI pin the same latest verified Leptoskit `main`
+commit as the desktop app. Update them together from the repository root with
+`python3 scripts/update-leptoskit.py`, then run both apps' tests before merging.
+Preserve the Dockerfile's Git revision install when regenerating deployment files.
+
 The Docker, Compose, Fly, and systemd files in this directory are what
 `leptoskit generate deploy` writes; run the generator again after changing
 the app and commit what it writes.
