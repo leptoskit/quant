@@ -264,13 +264,28 @@ impl Store {
 	/// The oldest `limit` series batches with their row numbers, for
 	/// draining a spool in order.
 	pub fn oldest_series(&self, limit: usize) -> Result<Vec<(i64, SeriesBatch)>> {
+		self.oldest_series_bounded(limit, usize::MAX)
+	}
+
+	/// Read spool batches with a size check before allocating their payloads.
+	pub fn oldest_series_bounded(
+		&self,
+		limit: usize,
+		max_bytes: usize,
+	) -> Result<Vec<(i64, SeriesBatch)>> {
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(
-			"SELECT rowid, stream, device, start_us, end_us, rows, channels, stats, body FROM \
-			 series ORDER BY rowid LIMIT ?1",
+			"SELECT rowid, stream, device, start_us, end_us, rows, channels, stats, body, \
+			 length(body) + length(CAST(channels AS BLOB)) FROM series ORDER BY rowid LIMIT ?1",
 		)?;
 		let rows = statement.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
-			Ok((
+			let size: i64 = row.get(9)?;
+			if size > i64::try_from(max_bytes).unwrap_or(i64::MAX) {
+				return Ok(Err(StoreError::Invalid(
+					"spool sensor batch exceeds transfer limit".into(),
+				)));
+			}
+			Ok(Ok((
 				row.get::<_, i64>(0)?,
 				StoredBatch {
 					stream: row.get(1)?,
@@ -282,10 +297,10 @@ impl Store {
 					stats: Vec::new(),
 					body: row.get(8)?,
 				},
-			))
+			)))
 		})?;
 		rows.map(|row| {
-			let (rowid, stored) = row?;
+			let (rowid, stored) = row??;
 			Ok((rowid, stored.decode()?))
 		})
 		.collect()
@@ -424,6 +439,18 @@ mod tests {
 				.collect(),
 			values: bpm.to_vec(),
 		}
+	}
+
+	#[test]
+	fn bounded_spool_reads_reject_large_series_without_deleting_them() {
+		let store = store();
+		store.insert_series(&heart_rate(0, &[60.0; 1000])).unwrap();
+		assert!(store.oldest_series_bounded(1, 100).is_err());
+		assert_eq!(store.backlog_counts().unwrap(), (0, 1));
+		assert_eq!(
+			store.oldest_series_bounded(1, 16_384).unwrap()[0].1.len(),
+			1000
+		);
 	}
 
 	#[test]

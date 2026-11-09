@@ -244,6 +244,16 @@ async fn send(endpoint: &Endpoint, request: Request<Full<Bytes>>) -> Result<(Sta
 		.map(|(status, _, body)| (status, body))
 }
 
+// Aborting a timed-out upload must also release the detached HTTP driver's
+// request buffers and socket, rather than leaving it alive across retries.
+struct ConnectionTask(tokio::task::JoinHandle<Result<(), hyper::Error>>);
+
+impl Drop for ConnectionTask {
+	fn drop(&mut self) {
+		self.0.abort();
+	}
+}
+
 async fn send_typed(
 	endpoint: &Endpoint,
 	request: Request<Full<Bytes>>,
@@ -265,7 +275,7 @@ async fn send_typed(
 				hyper::client::conn::http1::handshake(TokioIo::new($stream))
 					.await
 					.map_err(|e| ClientError::Http(e.to_string()))?;
-			tokio::spawn(connection);
+			let _connection = ConnectionTask(tokio::spawn(connection));
 			let response = sender
 				.send_request(request)
 				.await

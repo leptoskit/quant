@@ -90,6 +90,43 @@ expires, the segment is marked `media expired` and cannot be transcribed. The
 mobile AppService adapter and permission UI still need to connect the native
 recorder to this pipeline; adding the pipeline alone does not start recording.
 
+### Phone resource budgets
+
+The collector keeps status checks independent of backlog size: `pending()` asks
+SQLite for counts and never decodes queued records or sensor payloads. New phone
+records are capped at 64 KiB of encoded JSON, counted without creating a second
+JSON buffer. Sensor producers must flush before 16,384 numeric values or offsets
+(32 channels at most); media items are capped at 16 MiB. Normal five-minute
+16 kHz / 24 kbps AAC segments are about 0.9 MB. Larger captures must be split at
+the source, rather than silently dropped.
+
+Uploads load at most 32 records or 8 sensor batches at once, with payload-size
+checks before decoding even old spool entries. Only one media item is decrypted
+and uploaded at a time; bounded reads reject oversized files before allocating
+for their contents. These are allocation limits for individual operations, not
+a measured whole-app RSS guarantee.
+
+A default `Uploader::drain()` burst acknowledges at most 128 records, 32 sensor
+batches and roughly 4 MiB of audio, with a ten-second deadline including network
+waits. One larger media item may advance on its own so the byte budget cannot
+starve a valid capture. Record acknowledgement is committed before another
+media item is sent. Unacknowledged captures remain encrypted locally on timeout;
+the cancelled HTTP connection driver is aborted so it cannot retain its socket
+and buffers across retries. `drain_with_budget` can reduce these limits, including
+a zero-duration pause while the phone is too hot. It cannot raise the ceilings.
+
+The mobile AppService must honor `Delivered::yielded`: schedule the next catch-up
+burst through the OS background scheduler with a cooldown (at least a minute),
+rather than calling drain in a tight loop. Normal uploads can follow the
+five-minute recorder boundary or a connectivity event. Motion samples should
+be batched; use low-rate orientation or OS activity APIs, and increase sampling
+only for a feature that needs it. The OS thermal and low-power signals still
+need to be connected in the pending mobile adapter. Transcription and embeddings
+run on the owner's daemon, never in the phone collector.
+
+Physical-device profiling is still required for sustained battery, thermal and
+RSS measurements; simulator tests cannot establish that a phone will stay cool.
+
 ### Rewind
 
 The rolling buffer is a source like the others, designed around one number: the CPU it may spend while recording. Everything runs at utility priority on background threads. Each track (microphone, and system audio through a ScreenCaptureKit `SCStream` that excludes this process's own output) is downmixed, resampled to 16 kHz, measured by the same energy VAD the speech path uses, and encoded as mono 24 kbps AAC into 60-second `audio.buffer` chunks; a chunk's record carries `source`, `device`, `speech_ms`, `peak_dbfs` and its size. When both the `audio` source and `rewind` want the microphone they share one cpal stream rather than opening the device twice.

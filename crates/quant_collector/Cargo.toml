@@ -16,11 +16,12 @@ quant_core = { workspace = true }
 quant_crypto = { workspace = true, default-features = false }
 quant_store = { workspace = true, default-features = false }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, default-features = false, features = ["time"] }
 
 [dev-dependencies]
 quant_daemon = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true
