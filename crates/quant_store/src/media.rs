@@ -88,10 +88,13 @@ impl MediaStore {
 		};
 		let cap = max_bytes.saturating_add(quant_crypto::SEALED_OVERHEAD);
 		let too_large = || StoreError::Invalid("media exceeds the phone transfer limit".into());
-		if file.metadata()?.len() > u64::try_from(cap).unwrap_or(u64::MAX) {
+		let sealed_len = file.metadata()?.len();
+		if sealed_len > u64::try_from(cap).unwrap_or(u64::MAX) {
 			return Err(too_large());
 		}
-		let mut sealed = Vec::new();
+		// The bounded size is known; allocate once instead of repeatedly
+		// growing and copying the encrypted audio buffer.
+		let mut sealed = Vec::with_capacity(usize::try_from(sealed_len).map_err(|_| too_large())?);
 		file.take(u64::try_from(cap.saturating_add(1)).unwrap_or(u64::MAX))
 			.read_to_end(&mut sealed)?;
 		if sealed.len() > cap {
