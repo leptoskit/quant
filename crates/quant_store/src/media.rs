@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -72,6 +73,35 @@ impl MediaStore {
 			Err(e) => return Err(e.into()),
 		};
 		Ok(self.sealer.open(hash, &sealed)?)
+	}
+
+	/// Open media with a hard allocation limit before reading or decrypting it.
+	/// The encrypted envelope's fixed overhead is allowed in addition to
+	/// `max_bytes`.
+	pub fn get_bounded(&self, hash: &str, max_bytes: usize) -> Result<Vec<u8>> {
+		let file = match fs::File::open(self.path(hash)?) {
+			Ok(file) => file,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+				return Err(StoreError::NotFound);
+			}
+			Err(error) => return Err(error.into()),
+		};
+		let cap = max_bytes.saturating_add(quant_crypto::SEALED_OVERHEAD);
+		let too_large = || StoreError::Invalid("media exceeds the phone transfer limit".into());
+		if file.metadata()?.len() > u64::try_from(cap).unwrap_or(u64::MAX) {
+			return Err(too_large());
+		}
+		let mut sealed = Vec::new();
+		file.take(u64::try_from(cap.saturating_add(1)).unwrap_or(u64::MAX))
+			.read_to_end(&mut sealed)?;
+		if sealed.len() > cap {
+			return Err(too_large());
+		}
+		let plain = self.sealer.open(hash, &sealed)?;
+		if plain.len() > max_bytes {
+			return Err(too_large());
+		}
+		Ok(plain)
 	}
 
 	/// Delete stored media. Missing files are fine.
@@ -240,6 +270,37 @@ mod tests {
 		assert!(matches!(
 			store.set_media_expiry("ff".repeat(32).as_str(), None),
 			Err(StoreError::NotFound)
+		));
+	}
+}
+
+#[cfg(test)]
+mod bounded_tests {
+	use super::*;
+
+	#[test]
+	fn bounded_media_reads_check_the_envelope_before_decrypting() {
+		let dir = tempfile::tempdir().unwrap();
+		let media = MediaStore::new(dir.path().to_path_buf(), &VaultKey::generate());
+		let reference = media.put(b"private audio", "audio/mp4").unwrap();
+		assert!(matches!(
+			media.get_bounded(&reference.hash, 1),
+			Err(StoreError::Invalid(_))
+		));
+		assert_eq!(
+			media.get_bounded(&reference.hash, 13).unwrap(),
+			b"private audio"
+		);
+		let path = media.path(&reference.hash).unwrap();
+		fs::OpenOptions::new()
+			.write(true)
+			.open(path)
+			.unwrap()
+			.set_len(1024 * 1024 * 1024)
+			.unwrap();
+		assert!(matches!(
+			media.get_bounded(&reference.hash, 1024),
+			Err(StoreError::Invalid(_))
 		));
 	}
 }

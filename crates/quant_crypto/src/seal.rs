@@ -10,6 +10,10 @@ use crate::VaultKey;
 const VERSION: u8 = 1;
 const NONCE: usize = 24;
 
+/// Bytes added by the versioned sealing format: version, nonce, and
+/// authentication tag.
+pub const SEALED_OVERHEAD: usize = 1 + NONCE + 16;
+
 /// Seal `plain` under a raw 32-byte key: `version ‖ nonce ‖ ciphertext+tag`.
 /// `aad` is authenticated but not stored; opening needs the same value.
 pub(crate) fn seal_with(key: &[u8; 32], plain: &[u8], aad: &[u8]) -> Vec<u8> {
@@ -28,7 +32,7 @@ pub(crate) fn seal_with(key: &[u8; 32], plain: &[u8], aad: &[u8]) -> Vec<u8> {
 
 /// Open data made by [`seal_with`].
 pub(crate) fn open_with(key: &[u8; 32], sealed: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
-	if sealed.len() < 1 + NONCE + 16 || sealed[0] != VERSION {
+	if sealed.len() < SEALED_OVERHEAD || sealed[0] != VERSION {
 		return Err(CryptoError::Malformed);
 	}
 	let (nonce, ciphertext) = sealed[1..].split_at(NONCE);

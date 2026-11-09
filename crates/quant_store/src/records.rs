@@ -278,14 +278,46 @@ impl Store {
 		)?)
 	}
 
+	/// Count stored records and series batches without loading their payloads.
+	/// Used for phone spool status, whose memory use must not grow with
+	/// backlog.
+	pub fn backlog_counts(&self) -> Result<(usize, usize)> {
+		let (records, batches) = self.conn().query_row(
+			"SELECT (SELECT count(*) FROM records), (SELECT count(*) FROM series)",
+			[],
+			|row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+		)?;
+		Ok((
+			usize::try_from(records).unwrap_or(usize::MAX),
+			usize::try_from(batches).unwrap_or(usize::MAX),
+		))
+	}
+
 	/// The oldest `limit` records with their row numbers, for draining a
 	/// spool in order.
 	pub fn oldest_records(&self, limit: usize) -> Result<Vec<(i64, Record)>> {
+		self.oldest_records_bounded(limit, usize::MAX)
+	}
+
+	/// Read a bounded number of spool records, rejecting an oversized item
+	/// before decoding its JSON. Nothing is deleted when a limit is exceeded.
+	pub fn oldest_records_bounded(
+		&self,
+		limit: usize,
+		max_bytes: usize,
+	) -> Result<Vec<(i64, Record)>> {
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&format!(
-			"SELECT {COLUMNS}, r.rowid FROM records r ORDER BY r.rowid LIMIT ?1"
+			"SELECT {COLUMNS}, r.rowid, coalesce(length(CAST(r.text AS BLOB)), 0) + \
+			 coalesce(length(CAST(r.data AS BLOB)), 0) FROM records r ORDER BY r.rowid LIMIT ?1"
 		))?;
 		let rows = statement.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+			let size: i64 = row.get(11)?;
+			if size > i64::try_from(max_bytes).unwrap_or(i64::MAX) {
+				return Ok(Err(StoreError::Invalid(
+					"spool record exceeds transfer limit".into(),
+				)));
+			}
 			let record = record_from_row(row)?;
 			let rowid: i64 = row.get(10)?;
 			Ok(record.map(|record| (rowid, record)))
@@ -965,5 +997,40 @@ mod tests {
 			store.insert_records(&[bad]),
 			Err(StoreError::Invalid(_))
 		));
+	}
+}
+
+#[cfg(test)]
+mod spool_resource_tests {
+	use quant_crypto::VaultKey;
+
+	use super::*;
+
+	#[test]
+	fn counts_do_not_read_or_decode_corrupted_payloads() {
+		let store = Store::open_in_memory(&VaultKey::generate()).unwrap();
+		store
+			.insert_records(&[Record::new("apps.focus".parse().unwrap(), DeviceId::new())])
+			.unwrap();
+		store
+			.conn()
+			.execute("UPDATE records SET data = 'not JSON'", [])
+			.unwrap();
+		assert_eq!(store.backlog_counts().unwrap(), (1, 0));
+		assert!(store.oldest_records(1).is_err());
+	}
+
+	#[test]
+	fn bounded_reads_leave_oversized_payloads_in_the_store() {
+		let store = Store::open_in_memory(&VaultKey::generate()).unwrap();
+		store
+			.insert_records(
+				&[Record::new("apps.focus".parse().unwrap(), DeviceId::new())
+					.with_text("a".repeat(1024))],
+			)
+			.unwrap();
+		assert!(store.oldest_records_bounded(1, 100).is_err());
+		assert_eq!(store.backlog_counts().unwrap(), (1, 0));
+		assert_eq!(store.oldest_records_bounded(1, 2048).unwrap().len(), 1);
 	}
 }
