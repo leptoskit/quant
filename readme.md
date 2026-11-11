@@ -195,6 +195,18 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `sensor`   | Anything from custom hardware: `sensor.<vendor>.<channel>`                                   |
 | `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.weekly`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |
 
+## Applications
+
+The repository holds three [leptoskit](https://github.com/leptoskit/leptoskit) applications, each with its own configuration, Cargo workspace, build, and deploy, named in [`leptoskit.workspace.toml`](leptoskit.workspace.toml). Check them together with `leptoskit workspace check`.
+
+| Application                      | Kind    | What it is                                                                                 |
+| -------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| [`apps/landing`](apps/landing/readme.md) | landing | The marketing site: what Quant is, the permission model, and a plain-language privacy page. |
+| [`apps/quant`](apps/quant/readme.md)     | product | The macOS menu-bar app (and, next, the Android collector).                                  |
+| [`apps/relay`](apps/relay/readme.md)     | server  | The blind relay that lets clients reach a vault from anywhere.                              |
+
+Keep all three on the same Leptoskit commit with `python3 scripts/update-leptoskit.py`.
+
 ## Inspiration
 
 - [kizuki](https://github.com/Illuminfti/kizuki) for its capture-to-memory ledger, agent grants, and redaction.

@@ -1,0 +1,17 @@
+# Written by `leptoskit generate deploy`. Keeps the build context small, and
+# local builds, databases, and secrets out of the image.
+.git
+**/target
+/dist
+/.leptoskit
+/infra
+/.kamal
+/android/.gradle
+/android/**/build
+*.sqlite3*
+*.dump
+.env
+.env.*
+
+**/node_modules
+/test-results

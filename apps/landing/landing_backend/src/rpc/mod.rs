@@ -1,0 +1,19 @@
+//! The backend's server functions. `#[api]` publishes each one, so the RPC
+//! spec and the clients `leptoskit rpc generate` writes describe it.
+
+use landing_shared::Health;
+use leptos::prelude::ServerFnError;
+use leptos::server;
+use leptos::server_fn::codec::GetUrl;
+use leptoskit::rpc::api;
+
+/// Reports whether the backend is ready to receive requests.
+#[api(crate = "leptoskit::rpc", tag = "health")]
+// `name` keeps the struct `#[server]` generates apart from the `Health` it
+// returns.
+#[server(name = CheckHealth, endpoint = "health", input = GetUrl)]
+// The server-function macro requires an async signature.
+#[allow(clippy::unused_async)]
+pub async fn health() -> Result<Health, ServerFnError> {
+	Ok(Health { ready: true })
+}

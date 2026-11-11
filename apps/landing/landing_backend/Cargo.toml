@@ -1,0 +1,18 @@
+# The landing page's backend: the health route the deploy checks probe.
+[package]
+name = "landing_backend"
+description = "The Quant landing page's server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+landing_shared = { workspace = true }
+leptos = { version = "0.9.0-rc0", default-features = false }
+leptoskit = { workspace = true, features = ["server", "rpc-ssr"] }
+
+[lints]
+workspace = true

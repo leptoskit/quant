@@ -1,0 +1,78 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+[app]
+name = "landing"
+version = "0.1.0"
+default_platform = "web"
+platforms = ["web"]
+render = "ssr"
+
+[serve]
+address = "127.0.0.1"
+port = 3000
+probes = true
+
+[build]
+backend = true
+client_package = "landing_app"
+features = []
+rustflags = []
+
+[bundle]
+optimize = "fast"
+split = true
+wasm_opt = true
+precompress = true
+
+[native]
+update_contract = "mobile-v1"
+package_id = "com.leptoskit.landing"
+viewport_width = 390.0
+viewport_height = 844.0
+
+[codepush]
+enabled = false
+allow_http = false
+server = ""
+channel = "production"
+mandatory = false
+staging_dir = "codepush"
+public_keys = []
+
+[rpc]
+servers = []
+exclude = []
+include_internal = false
+targets = []
+
+[rpc.jobs]
+workers = 4
+poll_seconds = 5
+retention_days = 7
+
+[rpc.jobs.queues]
+
+[[plugins]]
+name = "router"
+leptos = false
+
+[plugins.options]
+dir = "landing_app/src/routes"
+
+# Every component is a PascalCase `#[component]` function and every tree is
+# written as `view!` markup; the linter enforces both.
+[lint]
+markup = "view"
+clippy = true
+exclude = []
+
+[lint.rules]
+component_attribute = "deny"
+markup_style = "deny"
+redundant_view = "warn"
+spacer_view = "warn"
+children_last = "warn"
+image_label = "deny"
+color_literal = "allow"

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Quant quietly records the shape of your days into an encrypted vault only you can open. Your AI agents ask; you decide what they see." />
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <title>Quant: quantify your life, and decide who reads it</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <script type="module">
+      import init from "/pkg/landing_app.js";
+      await init({ module_or_path: "/pkg/landing_app_bg.wasm" });
+    </script>
+  </body>
+</html>

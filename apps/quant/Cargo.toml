@@ -24,17 +24,17 @@ quant_core = { path = "../../crates/quant_core" }
 
 # Pin the latest verified main commit; update with scripts/update-leptoskit.py.
 # `scripts/local-sdk.sh` points these at a local checkout instead.
-leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
-leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
-leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
-leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
-leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7" }
-leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7" }
-leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7" }
-leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7" }
-leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7" }
-leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "a8fec995896be1fea532ee589dfb8869c28f1df7", default-features = false }
+leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
+leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
+leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
+leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
+leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
+leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd" }
+leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd" }
+leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd" }
+leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd" }
+leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd" }
+leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "353b6165d9f2c86e9c92284ec5022b32df9f35dd", default-features = false }
 
 dispatch2 = "0.3"
 base64 = "0.22"

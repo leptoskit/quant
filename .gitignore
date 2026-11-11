@@ -4,3 +4,6 @@ target/
 *.snap.new
 /.quant-dev/
 /.claude/
+
+node_modules/
+/apps/landing/test-results/

@@ -1,0 +1,18 @@
+# The Quant applications, each a leptoskit app with its own configuration,
+# Cargo workspace, build, and deploy. Validate with `leptoskit workspace check`.
+format_version = 1
+
+# The marketing site: web only, deployed on its own.
+[applications.landing]
+path = "apps/landing"
+kind = "landing"
+
+# The macOS menu-bar app: the product, with the Android collector to follow.
+[applications.app]
+path = "apps/quant"
+kind = "product"
+
+# The blind relay: a server that joins two encrypted connections.
+[applications.relay]
+path = "apps/relay"
+kind = "server"
