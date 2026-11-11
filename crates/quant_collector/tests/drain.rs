@@ -166,7 +166,12 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 		.unwrap()
 		.unwrap();
 	assert_eq!(queued.id, chunk_id);
-	assert_eq!(queued.start, ambient.start);
+	// The vault keeps microsecond instants. The phone's `Timestamp::now()`
+	// also has nanoseconds, and those digits are not stored.
+	assert_eq!(
+		queued.start.as_microsecond(),
+		ambient.start.as_microsecond()
+	);
 	state
 		.vault
 		.store

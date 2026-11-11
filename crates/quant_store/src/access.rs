@@ -172,7 +172,7 @@ impl Store {
 			public_key,
 			status: ClientStatus::Pending,
 			requested: requested.clone(),
-			created_at: Timestamp::now(),
+			created_at: crate::now_micros()?,
 			last_seen: None,
 		};
 		self.conn().execute(

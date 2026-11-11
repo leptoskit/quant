@@ -166,6 +166,12 @@ pub(crate) fn from_micros(us: i64) -> Result<Timestamp> {
 	Timestamp::from_microsecond(us).map_err(|_| StoreError::Corrupt("timestamp"))
 }
 
+/// Current time at the microsecond resolution the vault stores, so a value
+/// just written compares equal to the same row read back.
+pub(crate) fn now_micros() -> Result<Timestamp> {
+	from_micros(micros(Timestamp::now()))
+}
+
 impl Store {
 	/// Open (or create) the database at `path` with the vault key.
 	pub fn open(path: &Path, key: &VaultKey) -> Result<Self> {

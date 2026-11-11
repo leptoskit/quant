@@ -181,8 +181,16 @@ mod tests {
 		assert_eq!(found.len(), 1);
 		assert_eq!(found[0].text.as_deref(), Some("remember the conversation"));
 		assert_eq!(found[0].device, first.device);
-		assert_eq!(found[0].start, first.start);
-		assert_eq!(found[0].end, first.end);
+		// The vault stores instants as microseconds. `Timestamp::now()` also
+		// carries nanoseconds, which do not round-trip.
+		assert_eq!(
+			found[0].start.as_microsecond(),
+			first.start.as_microsecond()
+		);
+		assert_eq!(
+			found[0].end.map(Timestamp::as_microsecond),
+			first.end.map(Timestamp::as_microsecond)
+		);
 		assert_eq!(found[0].data["chunk_id"], first.id.to_string());
 		assert!(found[0].media.is_none());
 		let hits = store
