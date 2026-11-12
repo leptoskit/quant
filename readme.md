@@ -225,7 +225,9 @@ permissions, derivation, CLI and MCP. `cargo test` selects those core packages;
 target-specific checks run separately in CI within the same workspace.
 
 See [project layout](docs/project-layout.md), [desktop](docs/desktop.md),
-[landing](docs/landing.md), and [relay](docs/relay.md). Update all SDK pins and
+[landing](docs/landing.md), and [relay](docs/relay.md). Follow the
+[deployment plan](docs/deployment-plan.md) when preparing or deploying a release.
+Update all SDK pins and
 the single lockfile with `python3 scripts/update-leptoskit.py --no-check`.
 
 ## Inspiration

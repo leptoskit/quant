@@ -53,3 +53,6 @@ Run `python3 scripts/check-project.py` for structural checks. Core tests use
 the workspace's default members; target CI selects explicit packages and
 builds with the matching SDK CLI. The SDK update script updates one manifest,
 both container CLI pins and the single lockfile.
+
+Release preparation, deployment, verification and rollback follow the
+[deployment plan](deployment-plan.md).
