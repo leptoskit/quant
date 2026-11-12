@@ -1,0 +1,37 @@
+[package]
+name = "relay"
+description = "The Quant relay: a blind pipe between clients and quant daemon."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# leptoskit's ssr render mode builds this package with its `ssr` feature;
+# the relay is a plain server, so the feature turns nothing on.
+ssr = []
+
+[dependencies]
+relay_db = { workspace = true, features = ["server"] }
+leptoskit_axum = { workspace = true }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+# leptoskit_axum serves; the WebSocket routes themselves are plain axum,
+# because leptoskit's server toolkit has no WebSocket support.
+axum = { workspace = true }
+clap = { workspace = true }
+data-encoding = "2"
+getrandom = "0.4"
+quant_relay = { path = "../quant_relay", default-features = false, features = [
+	"server",
+] }
+tokio = { workspace = true }
+
+[dev-dependencies]
+futures-util = "0.3"
+jiff = { version = "0.2", features = ["serde"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+
+
+[lints]
+workspace = true

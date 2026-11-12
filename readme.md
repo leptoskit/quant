@@ -76,7 +76,7 @@ quant capture pause --minutes 30   # or `quant capture resume`
 
 Password managers and private or incognito browser windows are never captured. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
 
-The menu-bar app in [`apps/quant`](apps/quant/readme.md) shows the same status, pauses and resumes, saves the last minutes of audio, and approves agents, without a terminal.
+The menu-bar app in [desktop app](docs/desktop.md) shows the same status, pauses and resumes, saves the last minutes of audio, and approves agents, without a terminal.
 
 ## Rewind: the last day of audio
 
@@ -195,17 +195,38 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `sensor`   | Anything from custom hardware: `sensor.<vendor>.<channel>`                                   |
 | `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.weekly`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |
 
-## Applications
+## One application, multiple targets
 
-The repository holds three [leptoskit](https://github.com/leptoskit/leptoskit) applications, each with its own configuration, Cargo workspace, build, and deploy, named in [`leptoskit.workspace.toml`](leptoskit.workspace.toml). Check them together with `leptoskit workspace check`.
+Quant has one root [`leptoskit.toml`](leptoskit.toml), one Cargo workspace and
+one lockfile. Each destination selects packages from that workspace; the
+public website and relay deploy independently without becoming separate apps.
 
-| Application                      | Kind    | What it is                                                                                 |
-| -------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| [`apps/landing`](apps/landing/readme.md) | landing | The marketing site: what Quant is, the permission model, and a plain-language privacy page. |
-| [`apps/quant`](apps/quant/readme.md)     | product | The macOS menu-bar app (and, next, the Android collector).                                  |
-| [`apps/relay`](apps/relay/readme.md)     | server  | The blind relay that lets clients reach a vault from anywhere.                              |
+| Target | Code | Responsibility |
+| --- | --- | --- |
+| `desktop` | `platforms/macos`, `crates/quant_service`, `crates/quant_app` | Native menu-bar service, with a window created on demand. |
+| `landing` | `crates/landing_*`, `crates/quant_landing_server` | Public site, its own routes and assets; no vault access. |
+| `relay` | `crates/quant_relay_server`, `crates/relay_db` | Blind encrypted-connection relay with its own metadata database. |
+| `web`, `android`, `ios`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
 
-Keep all three on the same Leptoskit commit with `python3 scripts/update-leptoskit.py`.
+From the repository root:
+
+```sh
+leptoskit targets
+leptoskit --app-target desktop build --release
+leptoskit --app-target landing dev
+leptoskit --app-target relay build --release
+```
+
+Use the CLI from the SDK revision pinned in `Cargo.toml`. Public assets live in
+`assets/landing`; product assets live in `assets/app`. Builds go to
+`dist/<target>` and generated native state stays under `.leptoskit/<platform>`.
+The original core crates remain unchanged in role: capture, encrypted storage,
+permissions, derivation, CLI and MCP. `cargo test` selects those core packages;
+target-specific checks run separately in CI within the same workspace.
+
+See [project layout](docs/project-layout.md), [desktop](docs/desktop.md),
+[landing](docs/landing.md), and [relay](docs/relay.md). Update all SDK pins and
+the single lockfile with `python3 scripts/update-leptoskit.py --no-check`.
 
 ## Inspiration
 

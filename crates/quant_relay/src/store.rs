@@ -1,8 +1,8 @@
 //! What a relay persists, as the server sees it.
 //!
 //! Implementations live wherever the rows do: [`server::MemoryStore`] in
-//! tests, `leptoskit_db` tables in `apps/relay`. The relay keeps everything
-//! else (live sockets, counters) in memory.
+//! tests, `leptoskit_db` tables in `crates/quant_relay_server`. The relay keeps
+//! everything else (live sockets, counters) in memory.
 
 use std::future::Future;
 

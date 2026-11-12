@@ -1,4 +1,4 @@
-name: applications
+name: application-targets
 
 on:
   push:
@@ -20,24 +20,21 @@ env:
 
 jobs:
   check:
-    name: ${{ matrix.app }}
+    name: ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - app: quant
+          - target: desktop
             runner: macos-latest
-            exclude: --exclude quant_macos
-          - app: relay
+            packages: -p quant_app -p quant_model -p quant_service
+          - target: relay
             runner: ubuntu-latest
-            exclude: ''
-          - app: landing
+            packages: -p relay -p relay_db
+          - target: landing
             runner: ubuntu-latest
-            exclude: ''
+            packages: -p landing -p landing_app -p landing_backend -p landing_shared
     runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        working-directory: apps/${{ matrix.app }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,17 +43,16 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/${{ matrix.app }} -> target
+          key: target-${{ matrix.target }}
       - name: Format
         run: cargo fmt --all --check
       - name: Check
-        run: cargo check --locked --workspace --all-targets ${{ matrix.exclude }}
+        run: cargo check --locked --all-targets ${{ matrix.packages }}
       - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets ${{ matrix.exclude }} -- -D warnings
+        run: cargo clippy --locked --all-targets ${{ matrix.packages }} -- -D warnings
       - name: Test
-        run: cargo test --locked --workspace ${{ matrix.exclude }}
+        run: cargo test --locked ${{ matrix.packages }}
       - name: Read the SDK revision
-        if: matrix.app == 'landing'
         run: |
           python3 - <<'PY'
           import os
@@ -70,15 +66,13 @@ jobs:
               output.write(f'LEPTOSKIT_REV={revision}\n')
           PY
       - name: Install the matching SDK CLI
-        if: matrix.app == 'landing'
         run: cargo install --git https://github.com/leptoskit/leptoskit --rev "$LEPTOSKIT_REV" --locked leptoskit_cli
       - name: Leptoskit lint and workspace configuration
-        if: matrix.app == 'landing'
         run: |
-          leptoskit lint --no-clippy
-          leptoskit workspace check
+          leptoskit targets
+          leptoskit --app-target ${{ matrix.target }} lint --no-clippy
       - name: Install Binaryen
-        if: matrix.app == 'landing'
+        if: matrix.target == 'landing'
         run: |
           curl --fail --silent --show-error --location --retry 3 \
             https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz \
@@ -86,33 +80,32 @@ jobs:
           tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
       - name: Production build
-        if: matrix.app == 'landing'
-        run: leptoskit build --release --platform web
+        run: leptoskit --app-target ${{ matrix.target }} build --release
       - uses: actions/setup-node@v4
-        if: matrix.app == 'landing'
+        if: matrix.target == 'landing'
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: apps/landing/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install browser checks
-        if: matrix.app == 'landing'
+        if: matrix.target == 'landing'
         run: |
           npm ci
           npx playwright install --with-deps chromium --only-shell
       - name: Hydrated browser regression checks
-        if: matrix.app == 'landing'
+        if: matrix.target == 'landing'
         env:
           LEPTOS_ENV: PROD
           LEPTOS_SITE_ADDR: 127.0.0.1:4202
           LEPTOS_OUTPUT_NAME: landing_app
-          LEPTOS_SITE_ROOT: ${{ github.workspace }}/apps/landing/dist
+          LEPTOS_SITE_ROOT: ${{ github.workspace }}/dist/landing
         run: |
           set -euo pipefail
           mkdir -p test-results
           target/release/landing > test-results/server.log 2>&1 &
           quant_site_pid=$!
           trap 'kill "$quant_site_pid" 2>/dev/null || true; wait "$quant_site_pid" || true' EXIT
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:4202/readyz > /dev/null; then
               break
             fi
@@ -122,8 +115,8 @@ jobs:
           curl --fail --silent http://127.0.0.1:4202/readyz > /dev/null
           npm run test:browser
       - uses: actions/upload-artifact@v4
-        if: always() && matrix.app == 'landing'
+        if: always() && matrix.target == 'landing'
         with:
           name: landing-browser-results
-          path: apps/landing/test-results
+          path: test-results
           if-no-files-found: ignore

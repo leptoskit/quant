@@ -1,7 +1,7 @@
 //! The relay server: three WebSocket routes over any [`RelayStore`].
 //!
-//! This is the relay that `apps/relay` serves, with storage left open: a
-//! [`RelayStore`] holds registrations, invites, and usage counts, and
+//! This is the relay that `crates/quant_relay_server` serves, with storage left
+//! open: a [`RelayStore`] holds registrations, invites, and usage counts, and
 //! [`MemoryStore`] is an in-memory one for tests. Nothing here looks at a
 //! client's bytes, logs an address, or stores one; what the relay knows is
 //! the rendezvous id, the public key, when it was last seen, and how many

@@ -1,8 +1,0 @@
-/target
-/dist
-/.env
-/.env.*
-/.leptoskit
-/android/.gradle
-/android/**/build
-/android/local.properties
