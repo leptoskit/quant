@@ -4,3 +4,15 @@ target/
 *.snap.new
 /.quant-dev/
 /.claude/
+
+node_modules/
+/test-results/
+
+/dist/
+/.leptoskit/
+# Generated artifacts left by the former nested workspaces.
+/apps/
+
+__pycache__/
+# Local SDK overrides are machine-specific.
+/.cargo/config.toml

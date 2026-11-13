@@ -1,0 +1,51 @@
+# The landing page's app crate: the screens the SSR server and the browser
+# share. Routes live in `src/routes/`; the drawn interface in `src/components/`.
+[package]
+name = "landing_app"
+description = "The Quant landing page's screens."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+web = ["leptoskit/web", "leptoskit_router/web", "dep:leptos", "dep:wasm-bindgen"]
+native = ["leptoskit/guest"]
+ios = ["native", "leptoskit/ios"]
+android = ["native", "leptoskit/android"]
+macos = ["native", "leptoskit/macos"]
+windows = ["native", "leptoskit/windows"]
+linux = ["native", "leptoskit/linux"]
+tui = ["native", "leptoskit/tui"]
+csr = ["web", "leptos/csr"]
+hydrate = ["web", "leptos/hydrate"]
+ssr = ["web", "leptos/ssr"]
+# The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
+devtools = ["leptoskit/devtools"]
+
+[dependencies]
+landing_shared = { workspace = true }
+leptoskit = { workspace = true }
+leptoskit_router = { workspace = true }
+skribble_leptoskit = { workspace = true }
+# The store the screens read through `crate::store`.
+reactive_graph = "0.3.0-rc0"
+reactive_stores = "0.5.0-rc0"
+leptos = { version = "0.9.0-rc0", default-features = false, optional = true }
+# The embedded wasm-bindgen CLI accepts exactly its matching library version.
+wasm-bindgen = { version = "=0.2.129", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
+
+[build-dependencies]
+leptoskit_build = { workspace = true }
+
+[lints]
+workspace = true

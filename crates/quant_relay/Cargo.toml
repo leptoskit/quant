@@ -27,7 +27,7 @@ tokio = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
-# Being a relay: the in-process server used by tests and `apps/relay`.
+# Being a relay: the in-process server used by tests and `crates/quant_relay_server`.
 axum = { workspace = true, optional = true, features = ["ws"] }
 
 [features]

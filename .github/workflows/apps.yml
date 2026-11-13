@@ -1,0 +1,122 @@
+name: application-targets
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: desktop
+            runner: macos-latest
+            packages: -p quant_app -p quant_model -p quant_service
+          - target: relay
+            runner: ubuntu-latest
+            packages: -p relay -p relay_db
+          - target: landing
+            runner: ubuntu-latest
+            packages: -p landing -p landing_app -p landing_backend -p landing_shared
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: target-${{ matrix.target }}
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Check
+        run: cargo check --locked --all-targets ${{ matrix.packages }}
+      - name: Clippy
+        run: cargo clippy --locked --all-targets ${{ matrix.packages }} -- -D warnings
+      - name: Test
+        run: cargo test --locked ${{ matrix.packages }}
+      - name: Read the SDK revision
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+          manifest = tomllib.loads(Path('Cargo.toml').read_text())
+          revision = manifest['workspace']['dependencies']['leptoskit']['rev']
+          assert re.fullmatch(r'[0-9a-f]{40}', revision), 'Expected a pinned SDK revision'
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'LEPTOSKIT_REV={revision}\n')
+          PY
+      - name: Install the matching SDK CLI
+        run: cargo install --git https://github.com/leptoskit/leptoskit --rev "$LEPTOSKIT_REV" --locked leptoskit_cli
+      - name: Leptoskit lint and workspace configuration
+        run: |
+          leptoskit targets
+          leptoskit --app-target ${{ matrix.target }} lint --no-clippy
+      - name: Install Binaryen
+        if: matrix.target == 'landing'
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz \
+            --output "$RUNNER_TEMP/binaryen.tar.gz"
+          tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+      - name: Production build
+        run: leptoskit --app-target ${{ matrix.target }} build --release
+      - uses: actions/setup-node@v4
+        if: matrix.target == 'landing'
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install browser checks
+        if: matrix.target == 'landing'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium --only-shell
+      - name: Hydrated browser regression checks
+        if: matrix.target == 'landing'
+        env:
+          LEPTOS_ENV: PROD
+          LEPTOS_SITE_ADDR: 127.0.0.1:4202
+          LEPTOS_OUTPUT_NAME: landing_app
+          LEPTOS_SITE_ROOT: ${{ github.workspace }}/dist/landing
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          target/release/landing > test-results/server.log 2>&1 &
+          quant_site_pid=$!
+          trap 'kill "$quant_site_pid" 2>/dev/null || true; wait "$quant_site_pid" || true' EXIT
+          for _attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4202/readyz > /dev/null; then
+              break
+            fi
+            kill -0 "$quant_site_pid"
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4202/readyz > /dev/null
+          npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.target == 'landing'
+        with:
+          name: landing-browser-results
+          path: test-results
+          if-no-files-found: ignore

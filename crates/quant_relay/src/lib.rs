@@ -15,10 +15,10 @@
 //!
 //! Behind the `dial` feature, [`dial`] connects a WebSocket and wraps it as a
 //! byte stream; behind the `server` feature, [`server`] is the relay itself:
-//! the same axum routes `apps/relay` serves, over any [`server::RelayStore`],
-//! with an in-memory store for tests. Both are on by default so the
-//! workspace's crates and tests see one feature set; `apps/relay` turns them
-//! off and takes only the protocol.
+//! the same axum routes `crates/quant_relay_server` serves, over any
+//! [`server::RelayStore`], with an in-memory store for tests. Both are on by
+//! default so the workspace's crates and tests see one feature set;
+//! `crates/quant_relay_server` turns them off and takes only the protocol.
 
 pub mod key;
 pub mod limits;

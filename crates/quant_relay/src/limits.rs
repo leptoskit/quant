@@ -1,8 +1,8 @@
 //! What a relay allows one rendezvous id, and one connection.
 //!
 //! The defaults keep one vault from starving the rest. A public relay can
-//! tighten or loosen them through environment variables; `apps/relay`
-//! documents them.
+//! tighten or loosen them through environment variables;
+//! `crates/quant_relay_server` documents them.
 
 use std::time::Duration;
 

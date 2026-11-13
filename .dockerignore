@@ -1,0 +1,16 @@
+target
+.git
+.devenv
+.leptoskit
+apps
+node_modules
+test-results
+dist
+.quant-dev
+**/target
+infra
+.kamal
+*.sqlite3*
+*.dump
+.env
+.env.*

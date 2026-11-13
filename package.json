@@ -1,0 +1,6 @@
+{
+  "name": "quant-landing-browser-checks",
+  "private": true,
+  "scripts": { "test:browser": "node tests/landing/browser.cjs" },
+  "devDependencies": { "playwright": "1.65.0-alpha-2026-10-30" }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "landing"
+description = "The Quant landing page."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["ssr"]
+ssr = ["landing_app/web", "landing_app/ssr", "leptoskit/ssr"]
+
+[dependencies]
+landing_app = { path = "../landing_app", default-features = false }
+landing_backend = { path = "../landing_backend" }
+leptoskit = { workspace = true, features = ["server", "rpc-ssr"] }
+
+
+[lints]
+workspace = true

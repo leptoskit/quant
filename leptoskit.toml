@@ -1,0 +1,129 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+# One application, one Cargo workspace, independently selected destinations.
+schema_version = 0
+
+[app]
+name = "quant"
+version = "0.1.0"
+default_target = "desktop"
+default_platform = "macos"
+platforms = ["web", "server", "macos", "android", "ios", "harmonyos"]
+icon = "assets/brand/icon.svg"
+
+[frontends.app]
+package = "quant_app"
+render = "csr"
+
+[frontends.app.lint]
+markup = "builder"
+exclude = ["crates/landing_app/**"]
+
+[frontends.app.lint.rules]
+markup_style = "deny"
+component_attribute = "deny"
+
+[frontends.app.inputs]
+assets = "assets/app"
+web = "web/app"
+public = "public/app"
+
+[frontends.landing]
+package = "landing_app"
+server_package = "landing"
+render = "ssr"
+
+[frontends.landing.inputs]
+assets = "assets/landing"
+web = "web/landing"
+public = "public/landing"
+
+[frontends.landing.router]
+dir = "crates/landing_app/src/routes"
+
+[frontends.landing.lint]
+markup = "view"
+exclude = ["crates/quant_app/**"]
+
+[frontends.landing.lint.rules]
+markup_style = "deny"
+component_attribute = "deny"
+
+[targets.desktop]
+platform = "macos"
+frontend = "app"
+
+[targets.desktop.native]
+mode = "menu-bar"
+package_id = "dev.leptoskit.quant"
+viewport_width = 520.0
+viewport_height = 640.0
+plugins = ["quant", "device-keys"]
+
+[targets.landing]
+platform = "web"
+frontend = "landing"
+
+[targets.landing.serve]
+address = "127.0.0.1"
+port = 3000
+probes = true
+
+[targets.relay]
+platform = "server"
+
+[targets.relay.build]
+backend = true
+server_package = "relay"
+
+[targets.relay.serve]
+address = "127.0.0.1"
+port = 3001
+
+[targets.relay.db]
+dialect = "sqlite"
+crate = "relay_db"
+migrations = "crates/relay_db/migrations"
+url_env = "DATABASE_URL"
+
+# These destinations belong to this application. Their transports/hosts must
+# be integrated before selection can build a working Quant client.
+[targets.web]
+platform = "web"
+frontend = "app"
+unavailable = "The product UI still uses the native service bridge; its authenticated browser transport is not implemented."
+
+[targets.android]
+platform = "android"
+frontend = "app"
+unavailable = "Quant's mobile native host and collector lifecycle are not integrated yet."
+
+[targets.ios]
+platform = "ios"
+frontend = "app"
+unavailable = "Quant's mobile native host and background collection lifecycle are not integrated yet."
+
+[targets.harmonyos]
+platform = "harmonyos"
+frontend = "app"
+unavailable = "Leptoskit's HarmonyOS host is experimental; Quant has no collector integration yet."
+
+[bundle]
+optimize = "fast"
+split = true
+wasm_opt = true
+precompress = true
+
+[native]
+package_id = "dev.leptoskit.quant"
+
+[codepush]
+enabled = false
+
+[lint]
+markup = "builder"
+# The landing job enforces its own frontend's view-style rules.
+exclude = ["crates/landing_app/**"]
+
+[lint.rules]
+markup_style = "deny"
+component_attribute = "deny"

@@ -1,0 +1,37 @@
+# relay with Docker Compose, written by `leptoskit generate deploy`. It's
+# yours to edit: running the generator again keeps your changes unless you
+# pass --force.
+#
+#   docker compose up --build
+#
+# Secrets, once the app has some, come from the environment or an `.env`
+# file beside this one, which .dockerignore keeps out of the image. They never
+# go in this file.
+
+name: relay
+
+services:
+  app:
+    # The build context is the repository root, because the app builds
+    # against `crates/quant_relay` by path.
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    image: relay
+    # Only this machine reaches the server: put a proxy that terminates TLS
+    # in front of it.
+    ports:
+      - "127.0.0.1:3000:3000"
+    # Nothing in the image changes while it runs; the database lives on a volume.
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - data:/data
+    # On `docker compose down` the server fails /readyz, waits 5 seconds, and
+    # gives the requests in flight 20 more, so this leaves it time to finish.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  data:

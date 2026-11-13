@@ -1,6 +1,0 @@
-/target
-/.leptoskit
-/.leptoskit-cli
-/dist
-# Written by scripts/local-sdk.sh.
-/.cargo/config.toml
