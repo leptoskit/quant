@@ -137,6 +137,7 @@ mod tests {
 	use super::*;
 	use crate::RecordQuery;
 	use crate::Selector;
+	use crate::from_micros;
 
 	fn chunk(at: Timestamp) -> Record {
 		Record::new("audio.ambient".parse().unwrap(), DeviceId::new())
@@ -159,7 +160,9 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("vault.db");
 		let key = VaultKey::generate();
-		let now = Timestamp::now();
+		// Always exercise the precision lost when timestamps are persisted,
+		// including on systems whose clock supplies only microseconds.
+		let now: Timestamp = "2026-11-12T12:00:00.123456789Z".parse().unwrap();
 		let first = chunk(now);
 		let store = Store::open(&path, &key).unwrap();
 		store.insert_records(std::slice::from_ref(&first)).unwrap();
@@ -181,8 +184,11 @@ mod tests {
 		assert_eq!(found.len(), 1);
 		assert_eq!(found[0].text.as_deref(), Some("remember the conversation"));
 		assert_eq!(found[0].device, first.device);
-		assert_eq!(found[0].start, first.start);
-		assert_eq!(found[0].end, first.end);
+		assert_eq!(found[0].start, from_micros(micros(first.start)).unwrap());
+		assert_eq!(
+			found[0].end,
+			first.end.map(|end| from_micros(micros(end)).unwrap())
+		);
 		assert_eq!(found[0].data["chunk_id"], first.id.to_string());
 		assert!(found[0].media.is_none());
 		let hits = store

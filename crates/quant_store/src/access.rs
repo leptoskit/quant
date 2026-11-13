@@ -151,6 +151,17 @@ impl Store {
 		public_key: PublicKey,
 		requested: &Scopes,
 	) -> Result<Client> {
+		self.register_client_at(name, kind, public_key, requested, Timestamp::now())
+	}
+
+	fn register_client_at(
+		&self,
+		name: &str,
+		kind: ClientKind,
+		public_key: PublicKey,
+		requested: &Scopes,
+		now: Timestamp,
+	) -> Result<Client> {
 		if let Some(existing) = self.client_by_key(&public_key)? {
 			return Ok(existing);
 		}
@@ -172,7 +183,8 @@ impl Store {
 			public_key,
 			status: ClientStatus::Pending,
 			requested: requested.clone(),
-			created_at: Timestamp::now(),
+			// Return the same timestamp on first registration and readback.
+			created_at: from_micros(micros(now))?,
 			last_seen: None,
 		};
 		self.conn().execute(
@@ -384,7 +396,13 @@ mod tests {
 		let key = ClientKey::generate().public();
 		let scopes = Scopes::parse(["health:summary"]).unwrap();
 		let a = store
-			.register_client("Claude", ClientKind::Agent, key, &scopes)
+			.register_client_at(
+				"Claude",
+				ClientKind::Agent,
+				key,
+				&scopes,
+				"2026-11-12T12:00:00.123456789Z".parse().unwrap(),
+			)
 			.unwrap();
 		let b = store
 			.register_client("Other name", ClientKind::Agent, key, &scopes)
