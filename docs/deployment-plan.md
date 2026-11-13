@@ -15,6 +15,7 @@ resources and release artifacts remain destinations of this one application.
 | `landing` | SSR server and browser bundle; `deploy/landing/` | Staging, then public website. No vault credentials or database. |
 | `relay` | Relay server image; `deploy/relay/` | Staging, then an invite-gated pilot on one persistent instance. |
 | `desktop` | Signed macOS app plus the `quant` CLI/daemon | Local install, owner pilot, then signed public distribution after packaging gates pass. |
+| `desktop-preview` | Local UI with explicitly labelled, synthetic sample data | Design review and screenshots only; never distribute as the product. |
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
 | `android`, `ios`, `harmonyos` | Native application packages | Blocked by their `unavailable` entries; hosts and collector lifecycles are unfinished. |
 

@@ -522,6 +522,24 @@ body {
 	line-height: 1.5;
 }
 
+#hero-trust {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 22px;
+}
+#hero-trust > span {
+	padding: 4px 10px;
+	border: 1px solid var(--rule);
+	border-radius: 100px;
+	background: var(--card);
+	color: var(--quiet);
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 1.5;
+}
+
 /* the day page: a page torn from the notebook */
 #daypage {
 	grid-area: page;
@@ -618,12 +636,21 @@ body {
 
 @media (min-width: 1000px) {
 	#hero {
-		grid-template-columns: minmax(0, 1fr) 440px;
+		grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
 		grid-template-areas:
-			"head head"
+			"head page"
 			"body page";
+		row-gap: 24px;
+		column-gap: 44px;
+		padding-top: 88px;
+		padding-bottom: 24px;
+	}
+	#hero-title {
+		font-size: clamp(52px, 5.1vw, 72px);
+		line-height: 1.08;
 	}
 	#daypage {
+		align-self: center;
 		justify-self: end;
 		max-width: 440px;
 		margin-top: 8px;

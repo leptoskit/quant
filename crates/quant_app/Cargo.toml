@@ -13,6 +13,8 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
+# Synthetic, disconnected UI for design review. Never enable in a release.
+ui-preview = []
 # The native Wasm guest. The window talks only to the app's own service.
 native = ["leptoskit/guest", "leptoskit_bridge/guest"]
 macos = ["native", "leptoskit/macos"]

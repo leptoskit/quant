@@ -20,6 +20,7 @@ use leptoskit::prelude::Set;
 use leptoskit::prelude::Text;
 use leptoskit::prelude::TextInput;
 use leptoskit::prelude::View;
+use leptoskit::prelude::component;
 use quant_model::AuditRow;
 use quant_model::Command;
 use quant_model::GrantRow;
@@ -152,48 +153,71 @@ impl State {
 	}
 }
 
-const MUTED: &str = "text-xs text-gray-500 dark:text-gray-400";
-const CARD: &str =
-	"gap-2 p-3 rounded-md border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800";
-const HEADING: &str = "text-sm font-semibold text-gray-900 dark:text-gray-100";
-const BODY: &str = "text-sm text-gray-900 dark:text-gray-100";
+const MUTED: &str = "text-xs leading-relaxed text-stone-500 dark:text-stone-400";
+const CARD: &str = "gap-3 p-4 rounded-xl border border-stone-200 bg-[#fffdf7] \
+                    dark:border-stone-700 dark:bg-[#252520]";
+const CONTROL: &str = "px-3 py-2 rounded-lg bg-stone-100 text-stone-800 dark:bg-stone-700 \
+                       dark:text-stone-100 text-xs";
+const PRIMARY: &str = "px-3 py-2 rounded-lg bg-[#ffd43b] text-stone-900 text-xs font-semibold";
+const HEADING: &str = "text-sm font-semibold text-stone-900 dark:text-stone-100";
+const BODY: &str = "text-sm leading-relaxed text-stone-800 dark:text-stone-100";
 
 /// The whole window.
-pub fn screen(state: &State) -> Element {
+#[component]
+pub fn Screen(state: State) -> Element {
 	View()
-		.class("flex-1 bg-gray-50 dark:bg-gray-900")
-		.child(header(state))
-		.child(tabs(state))
+		.class("flex-1 bg-[#fbf6ea] dark:bg-[#1b1a17]")
+		.child(header(&state))
+		.child(tabs(&state))
 		.child(
 			ScrollView()
 				.class("flex-1")
-				.child(View().class("gap-3 p-4").child(body(state))),
+				.child(View().class("gap-4 px-5 py-4").child(body(&state))),
 		)
-		.child(owner_bar(state))
+		.child(owner_bar(&state))
 }
 
 fn header(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let problem = state.problem;
-	View()
-		.class("gap-1 px-4 pt-4 pb-2")
+	let message = move || {
+		let snapshot = snapshot.get();
+		problem
+			.get()
+			.or_else(|| snapshot.notice.map(|notice| notice.text))
+			.filter(|text| !text.is_empty() && *text != snapshot.headline)
+	};
+	let view = View()
+		.class("gap-3 px-5 pt-5 pb-4")
+		.child(
+			View()
+				.class("flex-row items-center justify-between gap-4")
+				.child(
+					Text("quant")
+						.class("text-3xl font-semibold text-stone-900 dark:text-stone-100"),
+				)
+				.child(
+					Text("YOUR PRIVATE MEMORY")
+						.class("text-[10px] text-stone-500 dark:text-stone-400"),
+				),
+		)
 		.child(
 			Text(move || snapshot.get().headline)
-				.class("text-lg font-semibold text-gray-900 dark:text-gray-100")
+				.class("text-sm font-medium text-stone-700 dark:text-stone-200")
 				.test_id("headline"),
 		)
-		.child(
-			Text(move || {
-				let snapshot = snapshot.get();
-				problem
-					.get()
-					.or_else(|| snapshot.notice.map(|n| n.text))
-					.filter(|text| *text != snapshot.headline)
-					.unwrap_or_default()
-			})
-			.class(MUTED)
-			.test_id("notice"),
-		)
+		.child(Show(
+			move || message().is_some(),
+			move || {
+				Text(move || message().unwrap_or_default())
+					.class(MUTED)
+					.test_id("notice")
+			},
+		));
+	#[cfg(feature = "ui-preview")]
+	let view =
+		view.child(Text("UI PREVIEW · ILLUSTRATIVE DATA").class("text-[10px] text-amber-700"));
+	view
 }
 
 fn tabs(state: &State) -> Element {
@@ -203,14 +227,15 @@ fn tabs(state: &State) -> Element {
 		|open| *open,
 		move |open| {
 			View()
-				.class("flex-row gap-1 px-4 pb-2")
+				.class("flex-row gap-1 px-5 pb-4 border-b border-stone-200 dark:border-stone-700")
 				.children(Tab::ALL.into_iter().map(|each| {
-					let label = if each == open {
-						format!("● {}", each.label())
-					} else {
-						each.label().to_owned()
-					};
-					Button(label)
+					Button(each.label())
+						.class(if each == open {
+							"px-3 py-2 rounded-lg bg-[#ffd43b] text-stone-900 text-xs font-semibold"
+						} else {
+							"px-3 py-2 rounded-lg bg-transparent text-stone-600 \
+							 dark:text-stone-300 text-xs"
+						})
 						.test_id(format!("tab-{}", each.label()))
 						.on_press(move || tab.set(each))
 				}))
@@ -259,6 +284,8 @@ struct StatusPart {
 	paused: bool,
 	sources: Vec<SourceRow>,
 	opens_at_login: Option<bool>,
+	moments: usize,
+	grants: Option<usize>,
 }
 
 fn status_tab(state: &State) -> Element {
@@ -273,6 +300,8 @@ fn status_tab(state: &State) -> Element {
 				paused: s.paused,
 				sources: s.sources,
 				opens_at_login: s.opens_at_login,
+				moments: s.moments.len(),
+				grants: s.owner.as_ref().map(|owner| owner.grants.len()),
 			}]
 		},
 		Clone::clone,
@@ -284,7 +313,8 @@ fn status_view(state: &State, part: &StatusPart) -> Element {
 	let ready = part.link == Link::Ready;
 	let mut view = View().class("gap-3").child(link_card(part));
 	if ready {
-		view = view.child(sources_card(state, &part.sources));
+		view = view.child(overview(part));
+		view = view.child(sources_card(state, &part.sources, part.paused));
 		view = view.child(capture_card(state, part.paused));
 	}
 	if let Some(enabled) = part.opens_at_login {
@@ -302,6 +332,36 @@ fn status_view(state: &State, part: &StatusPart) -> Element {
 		);
 	}
 	view
+}
+
+fn overview(part: &StatusPart) -> Element {
+	let sources = if part.paused {
+		0
+	} else {
+		part.sources.iter().filter(|source| source.running).count()
+	};
+	let grants = part
+		.grants
+		.map_or_else(|| "Locked".to_owned(), |count| format!("{count:02}"));
+	View().class("flex-row gap-3").children(
+		[
+			(format!("{sources:02}"), "LIVE SOURCES"),
+			(format!("{:02}", part.moments), "SAVED MOMENTS"),
+			(grants, "ACTIVE GRANTS"),
+		]
+		.into_iter()
+		.map(|(value, label)| {
+			View()
+				.class(
+					"flex-1 gap-2 p-4 rounded-xl border border-stone-200 bg-[#f4eedf] \
+					 dark:border-stone-700 dark:bg-[#28261f]",
+				)
+				.child(
+					Text(value).class("text-2xl font-semibold text-stone-900 dark:text-stone-100"),
+				)
+				.child(Text(label).class("text-[9px] text-stone-500 dark:text-stone-400"))
+		}),
+	)
 }
 
 fn link_card(part: &StatusPart) -> Element {
@@ -332,10 +392,11 @@ fn link_card(part: &StatusPart) -> Element {
 		}
 		Link::Ready => {
 			(
-				part.daemon
-					.as_deref()
-					.map_or_else(|| "Connected".to_owned(), |v| format!("quantd {v}")),
-				"The daemon records this Mac; this app only reads its status and saves moments."
+				part.daemon.as_deref().map_or_else(
+					|| "Connected".to_owned(),
+					|v| format!("Your private vault · {v}"),
+				),
+				"Your memory stays on this Mac. Only the agents you approve can read it."
 					.to_owned(),
 			)
 		}
@@ -346,25 +407,30 @@ fn link_card(part: &StatusPart) -> Element {
 		.children((!detail.is_empty()).then(|| Text(detail).class(MUTED)))
 }
 
-fn sources_card(state: &State, sources: &[SourceRow]) -> Element {
+fn sources_card(state: &State, sources: &[SourceRow], paused: bool) -> Element {
 	let rows = sources.iter().map(|source| {
 		let state = state.clone();
 		let mut row = View()
 			.class("flex-row items-center gap-2")
 			.child(
 				Text(&source.name)
-					.class("w-20 text-sm font-medium text-gray-900 dark:text-gray-100"),
+					.class("w-20 text-sm font-medium text-stone-900 dark:text-stone-100"),
 			)
 			.child(
-				Text(if source.running { "Running" } else { "Stopped" }).class(if source.running {
-					"w-16 text-sm text-green-600"
+				Text(if source.running && !paused {
+					"● Active"
 				} else {
-					"w-16 text-sm text-red-600"
+					"○ Paused"
+				})
+				.class(if source.running && !paused {
+					"w-20 text-xs text-emerald-700 dark:text-emerald-400"
+				} else {
+					"w-20 text-xs text-amber-700 dark:text-amber-400"
 				}),
 			)
 			.child(
 				Text(source.detail.clone().unwrap_or_default())
-					.class("flex-1 text-xs text-gray-500 dark:text-gray-400"),
+					.class("flex-1 text-xs text-stone-500 dark:text-stone-400"),
 			);
 		if let Some(pane) = source.settings {
 			row = row.child(
@@ -392,6 +458,7 @@ fn capture_card(state: &State, paused: bool) -> Element {
 		let state = state.clone();
 		row.child(
 			Button("Resume")
+				.class(PRIMARY)
 				.test_id("resume")
 				.on_press(move || state.send(Command::Resume)),
 		)
@@ -405,7 +472,9 @@ fn capture_card(state: &State, paused: bool) -> Element {
 			.into_iter()
 			.map(|(label, minutes)| {
 				let state = state.clone();
-				Button(label).on_press(move || state.send(Command::Pause { minutes }))
+				Button(label)
+					.class(CONTROL)
+					.on_press(move || state.send(Command::Pause { minutes }))
 			}),
 		)
 	};
@@ -447,6 +516,7 @@ fn moments_view(state: &State, ready: bool, moments: &[Moment], renaming: Option
 		.children([5, 15, 30, 60].map(|minutes| {
 			let state = state.clone();
 			Button(format!("Save last {minutes} min"))
+				.class(CONTROL)
 				.enabled(ready)
 				.test_id(format!("save-{minutes}"))
 				.on_press(move || state.send(Command::Save { minutes }))
@@ -514,6 +584,7 @@ fn moment_row(state: &State, moment: &Moment, renaming: bool) -> Element {
 			.class("flex-row gap-2")
 			.child(
 				Button("Play")
+					.class(CONTROL)
 					.enabled(moment.playable)
 					.test_id(format!("play-{id}"))
 					.on_press(move || {
@@ -524,6 +595,7 @@ fn moment_row(state: &State, moment: &Moment, renaming: bool) -> Element {
 			)
 			.child(
 				Button("Rename")
+					.class(CONTROL)
 					.test_id(format!("rename-{id}"))
 					.on_press(move || {
 						rename.title.set(title.clone());
@@ -607,7 +679,7 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 				} else {
 					(*label).to_owned()
 				};
-				Button(label).on_press(move || {
+				Button(label).class(CONTROL).on_press(move || {
 					state.set_approval(Approval {
 						lookback: index,
 						..approval.clone()
@@ -642,6 +714,7 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 				.class("flex-row gap-2")
 				.child(
 					Button("Approve")
+						.class(PRIMARY)
 						.enabled(command.is_some())
 						.test_id(format!("approve-{}", client.code))
 						.on_press(move || {
@@ -652,6 +725,7 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 				)
 				.child(
 					Button("Deny")
+						.class(CONTROL)
 						.test_id(format!("deny-{}", client.code))
 						.on_press(move || deny.send(Command::Deny { client: id.clone() })),
 				),
@@ -673,6 +747,7 @@ fn grant_card(state: &State, grant: &GrantRow) -> Element {
 				.child(Text(&grant.label).class(HEADING))
 				.child(
 					Button("Revoke")
+						.class(CONTROL)
 						.test_id(format!("revoke-{}", grant.label))
 						.on_press(move || state.send(Command::Revoke { grant: id.clone() })),
 				),
@@ -749,6 +824,7 @@ fn touch_id_card(
 			.child(
 				View().class("flex-row gap-2").child(
 					Button("Turn off")
+						.class(CONTROL)
 						.test_id("touch-id-off")
 						.on_press(move || turn_off_touch_id(&state)),
 				),
@@ -758,6 +834,7 @@ fn touch_id_card(
 			.child(Text("Unlock with a fingerprint instead of the passphrase.").class(MUTED))
 			.child(
 				Button("Set up Touch ID")
+					.class(PRIMARY)
 					.test_id("touch-id-set-up")
 					.on_press(move || start_set_up_touch_id(&state)),
 			);
@@ -787,6 +864,7 @@ fn device_card(state: &State, device: &OwnerDeviceRow, this_mac: bool) -> Elemen
 				.child(Text(&device.label).class(HEADING))
 				.child(
 					Button("Revoke")
+						.class(CONTROL)
 						.test_id(format!("revoke-device-{id}"))
 						.on_press(move || revoke_device(&state, &id, is_this)),
 				),
@@ -870,7 +948,9 @@ fn locked(text: &str) -> Element {
 pub(crate) mod touch_id {
 	use leptoskit::prelude::Get;
 	use leptoskit::prelude::Set;
+	#[cfg(not(feature = "ui-preview"))]
 	use leptoskit_plugin_device_keys::Biometry;
+	#[cfg(not(feature = "ui-preview"))]
 	use leptoskit_plugin_device_keys::Hardware;
 	use leptoskit_plugin_device_keys::KeyError;
 	use leptoskit_plugin_device_keys::Policy;
@@ -879,12 +959,14 @@ pub(crate) mod touch_id {
 	use quant_model::ReplyData;
 
 	use super::State;
+	#[cfg(not(feature = "ui-preview"))]
 	use super::TouchIdAvailability;
 
 	/// The Secure Enclave key alias.
 	const ALIAS: &str = "quant-owner";
 
 	/// Check the hardware and enrollment, and record it on `state`.
+	#[cfg(not(feature = "ui-preview"))]
 	pub async fn check(state: State) {
 		let Ok(keys) = DeviceKeys::new() else {
 			state.touch_id.set(TouchIdAvailability {
@@ -1061,8 +1143,8 @@ fn owner_bar(state: &State) -> Element {
 	let (unlock, lock) = (state.clone(), state.clone());
 	View()
 		.class(
-			"gap-2 px-4 py-3 border-t border-gray-200 bg-white dark:border-gray-700 \
-			 dark:bg-gray-800",
+			"gap-3 px-5 py-4 border-t border-stone-200 bg-[#fffdf7] dark:border-stone-700 \
+			 dark:bg-[#252520]",
 		)
 		.child(Show(
 			move || snapshot.get().owner.is_none(),
@@ -1114,14 +1196,19 @@ fn unlock_form(state: &State) -> Element {
 						.test_id("passphrase")
 						.on_change(move |text: &str| passphrase.set(text.to_owned())),
 				)
-				.child(Button("Unlock").test_id("unlock").on_press(move || {
-					let typed = submit.passphrase.get();
-					if typed.is_empty() {
-						return;
-					}
-					submit.passphrase.set(String::new());
-					submit.send(Command::Unlock { passphrase: typed });
-				})),
+				.child(
+					Button("Unlock")
+						.class(PRIMARY)
+						.test_id("unlock")
+						.on_press(move || {
+							let typed = submit.passphrase.get();
+							if typed.is_empty() {
+								return;
+							}
+							submit.passphrase.set(String::new());
+							submit.send(Command::Unlock { passphrase: typed });
+						}),
+				),
 		)
 }
 
@@ -1142,6 +1229,7 @@ fn lock_bar(state: &State) -> Element {
 		)
 		.child(
 			Button("Lock")
+				.class(CONTROL)
 				.test_id("lock")
 				.on_press(move || state.send(Command::Lock)),
 		)
@@ -1164,7 +1252,7 @@ mod tests {
 		let state = State::new(Arc::new(move |c| log.lock().unwrap().push(c)));
 		state.snapshot.set(snapshot);
 		let view = state.clone();
-		let tester = WidgetTester::new(move || screen(&view), 520.0, 900.0).unwrap();
+		let tester = WidgetTester::new(move || Screen(view.clone()), 520.0, 900.0).unwrap();
 		(tester, state, sent)
 	}
 
@@ -1252,7 +1340,7 @@ mod tests {
 		tester
 			.get_by_text("Nothing recorded in that window")
 			.unwrap();
-		tester.get_by_text("quantd 0.1.0").unwrap();
+		tester.get_by_text("Your private vault · 0.1.0").unwrap();
 		tester.tap(&Finder::test_id("settings-screen")).unwrap();
 		assert_eq!(
 			sent.lock().unwrap().as_slice(),
