@@ -18,7 +18,7 @@
 # such as 1.96, to build the same way every time.
 ARG RUST_VERSION=1
 # The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
-ARG LEPTOSKIT_REV=67165da4842b729de1ea43dee531c94d613df217
+ARG LEPTOSKIT_REV=92ac609ece229043427c7edd7964a7ec7518696e
 
 FROM rust:${RUST_VERSION}-bookworm AS build
 ARG LEPTOSKIT_REV

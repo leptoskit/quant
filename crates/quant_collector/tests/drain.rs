@@ -69,7 +69,10 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 
 	let spool = Spool::open(&dir.path().join("spool"), &VaultKey::generate()).unwrap();
 	let device = DeviceId::new();
-	let now = Timestamp::now();
+	// Exercise sub-microsecond input even on platforms whose clock only
+	// supplies microseconds. Vault timestamps are persisted in microseconds.
+	let now = Timestamp::from_microsecond(Timestamp::now().as_microsecond()).unwrap()
+		+ SignedDuration::from_nanos(789);
 	for minute in 0..10 {
 		spool
 			.series(SeriesBatch {
@@ -166,7 +169,10 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 		.unwrap()
 		.unwrap();
 	assert_eq!(queued.id, chunk_id);
-	assert_eq!(queued.start, ambient.start);
+	assert_eq!(
+		queued.start,
+		Timestamp::from_microsecond(ambient.start.as_microsecond()).unwrap()
+	);
 	state
 		.vault
 		.store

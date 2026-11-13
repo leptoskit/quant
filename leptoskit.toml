@@ -121,6 +121,8 @@ enabled = false
 
 [lint]
 markup = "builder"
+# The landing job enforces its own frontend's view-style rules.
+exclude = ["crates/landing_app/**"]
 
 [lint.rules]
 markup_style = "deny"
