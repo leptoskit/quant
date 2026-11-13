@@ -7,6 +7,9 @@
 pub mod bridge;
 pub mod ui;
 
+#[cfg(all(feature = "ui-preview", target_arch = "wasm32"))]
+mod preview;
+
 pub use ui::State;
 
 /// Follow the service's snapshots for as long as the guest runs.
@@ -37,6 +40,7 @@ mod entry {
 
 	use super::State;
 	use super::bridge;
+	#[cfg(not(feature = "ui-preview"))]
 	use super::follow;
 	use super::ui;
 
@@ -54,9 +58,14 @@ mod entry {
 		});
 		let mut state = State::new(send);
 		state.problem = problem;
-		leptoskit::guest::spawn(follow(state.clone()));
-		leptoskit::guest::spawn(ui::touch_id::check(state.clone()));
-		leptoskit::guest::mount(move || ui::screen(&state));
+		#[cfg(not(feature = "ui-preview"))]
+		{
+			leptoskit::guest::spawn(follow(state.clone()));
+			leptoskit::guest::spawn(ui::touch_id::check(state.clone()));
+		}
+		#[cfg(feature = "ui-preview")]
+		let state = super::preview::state();
+		leptoskit::guest::mount(move || ui::Screen(state.clone()));
 	}
 
 	/// Forwards platform-neutral events to the tree's handlers.

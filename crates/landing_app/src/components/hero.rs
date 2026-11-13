@@ -57,6 +57,11 @@ pub fn Hero() -> Element {
 						<Text aria_hidden=true>" ↗"</Text>
 					</Pressable>
 				</View>
+				<View id="hero-trust" role=Role::List aria_label="Built around your privacy">
+					<Text role=Role::ListItem>"Local-first"</Text>
+					<Text role=Role::ListItem>"Encrypted vault"</Text>
+					<Text role=Role::ListItem>"Open source"</Text>
+				</View>
 				<Text id="hero-note" motion=rise(300)>
 					"Open source, free, and honestly early: the vault, access control, CLI, MCP server and macOS capture work today."
 				</Text>
