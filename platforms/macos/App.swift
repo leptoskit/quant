@@ -17,7 +17,7 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
     private var controller: LeptosKitMacViewController?
     private var terminating = false
-    private static let windowSize = NSSize(width: 520, height: 640)
+    private static let windowSize = NSSize(width: 620, height: 780)
     private static let minimumWindowSize = NSSize(width: 420, height: 360)
 
     static func main() {
@@ -163,6 +163,9 @@ enum Snapshots {
 
     static func startIfAsked(_ app: MacApp) {
         guard let path = environment["QUANT_SNAPSHOT"], !path.isEmpty else { return }
+        if let appearance = environment["QUANT_SNAPSHOT_APPEARANCE"] {
+            NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
+        }
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         self.directory = directory

@@ -55,13 +55,33 @@ frontend = "app"
 [targets.desktop.native]
 mode = "menu-bar"
 package_id = "dev.leptoskit.quant"
-viewport_width = 520.0
-viewport_height = 640.0
+viewport_width = 620.0
+viewport_height = 780.0
 plugins = ["quant", "device-keys"]
 
 [targets.landing]
 platform = "web"
 frontend = "landing"
+
+# Local design review only: the guest uses synthetic data and no vault bridge.
+[targets.desktop-preview]
+platform = "macos"
+frontend = "app"
+
+[targets.desktop-preview.build]
+backend = false
+client_package = "quant_app"
+features = ["ui-preview"]
+
+[targets.desktop-preview.build.inputs]
+assets = "assets/app"
+
+[targets.desktop-preview.native]
+mode = "menu-bar"
+package_id = "dev.leptoskit.quant"
+viewport_width = 620.0
+viewport_height = 780.0
+plugins = ["quant", "device-keys"]
 
 [targets.landing.serve]
 address = "127.0.0.1"
