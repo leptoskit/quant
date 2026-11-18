@@ -48,23 +48,44 @@ scripts/android-device.sh           # builds, installs and opens the app
 ```
 
 The first build compiles the Rust host for `aarch64-linux-android` and takes
-several minutes. The script wraps three steps you can also run yourself:
+several minutes. The script wraps steps you can also run yourself, with the
+phone's serial from `leptoskit device list`:
 
 ```sh
 rustup target add aarch64-linux-android
 leptoskit --app-target android build
-adb install -r platforms/android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.leptoskit.quant/.MainActivity
+leptoskit device install --kind android --device SERIAL \
+  --path platforms/android/app/build/outputs/apk/debug/app-debug.apk
+leptoskit device open --kind android --device SERIAL --app dev.leptoskit.quant
 ```
+
+The script drives the phone through
+[`leptoskit device`](https://leptoskit.dev/docs/guide/19-controlling-devices.html),
+the controller Leptoskit's tests and agents use, so an agent can do the same
+through `leptoskit mcp serve`. It finds `adb` in the Android SDK even when
+`adb` is not on your `PATH`.
 
 To skip the build, download the `quant-android-debug` artifact from the
 `application-targets` workflow run of a commit and install it with
 `scripts/android-device.sh install path/to/app-debug.apk`.
 
-Other commands: `logs` follows the app's log, `status` shows what is running
-and granted, `screenshot` saves what the phone shows, `grant` allows every
-permission from the computer for testing, and `uninstall` removes the app and
-everything it stored. `scripts/android-device.sh help` lists them all.
+Other commands:
+
+| Command | What it does |
+| --- | --- |
+| `screenshot [FILE]` | Saves what the phone shows. |
+| `recent [LINES]` | Prints the app's most recent log lines. `logs` follows the log instead. |
+| `sanity` | Installs and opens the app, injects a tap, a long press, a pan and a pinch, and takes a screenshot. The gestures land on whatever is on screen, so run it before you pair. |
+| `device ARGS...` | Runs any `leptoskit device` command against the phone, such as `device tap --app dev.leptoskit.quant --locator-text Connect`. Steps that find a control need an [Appium](https://appium.io) server with the UI Automator 2 driver. |
+| `devices` | Lists what `leptoskit device` can see. |
+| `status` | Shows what is installed, running and granted. |
+| `grant` | Allows every permission from the computer, for testing. |
+| `stop`, `uninstall` | Stops the app, or removes it and everything it stored. |
+
+`scripts/android-device.sh help` lists them all. Screenshots and logs are also
+kept under `target/leptoskit-control`. The port forward, typing a link,
+`grant`, `status` and `logs` use `adb` directly, because the controller has no
+step for them that works without Appium.
 
 ## Pair it with your vault
 
