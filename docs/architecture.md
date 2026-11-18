@@ -56,7 +56,7 @@ Capture sources write to a `Sink`. In the daemon the sink writes straight into t
 
 - **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription; and **Rewind**, a rolling buffer of the last day of microphone and system audio as 60-second AAC `audio.buffer` chunks (`audio.clip` is a saved moment joined from them). Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything but Rewind pauses while the machine is idle or locked — Rewind keeps recording until the owner pauses capture, because its whole purpose is to hold what already happened. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
 - **Desktop app** (`platforms/macos`, built with leptoskit): a menu-bar remote control for the daemon, which still does all the capturing. It pairs as its own `device` client asking for `audio:write audio:read audio:raw`, shows the status line, saves the last minutes of the rolling audio buffer, pauses and resumes capture, and opens a window to approve agents, revoke grants, and read the audit log. Owner actions take the passphrase once per 15-minute session; the app keeps only the session token, in memory.
-- **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location visits, notifications, and microphone segments, built on leptoskit. This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
+- **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location, app usage, battery and thermal state, notifications, and microphone segments, built on leptoskit. The collector side of location, app usage and power is in place ([below](#phone-location-app-usage-and-power)). This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 - **Imports** (`quant_import`, run from the CLI): history the owner already has in other tools, so years before Quant existed still answer "where does my time go".
 
@@ -137,11 +137,60 @@ rather than calling drain in a tight loop. Normal uploads can follow the
 five-minute recorder boundary or a connectivity event. Motion samples should
 be batched; use low-rate orientation or OS activity APIs, and increase sampling
 only for a feature that needs it. The OS thermal and low-power signals still
-need to be connected in the pending mobile adapter. Transcription and embeddings
-run on the owner's daemon, never in the phone collector.
+come from the battery and thermal plugins through `PowerMonitor::budget()`
+(see [Phone location, app usage and power](#phone-location-app-usage-and-power)).
+Transcription and embeddings run on the owner's daemon, never in the phone
+collector.
 
 Physical-device profiling is still required for sustained battery, thermal and
 RSS measurements; simulator tests cannot establish that a phone will stay cool.
+
+### Phone location, app usage and power
+
+The phone collector turns what four Leptoskit plugins report into vault
+streams. The mobile host owns the plugins and the OS lifecycle; it hands each
+reading to the `Spool`, which converts, validates and queues it for the signed
+uploader. Every record id is derived from the device and the reading, and
+series batches are stored by content hash, so a reading handed over twice
+(after a crash, or an overlapping query) is stored once.
+
+| Plugin | Spool method | Stream | Phone grant |
+| --- | --- | --- | --- |
+| `leptoskit_plugin_location` `next_updates` batches (continuous updates, iOS visits and significant changes) | `location_updates` | `location.fix` series: `lat`, `lon`, `accuracy`, and `altitude` when known | `location:write` |
+| `leptoskit_plugin_app_usage` `sessions` | `app_sessions` | `apps.focus` spans with `app` (the launcher label), `bundle_id` (the package) and `source = "phone"` | `apps:write` |
+| `leptoskit_plugin_app_usage` `events` | `usage_events` | `device.state`: `display_on`, `display_off`, `locked`, `unlocked`, `startup`, `shutdown` | `device:write` |
+| `leptoskit_plugin_battery` and `leptoskit_plugin_thermal` snapshots | `PowerMonitor::observe` | `device.battery` level rows, and a `device.power` record whenever charging state, low-power mode or thermal state changes | `device:write` |
+
+- **Location.** Fixes the platform marks as simulated (mock locations) and
+  fixes with impossible coordinates or times are counted and dropped. A run
+  of fixes without altitude is sent without that column rather than with a
+  placeholder. Fixes the plugin's bounded native buffer discarded are shown
+  on the `location` source status. `location.fix` carries the `location`
+  sensitivity class, so a grant made with `--deny location` never sees it,
+  in records, series, search, overview or context packets.
+- **App usage.** Sessions are clipped to the queried range, so the host
+  queries contiguous ranges from a watermark. On iOS the plugin reports only
+  lock and unlock while the app runs, so iOS phones contribute
+  `device.state` records and no `apps.focus` spans. App foreground events
+  are not stored separately: sessions already cover them.
+- **Power.** `device.battery` keeps one row per level change, in percent.
+  `device.power` records say what changed in words ("Phone battery 80%,
+  charging, low power mode on, thermal state fair.") and carry `charging`,
+  `low_power`, `thermal`, `android_thermal` (Android's raw status) and
+  `level`; summaries may group by `charging` and `thermal`. The thermal
+  plugin needs Android 10, so older phones report power without a thermal
+  state. `PowerMonitor::budget()` (or `UploadBudget::for_power`) pauses
+  uploads while the phone is in a serious or critical thermal state, and
+  cuts a burst to a quarter of the default in a fair state, in low-power
+  mode, or under 20% charge on battery.
+
+Pair a phone with `quant approve <code> --scope location:write --scope
+apps:write --scope device:write` (plus `health:write`, `motion:write` and
+`audio:write` for what else it captures). Write scopes never imply read
+access. The mobile AppService that starts these plugins, schedules
+`wait_for_change` and `next_updates`, and asks for background location and
+Usage Access is not part of this repository yet, and the plugins' Swift and
+Kotlin hosts have not run on a physical device.
 
 ### Rewind
 

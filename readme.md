@@ -46,7 +46,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_capture_macos` | macOS capture: screen text (Vision OCR), focused apps and windows, input counts, microphone speech, the Rewind rolling audio buffer. |
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
-| `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault.   |
+| `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault, with adapters for the Leptoskit location, app usage, battery and thermal plugins. |
 | `quant_import` | Imports existing history from Screenpipe and ActivityWatch through the signed ingest path.  |
 | `quant_mcp`     | The MCP server agents talk to; its tool list follows the agent's grant.                        |
 | `quant_cli`     | The `quant` command.                                                                           |
@@ -105,6 +105,14 @@ Pair a phone over the local network (TLS, certificate pinned by the link):
 quant service install --tcp 0.0.0.0:7717
 quant link                        # shows a QR code for the Quant app
 ```
+
+Approve the phone with the write scopes for what it records, for example
+`quant approve <code> --scope location:write --scope apps:write --scope device:write`.
+The phone collector stores background location as `location.fix`, app usage as
+`apps.focus` and `device.state`, and battery and thermal readings as
+`device.battery` and `device.power`; see
+[the architecture notes](docs/architecture.md#phone-location-app-usage-and-power).
+An agent you approve with `--deny location` never sees where the phone has been.
 
 Query from the terminal with your own, separately approved profile:
 
@@ -214,12 +222,12 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | ---------- | ------------------------------------------------------------------------------------------ |
 | `screen`   | `screen.frame`: on-screen text, app, window title, screenshot                               |
 | `audio`    | `audio.transcript`: speech and its transcript; `audio.buffer`: the Rewind rolling buffer; `audio.clip`: a saved moment. Audio media is kept 24 hours by default, saved clips until you delete them |
-| `apps`     | `apps.focus`: which app and window had focus, and for how long                              |
+| `apps`     | `apps.focus`: which app and window had focus (on the desktop or the phone), and for how long |
 | `input`    | `input.activity`: key, click, and scroll counts per minute (never content)                  |
 | `health`   | `health.heart_rate`, `health.hrv`, `health.spo2`, `health.steps`, `health.sleep`, `health.workout` |
 | `motion`   | `motion.accelerometer`, `motion.gyroscope`, `motion.orientation`, `motion.posture`, `motion.gait` |
 | `location` | `location.fix`, `location.visit`                                                            |
-| `device`   | `device.battery`, `device.state`                                                            |
+| `device`   | `device.battery`, `device.state`, `device.power`: battery level, screen and lock transitions, charging, low-power and thermal state |
 | `comms`    | `comms.notification`                                                                        |
 | `sensor`   | Anything from custom hardware: `sensor.<vendor>.<channel>`                                   |
 | `memory`   | `memory.note`, `memory.episode`, `memory.daily`, `memory.weekly`, `memory.profile`: what you or an agent wrote or derived, and claims about who you are |

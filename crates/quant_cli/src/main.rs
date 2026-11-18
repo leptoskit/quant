@@ -1332,7 +1332,8 @@ async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
 	println!("{link}\n");
 	println!("Scan this in the Quant app on your phone. It will ask to pair; approve it with");
 	println!("`quant approve <code>` and the scopes the phone should write, such as");
-	println!("--scope health:write --scope motion:write --scope location:write.");
+	println!("--scope health:write --scope motion:write --scope location:write --scope apps:write");
+	println!("--scope device:write.");
 	if relayed {
 		println!("The link carries a relay, so the phone can also reach this vault from anywhere.");
 	}
