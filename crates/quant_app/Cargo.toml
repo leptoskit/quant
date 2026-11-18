@@ -33,6 +33,7 @@ leptoskit_plugin_device_keys = { workspace = true, features = ["guest"] }
 
 [dev-dependencies]
 leptoskit_testing = { workspace = true }
+reactive_graph = { workspace = true }
 
 [build-dependencies]
 leptoskit_build = { workspace = true }

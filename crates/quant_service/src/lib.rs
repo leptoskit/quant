@@ -13,10 +13,37 @@
 
 mod autostart;
 mod daemon;
+#[cfg_attr(
+	not(target_os = "macos"),
+	allow(
+		unused_imports,
+		dead_code,
+		clippy::unused_self,
+		reason = "the menu bar and its C entry points exist only on macOS"
+	)
+)]
 mod desktop;
 mod playback;
+#[cfg_attr(
+	not(target_os = "macos"),
+	allow(
+		unused_imports,
+		dead_code,
+		clippy::unused_self,
+		reason = "the menu bar and its C entry points exist only on macOS"
+	)
+)]
 mod resident;
 mod service;
+#[cfg_attr(
+	not(target_os = "macos"),
+	allow(
+		unused_imports,
+		dead_code,
+		clippy::unused_self,
+		reason = "the menu bar and its C entry points exist only on macOS"
+	)
+)]
 mod words;
 
 use std::path::Path;

@@ -112,15 +112,18 @@ pub async fn run(cx: &Ctx, action: RewindAction) -> Result<()> {
 			let now = Timestamp::now();
 			let from = when::parse(&from, now).map_err(anyhow::Error::msg)?;
 			let clips = client
-				.records(&RecordsRequest {
-					streams: vec!["audio.clip".into()],
-					from: Some(from),
-					to: None,
-					search: None,
-					limit: Some(200),
-					oldest_first: false,
-					mode: None,
-				})
+				.records(
+					&RecordsRequest {
+						streams: vec!["audio.clip".into()],
+						from: Some(from),
+						to: None,
+						search: None,
+						limit: Some(200),
+						oldest_first: false,
+						mode: None,
+					},
+					None,
+				)
 				.await?;
 			if clips.records.is_empty() {
 				println!("No saved clips.");
@@ -175,15 +178,18 @@ pub async fn run(cx: &Ctx, action: RewindAction) -> Result<()> {
 		RewindAction::Status => {
 			let client = cx.client()?;
 			let clips = client
-				.records(&RecordsRequest {
-					streams: vec!["audio.buffer".into()],
-					from: None,
-					to: None,
-					search: None,
-					limit: Some(500),
-					oldest_first: false,
-					mode: None,
-				})
+				.records(
+					&RecordsRequest {
+						streams: vec!["audio.buffer".into()],
+						from: None,
+						to: None,
+						search: None,
+						limit: Some(500),
+						oldest_first: false,
+						mode: None,
+					},
+					None,
+				)
 				.await?;
 			let now = Timestamp::now();
 			let mut seconds = 0_u64;
@@ -233,15 +239,18 @@ async fn export(cx: &Ctx, clip: &str) -> Result<Vec<u8>> {
 		.parse()
 		.with_context(|| format!("`{clip}` is not a clip id"))?;
 	let found = client
-		.records(&RecordsRequest {
-			streams: vec!["audio.clip".into()],
-			from: Some(Timestamp::now() - SignedDuration::from_hours(24 * 30)),
-			to: None,
-			search: None,
-			limit: Some(500),
-			oldest_first: false,
-			mode: None,
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["audio.clip".into()],
+				from: Some(Timestamp::now() - SignedDuration::from_hours(24 * 30)),
+				to: None,
+				search: None,
+				limit: Some(500),
+				oldest_first: false,
+				mode: None,
+			},
+			None,
+		)
 		.await?;
 	let record = found
 		.records
@@ -254,7 +263,7 @@ async fn export(cx: &Ctx, clip: &str) -> Result<Vec<u8>> {
 		.media
 		.as_ref()
 		.context("this grant cannot fetch audio; it needs audio:raw")?;
-	let (_, bytes) = client.media(&media.hash).await?;
+	let (_, bytes) = client.media(&media.hash, None).await?;
 	Ok(bytes.to_vec())
 }
 

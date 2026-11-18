@@ -36,6 +36,8 @@ use quant_api::ClientView;
 use quant_api::EnrolDeviceRequest;
 use quant_api::PauseRequest;
 use quant_api::Paused;
+use quant_api::QuestionListRequest;
+use quant_api::QuestionView;
 use quant_api::RecordsRequest;
 use quant_api::RenameClip;
 use quant_api::SaveAudio;
@@ -57,6 +59,7 @@ use quant_model::Notice;
 use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::QuestionRow;
 use quant_model::Reply;
 use quant_model::ReplyData;
 use quant_model::Snapshot;
@@ -386,6 +389,7 @@ struct OwnerData {
 	devices: Vec<quant_api::OwnerDeviceView>,
 	audit: Vec<AuditEntry>,
 	chain_ok: Option<bool>,
+	questions: Vec<QuestionView>,
 }
 
 /// What a job finished with: an optional notice, and optional reply data.
@@ -764,7 +768,10 @@ impl Worker {
 			.cloned()
 			.ok_or("This moment has no audio to play")?;
 		let client = self.ready_client()?;
-		let (_, bytes) = client.media(&media.hash).await.map_err(|e| problem(&e))?;
+		let (_, bytes) = client
+			.media(&media.hash, None)
+			.await
+			.map_err(|e| problem(&e))?;
 		let path = crate::playback::write(&self.config.cache, id, &bytes)
 			.map_err(|e| format!("Couldn't prepare the clip: {e}"))?;
 		let child = crate::playback::play(&path).map_err(|e| {
@@ -890,7 +897,7 @@ impl Worker {
 			.map(|s| (*s).to_owned())
 			.collect();
 		let before = client.identity().client;
-		let pairing = match client.pair(ClientKind::Device, &scopes).await {
+		let pairing = match client.pair(ClientKind::Device, &scopes, None).await {
 			Ok(pairing) => pairing,
 			Err(error) => {
 				return Link::Unreachable {
@@ -936,7 +943,7 @@ impl Worker {
 			limit: Some(50),
 			..RecordsRequest::default()
 		};
-		let records = match client.records(&request).await {
+		let records = match client.records(&request, None).await {
 			Ok(records) => records.records,
 			// No clips yet, or a daemon without them: nothing to list.
 			Err(_) => Vec::new(),
@@ -984,7 +991,15 @@ impl Worker {
 			})
 			.await
 			.ok();
+		let questions = owner
+			.questions(&QuestionListRequest {
+				limit: Some(30),
+				client: None,
+			})
+			.await
+			.unwrap_or_default();
 		self.owner_data = Some(OwnerData {
+			questions,
 			status: status.ok(),
 			clients: owner.clients().await.unwrap_or_default(),
 			grants: owner.grants().await.unwrap_or_default(),
@@ -1201,10 +1216,22 @@ fn owner_view(
 					.ok()
 					.and_then(|v| v.as_str().map(ToOwned::to_owned))
 					.unwrap_or_default(),
+				agent: c.agent.as_ref().map(quant_access::AgentIdentity::summary),
 				code: c.pairing_code.clone(),
 				requested: c.requested.clone(),
 				asked: words::when(c.created_at, now, tz),
 			}
+		})
+		.collect();
+	// Grants show the agent identity of the client holding them, when the
+	// client is still known.
+	let agent_of: HashMap<String, String> = data
+		.clients
+		.iter()
+		.filter_map(|c| {
+			c.agent
+				.as_ref()
+				.map(|agent| (c.id.to_string(), agent.summary()))
 		})
 		.collect();
 	let grants = data
@@ -1218,6 +1245,7 @@ fn owner_view(
 				scopes: g.scopes.to_strings(),
 				lookback: words::lookback(g.lookback),
 				expires: g.expires_at.map(|at| words::when(at, now, tz)),
+				agent: agent_of.get(&g.client.to_string()).cloned(),
 			}
 		})
 		.collect();
@@ -1249,6 +1277,7 @@ fn owner_view(
 					Outcome::Denied { reason } => format!("denied: {reason}"),
 					Outcome::Failed => "failed".to_owned(),
 				},
+				purpose: entry.purpose.clone(),
 			}
 		})
 		.collect();
@@ -1265,6 +1294,31 @@ fn owner_view(
 			}
 		})
 		.collect();
+	// A question's asker is the client's name, with what an agent said it
+	// is, so the owner can tell two "Claude Code"s apart.
+	let questions = data
+		.questions
+		.iter()
+		.map(|q| {
+			let id = q.client.to_string();
+			let name = names.get(&id).map_or(id.as_str(), |name| name);
+			QuestionRow {
+				id: q.id.to_string(),
+				asker: match agent_of.get(&id) {
+					Some(agent) => format!("{name} · {agent}"),
+					None => name.to_owned(),
+				},
+				asked: words::when(q.asked_at, now, tz),
+				question: q.question.clone(),
+				purpose: q.purpose.clone(),
+				model: q.model.clone(),
+				status: q.status.as_str().to_owned(),
+				answer: q.answer.clone(),
+				citations: q.citations.len(),
+				served: words::served(q.records, q.bytes),
+			}
+		})
+		.collect();
 	let passphrase_session = data
 		.status
 		.as_ref()
@@ -1277,5 +1331,6 @@ fn owner_view(
 		chain_ok: data.chain_ok,
 		devices,
 		passphrase_session,
+		questions,
 	}
 }

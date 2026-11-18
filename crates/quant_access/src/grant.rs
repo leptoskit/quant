@@ -21,6 +21,17 @@ pub struct Limits {
 	pub records_per_hour: u32,
 	/// Response bytes per day.
 	pub bytes_per_day: u64,
+	/// Questions the grant may open per hour, so a chatty agent cannot fill
+	/// the owner's ledger. Defaults to [`DEFAULT_QUESTIONS_PER_HOUR`].
+	#[serde(default = "default_questions_per_hour")]
+	pub questions_per_hour: u64,
+}
+
+/// The questions-per-hour a grant gets when nothing else is said.
+pub const DEFAULT_QUESTIONS_PER_HOUR: u64 = 60;
+
+fn default_questions_per_hour() -> u64 {
+	DEFAULT_QUESTIONS_PER_HOUR
 }
 
 impl Default for Limits {
@@ -29,6 +40,7 @@ impl Default for Limits {
 			requests_per_minute: 60,
 			records_per_hour: 5_000,
 			bytes_per_day: 50 * 1024 * 1024,
+			questions_per_hour: DEFAULT_QUESTIONS_PER_HOUR,
 		}
 	}
 }
@@ -93,6 +105,9 @@ pub enum Denied {
 	/// one opened with an owner device.
 	#[error("this needs an owner session opened with the passphrase")]
 	PassphraseSession,
+	/// An agent read without saying why.
+	#[error("no purpose given for this request")]
+	PurposeRequired,
 }
 
 /// What a read may return once authorised.
@@ -274,5 +289,20 @@ mod tests {
 		without.as_object_mut().unwrap().remove("deny_classes");
 		let back: Grant = serde_json::from_value(without).unwrap();
 		assert!(back.deny_classes.is_empty());
+	}
+
+	#[test]
+	fn limits_written_before_questions_still_load() {
+		let old = serde_json::json!({
+			"requests_per_minute": 30,
+			"records_per_hour": 100,
+			"bytes_per_day": 1024
+		});
+		let limits: Limits = serde_json::from_value(old).unwrap();
+		assert_eq!(limits.questions_per_hour, DEFAULT_QUESTIONS_PER_HOUR);
+		assert_eq!(
+			Limits::default().questions_per_hour,
+			DEFAULT_QUESTIONS_PER_HOUR
+		);
 	}
 }

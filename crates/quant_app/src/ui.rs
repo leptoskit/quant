@@ -29,6 +29,7 @@ use quant_model::Moment;
 use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::QuestionRow;
 use quant_model::ScopeChoice;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
@@ -44,15 +45,18 @@ pub enum Tab {
 	Agents,
 	/// Owner devices: Touch ID and enrolled phones.
 	Devices,
+	/// What agents asked and answered.
+	Questions,
 	/// The audit log.
 	Audit,
 }
 
 impl Tab {
-	const ALL: [Tab; 5] = [
+	const ALL: [Tab; 6] = [
 		Tab::Status,
 		Tab::Moments,
 		Tab::Agents,
+		Tab::Questions,
 		Tab::Devices,
 		Tab::Audit,
 	];
@@ -63,6 +67,7 @@ impl Tab {
 			Tab::Moments => "Saved moments",
 			Tab::Agents => "Agents",
 			Tab::Devices => "Devices",
+			Tab::Questions => "Questions",
 			Tab::Audit => "Audit",
 		}
 	}
@@ -245,7 +250,8 @@ fn tabs(state: &State) -> Element {
 
 fn body(state: &State) -> Element {
 	let tab = state.tab;
-	let (status, moments, agents, devices, audit) = (
+	let (status, moments, agents, devices, questions, audit) = (
+		state.clone(),
 		state.clone(),
 		state.clone(),
 		state.clone(),
@@ -269,6 +275,10 @@ fn body(state: &State) -> Element {
 		.child(Show(
 			move || tab.get() == Tab::Devices,
 			move || devices_tab(&devices),
+		))
+		.child(Show(
+			move || tab.get() == Tab::Questions,
+			move || questions_tab(&questions),
 		))
 		.child(Show(
 			move || tab.get() == Tab::Audit,
@@ -693,6 +703,12 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 	View()
 		.class(CARD)
 		.child(Text(format!("{} ({})", client.name, client.kind)).class(HEADING))
+		.children(
+			client
+				.agent
+				.as_deref()
+				.map(|agent| Text(agent).class(MUTED)),
+		)
 		.child(
 			Text(format!(
 				"Pairing code {} · asked {}",
@@ -754,6 +770,7 @@ fn grant_card(state: &State, grant: &GrantRow) -> Element {
 		)
 		.child(Text(grant.scopes.join("  ")).class(BODY))
 		.child(Text(format!("Sees back {}{expires}", grant.lookback)).class(MUTED))
+		.children(grant.agent.as_deref().map(|agent| Text(agent).class(MUTED)))
 }
 
 fn devices_tab(state: &State) -> Element {
@@ -872,6 +889,85 @@ fn device_card(state: &State, device: &OwnerDeviceRow, this_mac: bool) -> Elemen
 		.child(Text(format!("fingerprint {} · {last_used}", device.fingerprint)).class(MUTED))
 }
 
+fn questions_tab(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	For(
+		move || vec![snapshot.get().owner.map(|o| o.questions)],
+		Clone::clone,
+		|questions| {
+			match questions {
+				Some(rows) => questions_view(&rows),
+				None => locked("Unlock to read what agents asked."),
+			}
+		},
+	)
+}
+
+fn questions_view(rows: &[QuestionRow]) -> Element {
+	if rows.is_empty() {
+		return View().class(CARD).child(
+			Text(
+				"No agent has asked anything yet. Each question an agent opens shows here with \
+				 the purpose it gave and the answer it recorded.",
+			)
+			.class(MUTED)
+			.test_id("questions-empty"),
+		);
+	}
+	View()
+		.class("gap-3")
+		.child(
+			Text(format!(
+				"The last {} questions, newest first. `quant questions show <id>` prints every \
+				 read behind one.",
+				rows.len()
+			))
+			.class(MUTED),
+		)
+		.children(rows.iter().map(question_card))
+}
+
+fn question_card(row: &QuestionRow) -> Element {
+	let status_class = match row.status.as_str() {
+		"answered" => "text-xs text-green-600",
+		"abandoned" => "text-xs text-stone-500",
+		_ => "text-xs text-amber-600",
+	};
+	let model = row
+		.model
+		.as_deref()
+		.map_or_else(String::new, |model| format!(" · {model}"));
+	View()
+		.class(CARD)
+		.test_id(format!("question-{}", row.id))
+		.child(
+			View()
+				.class("flex-row gap-2")
+				.child(
+					Text(&row.asker)
+						.class("flex-1 text-xs font-medium text-stone-700 dark:text-stone-200"),
+				)
+				.child(Text(&row.status).class(status_class)),
+		)
+		.child(Text(&row.question).class(HEADING))
+		.child(Text(format!("Why: {}", row.purpose)).class(BODY))
+		.children(row.answer.as_deref().map(|answer| {
+			let cites = match row.citations {
+				0 => String::new(),
+				1 => " (cites 1 record)".to_owned(),
+				n => format!(" (cites {n} records)"),
+			};
+			Text(format!("Answer{cites}: {answer}")).class(BODY)
+		}))
+		.child(
+			Text(format!(
+				"{}{model} · {} · {}",
+				row.asked, row.served, row.id
+			))
+			.class(MUTED),
+		)
+}
+
 fn audit_tab(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	For(
@@ -934,6 +1030,11 @@ fn audit_view(chain_ok: Option<bool>, rows: &[AuditRow]) -> Element {
 						format!("{} {}", row.action, row.target)
 					})
 					.class(BODY),
+				)
+				.children(
+					row.purpose
+						.as_deref()
+						.map(|purpose| Text(format!("Why: {purpose}")).class(MUTED)),
 				)
 		}))
 }
@@ -1247,6 +1348,13 @@ mod tests {
 	use super::*;
 
 	fn harness(snapshot: Snapshot) -> (WidgetTester, State, Arc<Mutex<Vec<Command>>>) {
+		// The state's signals need a reactive owner. With Leptos's
+		// `sandboxed-arenas` feature on (the landing crates turn it on in
+		// a workspace build), a signal made outside one panics. The owner
+		// lives for the rest of the test's thread.
+		let owner = reactive_graph::owner::Owner::new();
+		owner.set();
+		std::mem::forget(owner);
 		let sent = Arc::new(Mutex::new(Vec::new()));
 		let log = Arc::clone(&sent);
 		let state = State::new(Arc::new(move |c| log.lock().unwrap().push(c)));
@@ -1301,6 +1409,10 @@ mod tests {
 					id: "c1".into(),
 					name: "Claude Code".into(),
 					kind: "agent".into(),
+					agent: Some(
+						"Claude Code (Anthropic) claude-opus-5-5 2.1.0 on mini, operated by Ada"
+							.into(),
+					),
 					code: "K7QD-M2XA".into(),
 					requested: vec!["health:summary".into(), "screen:read".into()],
 					asked: "Today 14:00".into(),
@@ -1311,6 +1423,7 @@ mod tests {
 					scopes: vec!["motion:write".into()],
 					lookback: "No limit".into(),
 					expires: None,
+					agent: None,
 				}],
 				audit: vec![AuditRow {
 					seq: 7,
@@ -1319,6 +1432,7 @@ mod tests {
 					action: "grant.create".into(),
 					target: "c1".into(),
 					outcome: "allowed".into(),
+					purpose: None,
 				}],
 				chain_ok: Some(true),
 				devices: vec![OwnerDeviceRow {
@@ -1328,6 +1442,18 @@ mod tests {
 					last_used: Some("Today 13:30".into()),
 				}],
 				passphrase_session: true,
+				questions: vec![QuestionRow {
+					id: "ques_01".into(),
+					asker: "Claude Code · Claude Code (Anthropic) on mini".into(),
+					asked: "Today 14:05".into(),
+					question: "When do I sleep best?".into(),
+					purpose: "planning a bedtime routine".into(),
+					model: Some("claude-opus-5-5".into()),
+					status: "answered".into(),
+					answer: Some("After days with a long walk.".into()),
+					citations: 2,
+					served: "12 records · 3.1 KB".into(),
+				}],
 			}),
 			..ready()
 		}
@@ -1423,8 +1549,40 @@ mod tests {
 		tester
 			.get_by_text("Unlock to see and approve agents.")
 			.unwrap();
+		tester.tap(&Finder::test_id("tab-Questions")).unwrap();
+		tester
+			.get_by_text("Unlock to read what agents asked.")
+			.unwrap();
 		tester.tap(&Finder::test_id("tab-Audit")).unwrap();
 		tester.get_by_text("Unlock to read the audit log.").unwrap();
+	}
+
+	#[test]
+	fn questions_show_purpose_answer_and_what_was_served() {
+		let (mut tester, ..) = harness(unlocked());
+		tester.tap(&Finder::test_id("tab-Questions")).unwrap();
+		tester.get_by_text("When do I sleep best?").unwrap();
+		tester
+			.get_by_text("Why: planning a bedtime routine")
+			.unwrap();
+		tester
+			.get_by_text("Answer (cites 2 records): After days with a long walk.")
+			.unwrap();
+		tester
+			.get_by_text("Today 14:05 · claude-opus-5-5 · 12 records · 3.1 KB · ques_01")
+			.unwrap();
+		tester.get_by_text("answered").unwrap();
+	}
+
+	#[test]
+	fn no_questions_says_what_will_show() {
+		let mut snapshot = unlocked();
+		if let Some(owner) = snapshot.owner.as_mut() {
+			owner.questions.clear();
+		}
+		let (mut tester, ..) = harness(snapshot);
+		tester.tap(&Finder::test_id("tab-Questions")).unwrap();
+		tester.find(&Finder::test_id("questions-empty")).unwrap();
 	}
 
 	#[test]

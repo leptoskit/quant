@@ -9,6 +9,7 @@
 //! signed ([`auth`]), checked, rate limited ([`Limiter`]), its text redacted
 //! ([`redact`]), and written to a hash-chained [`audit`] log.
 
+pub mod agent;
 pub mod audit;
 pub mod auth;
 mod device;
@@ -17,6 +18,7 @@ mod limiter;
 pub mod redact;
 mod scope;
 
+pub use agent::*;
 pub use device::*;
 pub use grant::*;
 pub use limiter::*;

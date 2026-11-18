@@ -72,6 +72,12 @@ uuid_id!(
 	"clm"
 );
 uuid_id!(
+	/// Identifies one question an agent asked of the vault, with the answer
+	/// it gave.
+	QuestionId,
+	"ques"
+);
+uuid_id!(
 	/// Identifies an owner device: a hardware key enrolled to unlock owner
 	/// sessions.
 	OwnerDeviceId,

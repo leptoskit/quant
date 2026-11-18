@@ -221,6 +221,40 @@ const MIGRATIONS: &[&str] = &[
 	INSERT INTO transcriptions (record)
 		SELECT rowid FROM records WHERE stream = 'audio.ambient' AND media_hash IS NOT NULL;
 	",
+	// 7: what an agent said it was when it paired, shown to the owner with
+	// the pairing request.
+	"
+	ALTER TABLE clients ADD COLUMN agent TEXT;
+	",
+	// 8: the questions ledger. Each question an agent opened, the answer it
+	// gave, the records it cited, and the totals served under it. Text is
+	// stored as given and sanitised and redacted on the way out, like every
+	// other served text.
+	"
+	CREATE TABLE questions (
+		rowid INTEGER PRIMARY KEY,
+		id BLOB NOT NULL UNIQUE,
+		client BLOB NOT NULL REFERENCES clients (id),
+		grant BLOB NOT NULL,
+		asked_us INTEGER NOT NULL,
+		question TEXT NOT NULL,
+		purpose TEXT NOT NULL,
+		model TEXT,
+		status TEXT NOT NULL,
+		answer TEXT,
+		answered_us INTEGER,
+		records INTEGER NOT NULL DEFAULT 0,
+		bytes INTEGER NOT NULL DEFAULT 0
+	) STRICT;
+	CREATE INDEX questions_by_client ON questions (client, asked_us);
+	CREATE INDEX questions_by_time ON questions (asked_us);
+
+	CREATE TABLE question_citations (
+		question INTEGER NOT NULL REFERENCES questions (rowid) ON DELETE CASCADE,
+		record INTEGER NOT NULL REFERENCES records (rowid) ON DELETE CASCADE,
+		PRIMARY KEY (question, record)
+	) STRICT, WITHOUT ROWID;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

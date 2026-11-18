@@ -168,6 +168,20 @@ quant approve K7QD-M2XA --scope memory.profile:read --scope health:summary --den
 
 The MCP server offers `quant_profile`, `quant_propose`, and `quant_context` (a budgeted packet of claims, recent memory, and matching records sized to one task) only to grants that can use them.
 
+## Agents have to say who they are
+
+An agent is not an anonymous reader. When one pairs, it sends what it is — product, vendor, model, version, host, and optionally who operates it — and you see that beside the pairing request, in `quant clients`, and in the app. Every read then has to carry a **purpose**, signed with the request so it cannot be stripped in flight, and an agent that reads without one is refused and the refusal audited.
+
+Agents work question by question. Each question is stored with the purpose and model that produced it, the reads that served it are charged to it, and the answer it gave is stored with citations to the records it rests on:
+
+```sh
+quant questions                    # what agents asked, what they answered
+quant questions --agent K7QD-M2XA  # just one agent's
+quant questions show ques_019a…    # the question, the answer, and every read behind it
+```
+
+The app's **Questions** tab shows the same ledger: who asked, why, which model, the answer, and what was served for it. Answers are only ever served to you and to the agent that wrote them; questions left unanswered for a day are abandoned, and a grant caps how many an agent may open per hour.
+
 ## Learning on the device
 
 Quant can also learn, using models that run on your own machine only:

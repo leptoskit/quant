@@ -8,6 +8,7 @@ use jiff::SignedDuration;
 use jiff::Timestamp;
 use p256::ecdsa::SigningKey;
 use p256::ecdsa::signature::Signer as _;
+use quant_access::AgentIdentity;
 use quant_access::Limits;
 use quant_access::OwnerDevicePolicy;
 use quant_api::ApproveRequest;
@@ -25,6 +26,7 @@ use quant_client::Client;
 use quant_client::Endpoint;
 use quant_client::Identity;
 use quant_client::OwnerSession;
+use quant_client::Purpose;
 use quant_core::Class;
 use quant_core::DeviceId;
 use quant_core::OwnerDeviceId;
@@ -84,7 +86,8 @@ impl Harness {
 
 	async fn paired(&self, name: &str, kind: ClientKind, approve: ApproveRequest) -> Client {
 		let mut client = Client::new(self.endpoint.clone(), Identity::generate(name));
-		let pairing = client.pair(kind, &[]).await.unwrap();
+		let agent = (kind == ClientKind::Agent).then(|| identity(name));
+		let pairing = client.pair(kind, &[], agent.as_ref()).await.unwrap();
 		self.owner()
 			.await
 			.approve(&ApproveRequest {
@@ -95,6 +98,24 @@ impl Harness {
 			.unwrap();
 		client
 	}
+}
+
+/// What an agent says about itself when it pairs: the owner sees this, so
+/// the tests make it say something recognisable.
+fn identity(name: &str) -> AgentIdentity {
+	AgentIdentity {
+		product: name.to_owned(),
+		vendor: "Quant tests".into(),
+		model: "test-model".into(),
+		version: env!("CARGO_PKG_VERSION").into(),
+		host: "test-host".into(),
+		operator: None,
+	}
+}
+
+/// Why an agent is reading. Agents must send one on every data route.
+fn purpose() -> Purpose {
+	Purpose::purpose("answering a test question about the owner")
 }
 
 fn approve(scopes: &[&str]) -> ApproveRequest {
@@ -199,17 +220,26 @@ fn seed(state: &State) -> DeviceId {
 async fn unpaired_and_pending_clients_see_nothing() {
 	let h = start().await;
 	let mut client = Client::new(h.endpoint.clone(), Identity::generate("Stranger"));
-	assert!(client.records(&RecordsRequest::default()).await.is_err());
+	assert!(
+		client
+			.records(&RecordsRequest::default(), None)
+			.await
+			.is_err()
+	);
 
 	let pairing = client
-		.pair(ClientKind::Agent, &["*:raw".into()])
+		.pair(
+			ClientKind::Agent,
+			&["*:raw".into()],
+			Some(&identity("Stranger")),
+		)
 		.await
 		.unwrap();
 	assert_eq!(pairing.status, ClientStatus::Pending);
 	let me = client.me().await.unwrap();
 	assert_eq!(me.status, ClientStatus::Pending);
 	let refused = client
-		.records(&RecordsRequest::default())
+		.records(&RecordsRequest::default(), Some(&purpose()))
 		.await
 		.unwrap_err();
 	assert_eq!(refused.code(), Some("unauthenticated"));
@@ -240,23 +270,32 @@ async fn summary_grants_get_aggregates_but_never_text() {
 		)
 		.await;
 
-	let records = agent.records(&RecordsRequest::default()).await.unwrap();
+	let records = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	assert_eq!(records.records, [] as [quant_api::ServedRecord; 0]);
 	let screen = agent
-		.records(&RecordsRequest {
-			streams: vec!["screen".into(), "apps".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["screen".into(), "apps".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(screen.records, [] as [quant_api::ServedRecord; 0]);
 	assert_eq!(screen.withheld, vec!["screen", "apps"]);
 	assert_eq!(
 		agent
-			.search(&RecordsRequest {
-				search: Some("budget".into()),
-				..Default::default()
-			})
+			.search(
+				&RecordsRequest {
+					search: Some("budget".into()),
+					..Default::default()
+				},
+				Some(&purpose())
+			)
 			.await
 			.unwrap()
 			.records,
@@ -264,14 +303,17 @@ async fn summary_grants_get_aggregates_but_never_text() {
 	);
 
 	let hr = agent
-		.series(&SeriesRequest {
-			stream: "health.heart_rate".into(),
-			from: None,
-			to: None,
-			bucket_seconds: Some(3600),
-			raw: true,
-			max_rows: None,
-		})
+		.series(
+			&SeriesRequest {
+				stream: "health.heart_rate".into(),
+				from: None,
+				to: None,
+				bucket_seconds: Some(3600),
+				raw: true,
+				max_rows: None,
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(hr.batches, [] as [quant_core::SeriesBatch; 0]);
@@ -280,13 +322,16 @@ async fn summary_grants_get_aggregates_but_never_text() {
 	assert_eq!(total, 30);
 
 	let by_app = agent
-		.durations(&DurationsRequest {
-			stream: "apps.focus".into(),
-			from: None,
-			to: None,
-			group_by: Some("app".into()),
-			bucket_seconds: None,
-		})
+		.durations(
+			&DurationsRequest {
+				stream: "apps.focus".into(),
+				from: None,
+				to: None,
+				group_by: Some("app".into()),
+				bucket_seconds: None,
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	let numbers = by_app
@@ -297,18 +342,24 @@ async fn summary_grants_get_aggregates_but_never_text() {
 	assert!((numbers.seconds - 2400.0).abs() < 1.0);
 
 	let by_title = agent
-		.durations(&DurationsRequest {
-			stream: "apps.focus".into(),
-			from: None,
-			to: None,
-			group_by: Some("title".into()),
-			bucket_seconds: None,
-		})
+		.durations(
+			&DurationsRequest {
+				stream: "apps.focus".into(),
+				from: None,
+				to: None,
+				group_by: Some("title".into()),
+				bucket_seconds: None,
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap_err();
 	assert_eq!(by_title.code(), Some("forbidden"));
 
-	let overview = agent.overview(&OverviewRequest::default()).await.unwrap();
+	let overview = agent
+		.overview(&OverviewRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	let names: Vec<_> = overview.streams.iter().map(|s| s.stream.as_str()).collect();
 	assert_eq!(names, vec!["apps.focus", "health.heart_rate"]);
 }
@@ -321,10 +372,13 @@ async fn read_grants_get_redacted_text_and_raw_grants_get_media() {
 		.paired("Reader", ClientKind::Agent, approve(&["screen:read"]))
 		.await;
 	let hits = reader
-		.search(&RecordsRequest {
-			search: Some("budget".into()),
-			..Default::default()
-		})
+		.search(
+			&RecordsRequest {
+				search: Some("budget".into()),
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(hits.records.len(), 1);
@@ -341,18 +395,24 @@ async fn read_grants_get_redacted_text_and_raw_grants_get_media() {
 		.paired("Raw", ClientKind::Agent, approve(&["screen:raw"]))
 		.await;
 	let records = raw
-		.records(&RecordsRequest {
-			streams: vec!["screen".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["screen".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	let media = records.records[0].media.clone().unwrap();
-	let (_, bytes) = raw.media(&media.hash).await.unwrap();
+	let (_, bytes) = raw.media(&media.hash, Some(&purpose())).await.unwrap();
 	assert_eq!(&bytes[..], b"fake jpeg");
 
 	// The reader cannot fetch it, and cannot tell it exists.
-	let denied = reader.media(&media.hash).await.unwrap_err();
+	let denied = reader
+		.media(&media.hash, Some(&purpose()))
+		.await
+		.unwrap_err();
 	assert_eq!(denied.code(), Some("not_found"));
 }
 
@@ -364,10 +424,13 @@ async fn lookback_hides_older_data() {
 	request.lookback_hours = Some(0);
 	let agent = h.paired("Short memory", ClientKind::Agent, request).await;
 	let records = agent
-		.records(&RecordsRequest {
-			streams: vec!["apps".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["apps".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(records.records, [] as [quant_api::ServedRecord; 0]);
@@ -381,14 +444,21 @@ async fn rate_limits_cap_requests_and_records() {
 	request.limits = Some(Limits {
 		requests_per_minute: 3,
 		records_per_hour: 2,
+		questions_per_hour: Limits::default().questions_per_hour,
 		bytes_per_day: 1 << 20,
 	});
 	let agent = h.paired("Greedy", ClientKind::Agent, request).await;
 
-	let first = agent.records(&RecordsRequest::default()).await.unwrap();
+	let first = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	assert_eq!(first.records.len(), 2);
 	assert!(first.truncated);
-	let second = agent.records(&RecordsRequest::default()).await.unwrap_err();
+	let second = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap_err();
 	assert_eq!(second.code(), Some("rate_limited"));
 	let _ = agent.me().await;
 	let third = agent.streams().await.unwrap_err();
@@ -450,7 +520,7 @@ async fn devices_write_only_where_granted() {
 	// Writing does not grant reading.
 	assert_eq!(
 		phone
-			.records(&RecordsRequest::default())
+			.records(&RecordsRequest::default(), None)
 			.await
 			.unwrap()
 			.records
@@ -470,7 +540,10 @@ async fn revoking_cuts_access_and_everything_is_audited() {
 			approve(&["*:read", "audit:read"]),
 		)
 		.await;
-	agent.records(&RecordsRequest::default()).await.unwrap();
+	agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	let own = agent
 		.audit(&quant_api::AuditRequest::default())
 		.await
@@ -483,7 +556,7 @@ async fn revoking_cuts_access_and_everything_is_audited() {
 	owner.revoke(&code).await.unwrap();
 	assert_eq!(
 		agent
-			.records(&RecordsRequest::default())
+			.records(&RecordsRequest::default(), Some(&purpose()))
 			.await
 			.unwrap_err()
 			.code(),
@@ -524,10 +597,13 @@ async fn owner_can_purge() {
 		.paired("After", ClientKind::Agent, approve(&["*:read"]))
 		.await;
 	let left = reader
-		.records(&RecordsRequest {
-			streams: vec!["screen".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["screen".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(left.records, [] as [quant_api::ServedRecord; 0]);
@@ -567,7 +643,7 @@ async fn devices_connect_over_tls_only_to_the_pinned_certificate() {
 
 	let mut phone = Client::new(pinned, Identity::generate("Pixel"));
 	let pairing = phone
-		.pair(ClientKind::Device, &["health:write".into()])
+		.pair(ClientKind::Device, &["health:write".into()], None)
 		.await
 		.unwrap();
 	assert_eq!(pairing.status, ClientStatus::Pending);
@@ -694,10 +770,13 @@ async fn saving_a_moment_needs_write_scope_and_never_returns_audio() {
 		.paired("Reader", ClientKind::Agent, approve(&["audio:read"]))
 		.await;
 	let listed = reader
-		.records(&RecordsRequest {
-			streams: vec!["audio.buffer".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["audio.buffer".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(listed.records.len(), 3);
@@ -766,10 +845,13 @@ async fn saving_a_moment_needs_write_scope_and_never_returns_audio() {
 		.paired("Raw", ClientKind::Agent, approve(&["audio:raw"]))
 		.await;
 	let clips = raw
-		.records(&RecordsRequest {
-			streams: vec!["audio.clip".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["audio.clip".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(clips.records.len(), 2);
@@ -782,13 +864,16 @@ async fn saving_a_moment_needs_write_scope_and_never_returns_audio() {
 	assert_eq!(clip.data["title"], "Tuesday call");
 	assert_eq!(clip.data["sources"], serde_json::json!(["mic", "system"]));
 	let media = clip.media.clone().unwrap();
-	let (mime, bytes) = raw.media(&media.hash).await.unwrap();
+	let (mime, bytes) = raw.media(&media.hash, Some(&purpose())).await.unwrap();
 	assert_eq!(mime, "audio/mp4");
 	assert!(!bytes.is_empty());
 
 	// A reader cannot fetch the clip's audio either: it answers exactly
 	// like media that does not exist.
-	let denied = reader.media(&media.hash).await.unwrap_err();
+	let denied = reader
+		.media(&media.hash, Some(&purpose()))
+		.await
+		.unwrap_err();
 	assert_eq!(denied.code(), Some("not_found"));
 
 	// Two days later the sweep deletes the expired buffer chunks — and never
@@ -834,7 +919,7 @@ async fn any_approved_client_sees_capture_state_but_nothing_captured() {
 	seed(&h.state);
 
 	let mut pending = Client::new(h.endpoint.clone(), Identity::generate("pending"));
-	pending.pair(ClientKind::Device, &[]).await.unwrap();
+	pending.pair(ClientKind::Device, &[], None).await.unwrap();
 	assert_eq!(
 		pending.capture_status().await.unwrap_err().code(),
 		Some("unauthenticated")
@@ -1024,10 +1109,13 @@ async fn summary_profiles_serve_only_the_owners_own_words() {
 		)
 		.await;
 	let seen = writer
-		.records(&RecordsRequest {
-			streams: vec!["screen".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["screen".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	let evidence = vec![seen.records[0].id];
@@ -1045,7 +1133,7 @@ async fn summary_profiles_serve_only_the_owners_own_words() {
 			approve(&["memory.profile:summary"]),
 		)
 		.await;
-	let profile = summary.profile().await.unwrap();
+	let profile = summary.profile(Some(&purpose())).await.unwrap();
 	assert_eq!(profile.level, quant_access::Level::Summary);
 	assert_eq!(profile.claims.len(), 1);
 	assert_eq!(profile.claims[0].id, coffee.id);
@@ -1059,7 +1147,10 @@ async fn summary_profiles_serve_only_the_owners_own_words() {
 			approve(&["memory.profile:read"]),
 		)
 		.await;
-	assert_eq!(reader.profile().await.unwrap().claims.len(), 1);
+	assert_eq!(
+		reader.profile(Some(&purpose())).await.unwrap().claims.len(),
+		1
+	);
 
 	// The owner sees both, and approves the proposal.
 	let all = owner
@@ -1083,16 +1174,24 @@ async fn summary_profiles_serve_only_the_owners_own_words() {
 	// for this grant, because it cannot read the screen records they point
 	// at. The writer, which can, sees the ids. The summary agent still sees
 	// only the owner's words.
-	let full = reader.profile().await.unwrap();
+	let full = reader.profile(Some(&purpose())).await.unwrap();
 	assert_eq!(full.level, quant_access::Level::Read);
 	assert_eq!(full.claims.len(), 2);
 	let inferred = full.claims.iter().find(|c| c.id == held).unwrap();
 	assert_eq!(inferred.confidence, 0.7);
 	assert!(inferred.evidence.is_empty());
-	let writers_view = writer.profile().await.unwrap();
+	let writers_view = writer.profile(Some(&purpose())).await.unwrap();
 	let inferred = writers_view.claims.iter().find(|c| c.id == held).unwrap();
 	assert_eq!(inferred.evidence, evidence);
-	assert_eq!(summary.profile().await.unwrap().claims.len(), 1);
+	assert_eq!(
+		summary
+			.profile(Some(&purpose()))
+			.await
+			.unwrap()
+			.claims
+			.len(),
+		1
+	);
 
 	// Both reads were audited with their shape.
 	let audit = owner
@@ -1164,20 +1263,26 @@ async fn held_proposals_are_invisible_until_the_owner_approves() {
 			approve(&["memory.profile:read", "memory.profile:write", "*:read"]),
 		)
 		.await;
-	let seen = agent.records(&RecordsRequest::default()).await.unwrap();
+	let seen = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	let proposed = propose(&agent, "Ships on Fridays", vec![seen.records[0].id], None)
 		.await
 		.unwrap();
 	let held = proposed.claims[0];
 
 	// No client but the owner can see a held proposal, whatever its level.
-	let profile = agent.profile().await.unwrap();
+	let profile = agent.profile(Some(&purpose())).await.unwrap();
 	assert!(profile.claims.iter().all(|c| c.id != held));
 	let search = agent
-		.search(&RecordsRequest {
-			search: Some("Ships on Fridays".into()),
-			..Default::default()
-		})
+		.search(
+			&RecordsRequest {
+				search: Some("Ships on Fridays".into()),
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(search.records, [] as [quant_api::ServedRecord; 0]);
@@ -1197,7 +1302,7 @@ async fn held_proposals_are_invisible_until_the_owner_approves() {
 	owner.claim_reject(held).await.unwrap();
 	assert!(
 		agent
-			.profile()
+			.profile(Some(&purpose()))
 			.await
 			.unwrap()
 			.claims
@@ -1218,7 +1323,7 @@ async fn held_proposals_are_invisible_until_the_owner_approves() {
 		.await
 		.unwrap();
 	owner.claim_approve(proposed.claims[0]).await.unwrap();
-	let profile = agent.profile().await.unwrap();
+	let profile = agent.profile(Some(&purpose())).await.unwrap();
 	assert_eq!(profile.claims.len(), 1);
 	assert_eq!(profile.claims[0].id, proposed.claims[0]);
 }
@@ -1242,7 +1347,10 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 	let agent = h.paired("Cautious", ClientKind::Agent, request).await;
 
 	// Records: the health stream is out of scope everywhere.
-	let records = agent.records(&RecordsRequest::default()).await.unwrap();
+	let records = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	assert!(
 		records
 			.records
@@ -1250,10 +1358,13 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 			.all(|r| r.stream.as_str() != "health.heart_rate")
 	);
 	let withheld = agent
-		.records(&RecordsRequest {
-			streams: vec!["health.heart_rate".into(), "screen".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["health.heart_rate".into(), "screen".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(withheld.withheld, vec!["health.heart_rate"]);
@@ -1268,10 +1379,13 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 		)
 		.unwrap();
 	let daily = agent
-		.records(&RecordsRequest {
-			streams: vec!["memory.daily".into()],
-			..Default::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["memory.daily".into()],
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert_eq!(daily.withheld, vec!["memory.daily"]);
@@ -1280,14 +1394,17 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 	// Series and durations treat it exactly like an out-of-scope stream.
 	assert_eq!(
 		agent
-			.series(&SeriesRequest {
-				stream: "health.heart_rate".into(),
-				from: None,
-				to: None,
-				bucket_seconds: None,
-				raw: false,
-				max_rows: None,
-			})
+			.series(
+				&SeriesRequest {
+					stream: "health.heart_rate".into(),
+					from: None,
+					to: None,
+					bucket_seconds: None,
+					raw: false,
+					max_rows: None,
+				},
+				Some(&purpose())
+			)
 			.await
 			.unwrap_err()
 			.code(),
@@ -1295,13 +1412,16 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 	);
 	assert_eq!(
 		agent
-			.durations(&DurationsRequest {
-				stream: "health.sleep".into(),
-				from: None,
-				to: None,
-				group_by: None,
-				bucket_seconds: None,
-			})
+			.durations(
+				&DurationsRequest {
+					stream: "health.sleep".into(),
+					from: None,
+					to: None,
+					group_by: None,
+					bucket_seconds: None,
+				},
+				Some(&purpose())
+			)
 			.await
 			.unwrap_err()
 			.code(),
@@ -1317,7 +1437,7 @@ async fn deny_classes_hide_health_records_and_health_claims() {
 	);
 
 	// Claims: only the non-health claim is served.
-	let profile = agent.profile().await.unwrap();
+	let profile = agent.profile(Some(&purpose())).await.unwrap();
 	assert_eq!(profile.claims.len(), 1);
 	assert_eq!(profile.claims[0].statement, "Prefers espresso after lunch");
 }
@@ -1367,10 +1487,13 @@ async fn context_packets_respect_budget_and_scopes() {
 		)
 		.await;
 	let packet = full
-		.context(&quant_api::ContextRequest {
-			task: "espresso".into(),
-			budget_tokens: Some(1500),
-		})
+		.context(
+			&quant_api::ContextRequest {
+				task: "espresso".into(),
+				budget_tokens: Some(1500),
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(packet.profile.included && !packet.profile.withheld && !packet.profile.cut);
@@ -1385,10 +1508,13 @@ async fn context_packets_respect_budget_and_scopes() {
 
 	// A tight budget stops before later sections are complete and says so.
 	let tight = full
-		.context(&quant_api::ContextRequest {
-			task: "espresso".into(),
-			budget_tokens: Some(200),
-		})
+		.context(
+			&quant_api::ContextRequest {
+				task: "espresso".into(),
+				budget_tokens: Some(200),
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(tight.used_tokens <= tight.budget_tokens);
@@ -1399,10 +1525,13 @@ async fn context_packets_respect_budget_and_scopes() {
 		.paired("Blind", ClientKind::Agent, approve(&["health:summary"]))
 		.await;
 	let packet = blind
-		.context(&quant_api::ContextRequest {
-			task: "anything".into(),
-			budget_tokens: None,
-		})
+		.context(
+			&quant_api::ContextRequest {
+				task: "anything".into(),
+				budget_tokens: None,
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(packet.profile.withheld && !packet.profile.included);
@@ -1431,7 +1560,10 @@ async fn tell_with_a_topic_supersedes_earlier_claims_on_it() {
 			approve(&["memory.profile:read", "memory.profile:write", "*:read"]),
 		)
 		.await;
-	let seen = agent.records(&RecordsRequest::default()).await.unwrap();
+	let seen = agent
+		.records(&RecordsRequest::default(), Some(&purpose()))
+		.await
+		.unwrap();
 	let proposed = propose(
 		&agent,
 		"Drinks decaf after lunch",
@@ -1473,7 +1605,7 @@ async fn tell_with_a_topic_supersedes_earlier_claims_on_it() {
 	}
 
 	// Serving skips superseded claims entirely.
-	let profile = agent.profile().await.unwrap();
+	let profile = agent.profile(Some(&purpose())).await.unwrap();
 	assert!(profile.claims.iter().all(|c| c.id != held));
 }
 
@@ -1808,12 +1940,15 @@ async fn uploaded_ambient_audio_is_queued_once_and_transcripts_keep_class_permis
 	denied.deny_classes = Some(vec![Class::Others]);
 	let reader = h.paired("denied", ClientKind::Agent, denied).await;
 	let result = reader
-		.records(&RecordsRequest {
-			streams: vec!["audio.transcript".into()],
-			from: Some(now - SignedDuration::from_hours(1)),
-			to: Some(now + SignedDuration::from_secs(1)),
-			..RecordsRequest::default()
-		})
+		.records(
+			&RecordsRequest {
+				streams: vec!["audio.transcript".into()],
+				from: Some(now - SignedDuration::from_hours(1)),
+				to: Some(now + SignedDuration::from_secs(1)),
+				..RecordsRequest::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(result.records.is_empty());

@@ -11,13 +11,17 @@ use quant_api::IngestRecords;
 use quant_api::Me;
 use quant_api::OverviewRequest;
 use quant_api::ProposeRequest;
+use quant_api::QuestionAnswer;
+use quant_api::QuestionOpen;
 use quant_api::RecordsRequest;
 use quant_api::SeriesRequest;
 use quant_client::Client;
+use quant_client::Purpose;
 use quant_client::when;
 use quant_core::ClaimKind;
 use quant_core::Class;
 use quant_core::DeviceId;
+use quant_core::QuestionId;
 use quant_core::Record;
 use quant_core::RecordId;
 use quant_core::StreamId;
@@ -36,6 +40,10 @@ fn profile_stream() -> StreamId {
 pub enum Tool {
 	/// Whether this agent is approved, and what it may do.
 	AccessStatus,
+	/// Open a question the agent will answer with vault data.
+	BeginQuestion,
+	/// Record the answer to a question this agent opened.
+	AnswerQuestion,
 	/// What exists over a period.
 	Overview,
 	/// Streams this agent may see.
@@ -84,7 +92,11 @@ pub fn tools_for(me: Option<&Me>) -> Vec<Tool> {
 			}
 		})
 		.collect();
-	let mut tools = vec![Tool::AccessStatus];
+	let mut tools = vec![
+		Tool::AccessStatus,
+		Tool::BeginQuestion,
+		Tool::AnswerQuestion,
+	];
 	if !levels.is_empty() {
 		tools.extend([Tool::Overview, Tool::Streams, Tool::TimeSpent, Tool::Series]);
 	}
@@ -127,13 +139,57 @@ fn time_props() -> Value {
 	})
 }
 
+/// The purpose and question arguments every data tool takes. The purpose
+/// is required: reads without one are refused and audited.
+/// The purpose argument's description, shared by every data tool.
+const PURPOSE_HELP: &str = "Why you need this data, 8 to 500 characters, in your own words. \
+                            Signed and recorded in the owner's audit log; reads without one are \
+                            refused.";
+fn purpose_props() -> Value {
+	json!({
+		"purpose": { "type": "string", "description": PURPOSE_HELP },
+		"question_id": { "type": "string", "description": "The id from quant_begin_question, when this read serves it. Adds the read to that question's trail." },
+	})
+}
+
 fn schema(extra: &Value, required: &[&str]) -> Value {
+	schema_with(extra, required, true)
+}
+
+/// Build an input schema. `purpose` controls whether the purpose and
+/// question arguments appear (and whether purpose is required).
+fn schema_with(extra: &Value, required: &[&str], purpose: bool) -> Value {
 	let mut properties = time_props();
+	let mut required: Vec<&str> = required.to_vec();
+	if purpose {
+		if let (Some(props), Some(extra)) =
+			(properties.as_object_mut(), purpose_props().as_object())
+		{
+			for (k, v) in extra {
+				props.insert(k.clone(), v.clone());
+			}
+		}
+		required.push("purpose");
+	}
 	if let (Some(props), Some(extra)) = (properties.as_object_mut(), extra.as_object()) {
 		for (k, v) in extra {
 			props.insert(k.clone(), v.clone());
 		}
 	}
+	json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
+}
+
+/// A schema with no time range: the purpose and question arguments plus
+/// `extra`, with `purpose` required.
+fn object_with_purpose(extra: &Value, required: &[&str]) -> Value {
+	let mut properties = purpose_props();
+	let mut required: Vec<&str> = required.to_vec();
+	if let (Some(props), Some(extra)) = (properties.as_object_mut(), extra.as_object()) {
+		for (k, v) in extra {
+			props.insert(k.clone(), v.clone());
+		}
+	}
+	required.push("purpose");
 	json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
 }
 
@@ -176,11 +232,32 @@ fn usize_arg(args: &Value, key: &str) -> Option<usize> {
 		.and_then(|n| usize::try_from(n).ok())
 }
 
+/// The signed meta for a data tool call: the caller's stated purpose, the
+/// question it serves, and the session's model. `base` carries the model.
+fn read_purpose(args: &Value, base: &Purpose) -> Result<Purpose, String> {
+	let purpose = arg(args, "purpose")
+		.ok_or("`purpose` is required: say why you need this data (8 to 500 characters)")?
+		.to_owned();
+	let mut meta = Purpose::purpose(purpose);
+	if base.model.is_some() {
+		meta.model.clone_from(&base.model);
+	}
+	if let Some(question) = arg(args, "question_id") {
+		let id: QuestionId = question
+			.parse()
+			.map_err(|_| format!("bad question id `{question}`"))?;
+		meta = meta.with_question(id);
+	}
+	Ok(meta)
+}
+
 impl Tool {
 	/// The tool's MCP name.
 	pub fn name(self) -> &'static str {
 		match self {
 			Tool::AccessStatus => "quant_access_status",
+			Tool::BeginQuestion => "quant_begin_question",
+			Tool::AnswerQuestion => "quant_answer",
 			Tool::Overview => "quant_overview",
 			Tool::Streams => "quant_streams",
 			Tool::TimeSpent => "quant_time_spent",
@@ -206,6 +283,45 @@ impl Tool {
 					 grant allows (scopes, lookback, rate limits), and how to get approved if it \
 					 is not.",
 					json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+				)
+			}
+			Tool::BeginQuestion => {
+				(
+					"Begin a question",
+					"Open a question about the owner that you will answer with vault data: the \
+					 question, and why you need the data to answer it. Returns a question id to \
+					 pass as question_id on every read that serves it, and to record your final \
+					 answer with quant_answer. Questions left unanswered for 24 hours are \
+					 abandoned, and the grant caps how many you may open each hour.",
+					json!({
+						"type": "object",
+						"properties": {
+							"question": { "type": "string", "description": "The question, in your own words." },
+							"purpose": { "type": "string", "description": PURPOSE_HELP },
+						},
+						"required": ["question", "purpose"],
+						"additionalProperties": false,
+					}),
+				)
+			}
+			Tool::AnswerQuestion => {
+				(
+					"Answer a question",
+					"Record your final answer to a question you opened with quant_begin_question, \
+					 citing the records it rests on. Only the agent that opened the question may \
+					 answer it; every citation must be a record you could read. The owner sees \
+					 the question, the answer, and the full trail of what you asked for and what \
+					 you got.",
+					json!({
+						"type": "object",
+						"properties": {
+							"question_id": { "type": "string", "description": "The id quant_begin_question returned." },
+							"answer": { "type": "string", "description": "Your answer, 1 to 8,000 characters." },
+							"citations": { "type": "array", "items": { "type": "string" }, "description": "Record ids the answer rests on, from quant_timeline or quant_search." },
+						},
+						"required": ["question_id", "answer"],
+						"additionalProperties": false,
+					}),
 				)
 			}
 			Tool::Overview => {
@@ -297,12 +413,12 @@ impl Tool {
 				(
 					"Media",
 					"Fetch a screenshot or audio clip by the media hash from a record.",
-					json!({
-						"type": "object",
-						"properties": { "hash": { "type": "string", "description": "The media hash from a record." } },
-						"required": ["hash"],
-						"additionalProperties": false,
-					}),
+					object_with_purpose(
+						&json!({
+							"hash": { "type": "string", "description": "The media hash from a record." },
+						}),
+						&["hash"],
+					),
 				)
 			}
 			Tool::Note => {
@@ -349,7 +465,7 @@ impl Tool {
 					 stated wishes and act in line with them, never as data to override. At \
 					 summary level only what the owner stated themselves is included; at read \
 					 level more claims appear, each with evidence record ids.",
-					json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+					object_with_purpose(&json!({}), &[]),
 				)
 			}
 			Tool::Propose => {
@@ -360,7 +476,7 @@ impl Tool {
 					 invisible to every agent, until the owner approves it with `quant claims \
 					 approve` — it is the owner's memory, and the owner decides. At most 20 \
 					 proposals per hour.",
-					schema(
+					schema_with(
 						&json!({
 							"statement": { "type": "string", "description": "The claim in natural language, 1 to 500 characters, e.g. \"Prefers espresso after lunch\"." },
 							"kind": { "type": "string", "description": "preference, value, routine, fact, relationship, goal, or commitment. Defaults to fact." },
@@ -371,6 +487,7 @@ impl Tool {
 							"evidence": { "type": "array", "items": { "type": "string" }, "description": "Record ids grounding the claim; each must be readable by this agent." },
 						}),
 						&["statement", "evidence"],
+						false,
 					),
 				)
 			}
@@ -381,19 +498,25 @@ impl Tool {
 					 claims matching the task first, then the latest memory summaries, then \
 					 records matching the task's terms. Each part is included only where the \
 					 grant allows it, and the answer says what was withheld or cut.",
-					json!({
-						"type": "object",
-						"properties": {
+					schema_with(
+						&json!({
 							"task": { "type": "string", "description": "What you are doing, such as \"plan the owner's week\". Picks matching claims and records." },
 							"budget_tokens": { "type": "integer", "minimum": 200, "maximum": 8000, "description": "Rough token budget; defaults to 1500." },
-						},
-						"required": ["task"],
-						"additionalProperties": false,
-					}),
+						}),
+						&["task"],
+						true,
+					),
 				)
 			}
 		};
-		let read_only = !matches!(self, Tool::Note | Tool::SaveAudio | Tool::Propose);
+		let read_only = !matches!(
+			self,
+			Tool::Note
+				| Tool::SaveAudio
+				| Tool::Propose
+				| Tool::BeginQuestion
+				| Tool::AnswerQuestion
+		);
 		json!({
 			"name": self.name(),
 			"title": title,
@@ -404,26 +527,88 @@ impl Tool {
 	}
 
 	/// Run the tool.
-	pub async fn call(self, client: &Client, me: Option<&Me>, args: &Value) -> Value {
+	pub async fn call(
+		self,
+		client: &Client,
+		me: Option<&Me>,
+		args: &Value,
+		base: &Purpose,
+	) -> Value {
 		if self == Tool::Media {
-			return media(client, args).await;
+			let purpose = match read_purpose(args, base) {
+				Ok(purpose) => purpose,
+				Err(message) => return error_result(&message),
+			};
+			return media(client, args, &purpose).await;
 		}
-		match self.run(client, me, args).await {
+		match self.run(client, me, args, base).await {
 			Ok(value) => ok_result(&value),
 			Err(message) => error_result(&message),
 		}
 	}
 
-	async fn run(self, client: &Client, me: Option<&Me>, args: &Value) -> Result<Value, String> {
+	async fn run(
+		self,
+		client: &Client,
+		me: Option<&Me>,
+		args: &Value,
+		base: &Purpose,
+	) -> Result<Value, String> {
 		let now = Timestamp::now();
 		let from = when::parse_opt(arg(args, "from"), now)?;
 		let to = when::parse_opt(arg(args, "to"), now)?;
 		let failed = |e: quant_client::ClientError| e.to_string();
 		match self {
 			Tool::AccessStatus => Ok(access_status(client, me)),
+			Tool::BeginQuestion => {
+				let question = arg(args, "question")
+					.ok_or("`question` is required")?
+					.to_owned();
+				let purpose = arg(args, "purpose")
+					.ok_or("`purpose` is required: say why you need vault data")?
+					.to_owned();
+				let model = base.model.clone();
+				let opened = client
+					.open_question(&QuestionOpen {
+						question,
+						purpose,
+						model,
+					})
+					.await
+					.map_err(failed)?;
+				Ok(serde_json::to_value(opened).unwrap_or_default())
+			}
+			Tool::AnswerQuestion => {
+				let id: QuestionId = arg(args, "question_id")
+					.ok_or("`question_id` is required")?
+					.parse()
+					.map_err(|_| "bad question id".to_owned())?;
+				let answer = arg(args, "answer")
+					.ok_or("`answer` is required")?
+					.to_owned();
+				let citations: Vec<RecordId> = match args.get("citations") {
+					Some(Value::Array(items)) => {
+						items
+							.iter()
+							.filter_map(Value::as_str)
+							.map(|id| {
+								id.parse::<RecordId>()
+									.map_err(|_| format!("bad record id `{id}`"))
+							})
+							.collect::<Result<_, _>>()?
+					}
+					_ => Vec::new(),
+				};
+				let answered = client
+					.answer_question(id, &QuestionAnswer { answer, citations })
+					.await
+					.map_err(failed)?;
+				Ok(serde_json::to_value(answered).unwrap_or_default())
+			}
 			Tool::Overview => {
+				let purpose = read_purpose(args, base)?;
 				let overview = client
-					.overview(&OverviewRequest { from, to })
+					.overview(&OverviewRequest { from, to }, Some(&purpose))
 					.await
 					.map_err(failed)?;
 				Ok(serde_json::to_value(overview).unwrap_or_default())
@@ -433,6 +618,7 @@ impl Tool {
 				Ok(serde_json::to_value(streams).unwrap_or_default())
 			}
 			Tool::TimeSpent => {
+				let purpose = read_purpose(args, base)?;
 				let stream = arg(args, "stream")
 					.ok_or("`stream` is required")?
 					.to_owned();
@@ -443,10 +629,14 @@ impl Tool {
 					group_by: arg(args, "group_by").map(str::to_owned),
 					bucket_seconds: args.get("bucket_seconds").and_then(Value::as_u64),
 				};
-				let durations = client.durations(&request).await.map_err(failed)?;
+				let durations = client
+					.durations(&request, Some(&purpose))
+					.await
+					.map_err(failed)?;
 				Ok(serde_json::to_value(durations).unwrap_or_default())
 			}
 			Tool::Series => {
+				let purpose = read_purpose(args, base)?;
 				let stream = arg(args, "stream")
 					.ok_or("`stream` is required")?
 					.to_owned();
@@ -458,10 +648,14 @@ impl Tool {
 					raw: args.get("raw").and_then(Value::as_bool).unwrap_or(false),
 					max_rows: usize_arg(args, "max_rows"),
 				};
-				let series = client.series(&request).await.map_err(failed)?;
+				let series = client
+					.series(&request, Some(&purpose))
+					.await
+					.map_err(failed)?;
 				Ok(serde_json::to_value(series).unwrap_or_default())
 			}
 			Tool::Timeline | Tool::Search => {
+				let purpose = read_purpose(args, base)?;
 				let search = self == Tool::Search;
 				let mode = match args.get("mode").and_then(Value::as_str) {
 					Some("keyword") => Some(quant_api::SearchMode::Keyword),
@@ -487,9 +681,9 @@ impl Tool {
 					mode,
 				};
 				let records = if search {
-					client.search(&request).await
+					client.search(&request, Some(&purpose)).await
 				} else {
-					client.records(&request).await
+					client.records(&request, Some(&purpose)).await
 				}
 				.map_err(failed)?;
 				let mut value = serde_json::to_value(records).unwrap_or_default();
@@ -546,7 +740,8 @@ impl Tool {
 				Ok(json!({ "stored": id }))
 			}
 			Tool::Profile => {
-				let profile = client.profile().await.map_err(failed)?;
+				let purpose = read_purpose(args, base)?;
+				let profile = client.profile(Some(&purpose)).await.map_err(failed)?;
 				Ok(serde_json::to_value(profile).unwrap_or_default())
 			}
 			Tool::Propose => {
@@ -608,16 +803,20 @@ impl Tool {
 				Ok(serde_json::to_value(proposed).unwrap_or_default())
 			}
 			Tool::Context => {
+				let purpose = read_purpose(args, base)?;
 				let task = arg(args, "task").ok_or("`task` is required")?.to_owned();
 				let budget_tokens = args
 					.get("budget_tokens")
 					.and_then(Value::as_u64)
 					.and_then(|n| u32::try_from(n).ok());
 				let context = client
-					.context(&ContextRequest {
-						task,
-						budget_tokens,
-					})
+					.context(
+						&ContextRequest {
+							task,
+							budget_tokens,
+						},
+						Some(&purpose),
+					)
 					.await
 					.map_err(failed)?;
 				let mut value = serde_json::to_value(context).unwrap_or_default();
@@ -629,11 +828,11 @@ impl Tool {
 }
 
 /// Fetch media as MCP content.
-pub(crate) async fn media(client: &Client, args: &Value) -> Value {
+pub(crate) async fn media(client: &Client, args: &Value, purpose: &Purpose) -> Value {
 	let Some(hash) = arg(args, "hash") else {
 		return error_result("`hash` is required");
 	};
-	match client.media(hash).await {
+	match client.media(hash, Some(purpose)).await {
 		Ok((mime, bytes)) if mime.starts_with("image/") => {
 			json!({
 				"content": [{ "type": "image", "data": STANDARD.encode(&bytes), "mimeType": mime }],

@@ -37,6 +37,7 @@ use quant_api::SourceState;
 use quant_api::StreamAccess;
 use quant_core::Class;
 use quant_core::Family;
+use quant_core::QuestionId;
 use quant_core::Record;
 use quant_core::StreamId;
 use quant_core::StreamSpec;
@@ -285,7 +286,9 @@ pub(crate) fn serve(record: Record, snippet: Option<String>, grant: &Grant) -> S
 	}
 }
 
-/// Charge the response to the grant, audit it, and send it.
+/// Charge the response to the grant, audit it with the request's stated
+/// purpose, and send it. When the request served a question, its totals
+/// grow with exactly what this audit entry allowed.
 pub(crate) fn respond<T: Serialize>(
 	state: &State,
 	caller: &Caller,
@@ -304,6 +307,13 @@ pub(crate) fn respond<T: Serialize>(
 		bytes,
 		Timestamp::now(),
 	);
+	let (purpose, question, model) = audit_meta(&caller.meta);
+	if let Some(question) = question {
+		let _ = state
+			.vault
+			.store
+			.charge_question(question, records as u64, bytes);
+	}
 	state.vault.store.audit(
 		AuditEvent::new(
 			caller.actor(),
@@ -314,9 +324,23 @@ pub(crate) fn respond<T: Serialize>(
 				bytes,
 			},
 		)
+		.meta(purpose.as_deref(), question, model.as_deref())
 		.detail(detail),
 	)?;
 	Ok(Json(value))
+}
+
+/// The audit form of a request's meta: sanitised purpose, parsed question,
+/// sanitised model. Shared by every route that audits a client request.
+pub(crate) fn audit_meta(
+	meta: &quant_access::auth::RequestMeta,
+) -> (Option<String>, Option<QuestionId>, Option<String>) {
+	let sanitise = |text: &str| quant_access::redact::sanitize(text).trim().to_owned();
+	(
+		meta.purpose.as_deref().map(sanitise),
+		meta.question.as_deref().and_then(|q| q.parse().ok()),
+		meta.model.as_deref().map(sanitise),
+	)
 }
 
 pub(crate) fn deny(
@@ -327,12 +351,16 @@ pub(crate) fn deny(
 	error: Error,
 ) -> Error {
 	if let Error::Forbidden(reason) = &error {
-		let _ = state.vault.store.audit(AuditEvent::new(
-			caller.actor(),
-			action,
-			target,
-			Outcome::Denied { reason: *reason },
-		));
+		let (purpose, question, model) = audit_meta(&caller.meta);
+		let _ = state.vault.store.audit(
+			AuditEvent::new(
+				caller.actor(),
+				action,
+				target,
+				Outcome::Denied { reason: *reason },
+			)
+			.meta(purpose.as_deref(), question, model.as_deref()),
+		);
 	}
 	error
 }
@@ -806,14 +834,18 @@ pub async fn media(
 		&& at >= caller.grant.floor(now)
 		&& !state.class_denied(&stream, &caller.grant.deny_classes);
 	if !allowed {
-		let _ = state.vault.store.audit(AuditEvent::new(
-			caller.actor(),
-			"media",
-			stream.as_str(),
-			Outcome::Denied {
-				reason: quant_access::Denied::OutOfScope,
-			},
-		));
+		let (purpose, question, model) = audit_meta(&caller.meta);
+		let _ = state.vault.store.audit(
+			AuditEvent::new(
+				caller.actor(),
+				"media",
+				stream.as_str(),
+				Outcome::Denied {
+					reason: quant_access::Denied::OutOfScope,
+				},
+			)
+			.meta(purpose.as_deref(), question, model.as_deref()),
+		);
 		return Err(Error::NotFound);
 	}
 	let budget = state
@@ -841,6 +873,13 @@ pub async fn media(
 		bytes.len() as u64,
 		now,
 	);
+	let (purpose, question, model) = audit_meta(&caller.meta);
+	if let Some(question) = question {
+		let _ = state
+			.vault
+			.store
+			.charge_question(question, 1, bytes.len() as u64);
+	}
 	state.vault.store.audit(
 		AuditEvent::new(
 			caller.actor(),
@@ -851,6 +890,7 @@ pub async fn media(
 				bytes: bytes.len() as u64,
 			},
 		)
+		.meta(purpose.as_deref(), question, model.as_deref())
 		.detail(serde_json::json!({ "hash": hash })),
 	)?;
 	Ok(([(header::CONTENT_TYPE, mime)], bytes))

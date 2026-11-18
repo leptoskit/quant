@@ -25,7 +25,9 @@ use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 pub use identity::*;
 use jiff::Timestamp;
+use quant_access::AgentIdentity;
 use quant_access::Grant;
+use quant_access::auth::RequestMeta;
 use quant_api::ApiError;
 use quant_api::ApproveRequest;
 use quant_api::Audit;
@@ -60,6 +62,13 @@ use quant_api::ProposeRequest;
 use quant_api::Proposed;
 use quant_api::PurgeRequest;
 use quant_api::Purged;
+use quant_api::QuestionAnswer;
+use quant_api::QuestionListRequest;
+use quant_api::QuestionOpen;
+use quant_api::QuestionOpened;
+use quant_api::QuestionTrail;
+use quant_api::QuestionTrailRequest;
+use quant_api::QuestionView;
 use quant_api::Records;
 use quant_api::RecordsRequest;
 use quant_api::RenameClip;
@@ -77,10 +86,16 @@ use quant_core::Claim;
 use quant_core::ClientId;
 use quant_core::MediaRef;
 use quant_core::OwnerDeviceId;
+use quant_core::QuestionId;
 use quant_core::StreamId;
 use quant_core::StreamSpec;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+/// Why a client is reading: the purpose, the question a read serves, and
+/// the model running the session. Agents must send a purpose on every
+/// read; it travels in signed headers the daemon audits.
+pub type Purpose = RequestMeta;
 
 /// Where the daemon listens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -412,30 +427,19 @@ impl Client {
 		&self.endpoint
 	}
 
-	async fn signed_raw(
-		&self,
-		method: Method,
-		path: &str,
-		body: Vec<u8>,
-		content_type: &str,
-	) -> Result<(StatusCode, Bytes)> {
-		self.signed_typed(method, path, body, content_type)
-			.await
-			.map(|(status, _, body)| (status, body))
-	}
-
 	async fn signed_typed(
 		&self,
 		method: Method,
 		path: &str,
 		body: Vec<u8>,
 		content_type: &str,
+		meta: &RequestMeta,
 	) -> Result<(StatusCode, Option<String>, Bytes)> {
 		let client = self.identity.client.ok_or(ClientError::NotPaired)?;
 		let headers =
 			self.identity
 				.key()
-				.sign(client, method.as_str(), path, &body, Timestamp::now());
+				.sign(client, method.as_str(), path, &body, Timestamp::now(), meta);
 		let mut request = builder(method, path).header("content-type", content_type);
 		for (name, value) in headers.pairs() {
 			request = request.header(name, value);
@@ -451,15 +455,29 @@ impl Client {
 		method: Method,
 		path: &str,
 		body: Option<&B>,
+		meta: &RequestMeta,
 	) -> Result<T> {
 		let bytes = match body {
 			Some(body) => serde_json::to_vec(body)?,
 			None => Vec::new(),
 		};
 		let (status, answer) = self
-			.signed_raw(method, path, bytes, "application/json")
+			.signed_raw(method, path, bytes, "application/json", meta)
 			.await?;
 		decode(status, &answer)
+	}
+
+	async fn signed_raw(
+		&self,
+		method: Method,
+		path: &str,
+		body: Vec<u8>,
+		content_type: &str,
+		meta: &RequestMeta,
+	) -> Result<(StatusCode, Bytes)> {
+		self.signed_typed(method, path, body, content_type, meta)
+			.await
+			.map(|(status, _, body)| (status, body))
 	}
 
 	/// Who the vault is.
@@ -472,13 +490,21 @@ impl Client {
 	}
 
 	/// Ask to pair this identity. On success the identity gains a client id;
-	/// save it, then have the owner approve the returned pairing code.
-	pub async fn pair(&mut self, kind: ClientKind, scopes: &[String]) -> Result<PairResponse> {
+	/// save it, then have the owner approve the returned pairing code. An
+	/// agent must say what it is: `agent` is required for
+	/// [`ClientKind::Agent`] and refused for every other kind.
+	pub async fn pair(
+		&mut self,
+		kind: ClientKind,
+		scopes: &[String],
+		agent: Option<&AgentIdentity>,
+	) -> Result<PairResponse> {
 		let body = PairRequest {
 			name: self.identity.name.clone(),
 			kind,
 			public_key: self.identity.key().public(),
 			scopes: scopes.to_vec(),
+			agent: agent.cloned(),
 		};
 		let request = builder(Method::POST, routes::PAIR)
 			.header("content-type", "application/json")
@@ -492,50 +518,102 @@ impl Client {
 
 	/// This client's status and grant.
 	pub async fn me(&self) -> Result<Me> {
-		self.signed::<(), _>(Method::GET, routes::ME, None).await
+		self.signed::<(), _>(Method::GET, routes::ME, None, &no_purpose())
+			.await
 	}
 
 	/// Streams this client may see.
 	pub async fn streams(&self) -> Result<Vec<StreamAccess>> {
-		self.signed::<(), _>(Method::GET, routes::STREAMS, None)
+		self.signed::<(), _>(Method::GET, routes::STREAMS, None, &no_purpose())
 			.await
 	}
 
-	/// What each visible stream holds over a range.
-	pub async fn overview(&self, request: &OverviewRequest) -> Result<Overview> {
-		self.signed(Method::POST, routes::OVERVIEW, Some(request))
-			.await
+	/// What each visible stream holds over a range. Agents pass `purpose`.
+	pub async fn overview(
+		&self,
+		request: &OverviewRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Overview> {
+		self.signed(
+			Method::POST,
+			routes::OVERVIEW,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
-	/// Records.
-	pub async fn records(&self, request: &RecordsRequest) -> Result<Records> {
-		self.signed(Method::POST, routes::RECORDS, Some(request))
-			.await
+	/// Records. Agents pass `purpose`.
+	pub async fn records(
+		&self,
+		request: &RecordsRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Records> {
+		self.signed(
+			Method::POST,
+			routes::RECORDS,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
-	/// Full-text search.
-	pub async fn search(&self, request: &RecordsRequest) -> Result<Records> {
-		self.signed(Method::POST, routes::SEARCH, Some(request))
-			.await
+	/// Full-text search. Agents pass `purpose`.
+	pub async fn search(
+		&self,
+		request: &RecordsRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Records> {
+		self.signed(
+			Method::POST,
+			routes::SEARCH,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
-	/// A numeric stream, summarised or raw.
-	pub async fn series(&self, request: &SeriesRequest) -> Result<Series> {
-		self.signed(Method::POST, routes::SERIES, Some(request))
-			.await
+	/// A numeric stream, summarised or raw. Agents pass `purpose`.
+	pub async fn series(
+		&self,
+		request: &SeriesRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Series> {
+		self.signed(
+			Method::POST,
+			routes::SERIES,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
-	/// Time spent per group in an event stream.
-	pub async fn durations(&self, request: &DurationsRequest) -> Result<Durations> {
-		self.signed(Method::POST, routes::DURATIONS, Some(request))
-			.await
+	/// Time spent per group in an event stream. Agents pass `purpose`.
+	pub async fn durations(
+		&self,
+		request: &DurationsRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Durations> {
+		self.signed(
+			Method::POST,
+			routes::DURATIONS,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
-	/// Media bytes and type.
-	pub async fn media(&self, hash: &str) -> Result<(String, Bytes)> {
+	/// Media bytes and type. Agents pass `purpose`.
+	pub async fn media(&self, hash: &str, purpose: Option<&Purpose>) -> Result<(String, Bytes)> {
 		let path = format!("{}/{hash}", routes::MEDIA);
 		let (status, mime, body) = self
-			.signed_typed(Method::GET, &path, Vec::new(), "application/json")
+			.signed_typed(
+				Method::GET,
+				&path,
+				Vec::new(),
+				"application/json",
+				&meta_of(purpose),
+			)
 			.await?;
 		if !status.is_success() {
 			return Err(decode::<()>(status, &body).expect_err("error statuses decode to errors"));
@@ -548,14 +626,24 @@ impl Client {
 
 	/// Store records.
 	pub async fn ingest_records(&self, request: &IngestRecords) -> Result<Ingested> {
-		self.signed(Method::POST, routes::INGEST_RECORDS, Some(request))
-			.await
+		self.signed(
+			Method::POST,
+			routes::INGEST_RECORDS,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// Store series.
 	pub async fn ingest_series(&self, request: &IngestSeries) -> Result<Ingested> {
-		self.signed(Method::POST, routes::INGEST_SERIES, Some(request))
-			.await
+		self.signed(
+			Method::POST,
+			routes::INGEST_SERIES,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// Upload media for a record on `stream`.
@@ -571,52 +659,108 @@ impl Client {
 			stream,
 			mime.replace('/', "%2F")
 		);
-		let (status, body) = self.signed_raw(Method::POST, &path, bytes, mime).await?;
+		let (status, body) = self
+			.signed_raw(Method::POST, &path, bytes, mime, &no_purpose())
+			.await?;
 		decode(status, &body)
 	}
 
 	/// This client's own audit entries (needs `audit:read`).
 	pub async fn audit(&self, request: &AuditRequest) -> Result<Audit> {
-		self.signed(Method::POST, routes::AUDIT, Some(request))
+		self.signed(Method::POST, routes::AUDIT, Some(request), &no_purpose())
 			.await
 	}
 
 	/// Which capture sources run, and whether capture is paused. Any
 	/// approved client may ask; it reveals nothing captured.
 	pub async fn capture_status(&self) -> Result<CaptureState> {
-		self.signed::<(), _>(Method::GET, routes::CAPTURE_STATUS, None)
+		self.signed::<(), _>(Method::GET, routes::CAPTURE_STATUS, None, &no_purpose())
 			.await
 	}
 
 	/// Keep a stretch of the rolling audio buffer as a clip (needs
 	/// `audio:write`).
 	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
-		self.signed(Method::POST, routes::AUDIO_SAVE, Some(request))
-			.await
+		self.signed(
+			Method::POST,
+			routes::AUDIO_SAVE,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// Give a saved clip a new title (needs `audio:write`).
 	pub async fn rename_clip(&self, request: &RenameClip) -> Result<()> {
-		self.signed(Method::POST, routes::AUDIO_RENAME, Some(request))
-			.await
+		self.signed(
+			Method::POST,
+			routes::AUDIO_RENAME,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// The owner's profile claims, shaped by this grant's `memory.profile`
-	/// level.
-	pub async fn profile(&self) -> Result<ProfileClaims> {
-		self.signed::<(), _>(Method::GET, routes::MEMORY_PROFILE, None)
+	/// level. Agents pass `purpose`.
+	pub async fn profile(&self, purpose: Option<&Purpose>) -> Result<ProfileClaims> {
+		self.signed::<(), _>(Method::GET, routes::MEMORY_PROFILE, None, &meta_of(purpose))
 			.await
 	}
 
 	/// Propose claims about the owner (needs `memory.profile:write`).
 	pub async fn propose(&self, request: &ProposeRequest) -> Result<Proposed> {
-		self.signed(Method::POST, routes::MEMORY_PROPOSALS, Some(request))
+		self.signed(
+			Method::POST,
+			routes::MEMORY_PROPOSALS,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
+	}
+
+	/// A budgeted context packet assembled for one task. Agents pass
+	/// `purpose`.
+	pub async fn context(
+		&self,
+		request: &ContextRequest,
+		purpose: Option<&Purpose>,
+	) -> Result<Context> {
+		self.signed(
+			Method::POST,
+			routes::CONTEXT,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
+	}
+
+	/// Open a question the caller will answer with vault data, and get its
+	/// id to carry on the reads that serve it.
+	pub async fn open_question(&self, request: &QuestionOpen) -> Result<QuestionOpened> {
+		self.signed(
+			Method::POST,
+			routes::QUESTIONS,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
+	}
+
+	/// Record the answer to a question this client opened, with citations.
+	pub async fn answer_question(
+		&self,
+		id: QuestionId,
+		request: &QuestionAnswer,
+	) -> Result<QuestionView> {
+		let path = format!("/v1/questions/{id}/answer");
+		self.signed(Method::POST, &path, Some(request), &no_purpose())
 			.await
 	}
 
-	/// A budgeted context packet assembled for one task.
-	pub async fn context(&self, request: &ContextRequest) -> Result<Context> {
-		self.signed(Method::POST, routes::CONTEXT, Some(request))
+	/// This client's recent questions, answers included.
+	pub async fn my_questions(&self) -> Result<Vec<QuestionView>> {
+		self.signed::<(), _>(Method::GET, routes::QUESTIONS_MINE, None, &no_purpose())
 			.await
 	}
 
@@ -938,6 +1082,23 @@ impl OwnerSession {
 			.await
 	}
 
+	/// Every question, recent first, optionally only one client's.
+	pub async fn questions(&self, request: &QuestionListRequest) -> Result<Vec<QuestionView>> {
+		self.call(Method::POST, routes::OWNER_QUESTIONS, Some(request))
+			.await
+	}
+
+	/// One question's full trail: the question, the answer, and every
+	/// audit entry that carried its id.
+	pub async fn question_trail(&self, id: QuestionId) -> Result<QuestionTrail> {
+		self.call(
+			Method::POST,
+			routes::OWNER_QUESTION_TRAIL,
+			Some(&QuestionTrailRequest { id }),
+		)
+		.await
+	}
+
 	/// Enrol an owner device with the passphrase session this was opened
 	/// with. A session opened with a device cannot enrol others.
 	pub async fn owner_device_add(&self, request: &EnrolDeviceRequest) -> Result<OwnerDeviceView> {
@@ -964,3 +1125,13 @@ impl OwnerSession {
 
 /// The default client id type, re-exported for callers.
 pub type Id = ClientId;
+
+/// An empty request meta, for calls that carry no purpose.
+fn no_purpose() -> RequestMeta {
+	RequestMeta::default()
+}
+
+/// The meta of an optional `purpose`: `None` means no headers at all.
+fn meta_of(purpose: Option<&Purpose>) -> RequestMeta {
+	purpose.cloned().unwrap_or_default()
+}

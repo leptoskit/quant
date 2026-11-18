@@ -12,6 +12,7 @@ use quant_model::Moment;
 use quant_model::Notice;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::QuestionRow;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
 
@@ -113,6 +114,7 @@ fn snapshot() -> Snapshot {
 				id: "sample-agent".into(),
 				name: "Claude Code".into(),
 				kind: "agent".into(),
+				agent: Some("Claude Code (Anthropic) claude-opus-5-5 on studio".into()),
 				code: "DEMO-ONLY".into(),
 				requested: vec!["health:summary".into(), "apps:summary".into()],
 				asked: "Just now".into(),
@@ -123,6 +125,7 @@ fn snapshot() -> Snapshot {
 				scopes: vec!["memory.profile:summary".into()],
 				lookback: "7 days".into(),
 				expires: Some("Tomorrow".into()),
+				agent: None,
 			}],
 			audit: vec![
 				AuditRow {
@@ -132,6 +135,7 @@ fn snapshot() -> Snapshot {
 					action: "moment.save".into(),
 					target: "Last 5 minutes".into(),
 					outcome: "allowed".into(),
+					purpose: None,
 				},
 				AuditRow {
 					seq: 23,
@@ -140,11 +144,24 @@ fn snapshot() -> Snapshot {
 					action: "memory.profile".into(),
 					target: "Summary only".into(),
 					outcome: "allowed".into(),
+					purpose: Some("drafting a weekly reflection".into()),
 				},
 			],
 			chain_ok: Some(true),
 			devices: vec![],
 			passphrase_session: true,
+			questions: vec![QuestionRow {
+				id: "ques_sample".into(),
+				asker: "My research assistant".into(),
+				asked: "09:30".into(),
+				question: "What did I focus on this week?".into(),
+				purpose: "drafting a weekly reflection".into(),
+				model: Some("claude-opus-5-5".into()),
+				status: "answered".into(),
+				answer: Some("Mostly the budget review and two long writing sessions.".into()),
+				citations: 3,
+				served: "18 records · 6.2 KB".into(),
+			}],
 		}),
 		..Snapshot::default()
 	}

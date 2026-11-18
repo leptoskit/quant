@@ -134,6 +134,20 @@ pub fn moment_title(now: Timestamp, tz: &TimeZone) -> String {
 	format!("Moment at {}", clock(now, tz))
 }
 
+/// What was served under a question, such as "12 records · 3.1 KB".
+pub fn served(records: u64, bytes: u64) -> String {
+	let size = match bytes {
+		0..1_024 => format!("{bytes} B"),
+		1_024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1_024.0),
+		_ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+	};
+	match records {
+		0 => "nothing served".to_owned(),
+		1 => format!("1 record · {size}"),
+		_ => format!("{records} records · {size}"),
+	}
+}
+
 /// The first line of a transcript, cut to about `limit` characters.
 pub fn snippet(text: &str, limit: usize) -> Option<String> {
 	let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -157,6 +171,14 @@ mod tests {
 
 	fn utc() -> TimeZone {
 		TimeZone::UTC
+	}
+
+	#[test]
+	fn served_totals_read_plainly() {
+		assert_eq!(served(0, 0), "nothing served");
+		assert_eq!(served(1, 300), "1 record · 300 B");
+		assert_eq!(served(12, 3_200), "12 records · 3.1 KB");
+		assert_eq!(served(900, 5_242_880), "900 records · 5.0 MB");
 	}
 
 	fn at(s: &str) -> Timestamp {

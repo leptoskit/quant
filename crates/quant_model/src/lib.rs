@@ -164,6 +164,35 @@ pub struct OwnerView {
 	/// Whether the session was opened with the passphrase, so it may enrol a
 	/// new device.
 	pub passphrase_session: bool,
+	/// The newest questions agents asked, newest first.
+	#[serde(default)]
+	pub questions: Vec<QuestionRow>,
+}
+
+/// One question in the ledger: what an agent asked, why, and what it
+/// answered.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct QuestionRow {
+	/// The question's id, such as `ques_…`.
+	pub id: String,
+	/// Who asked: the client's name and, for an agent, what it said it is.
+	pub asker: String,
+	/// When, such as "Today 14:03".
+	pub asked: String,
+	/// The question.
+	pub question: String,
+	/// The purpose the agent gave.
+	pub purpose: String,
+	/// The model that ran it, when it said.
+	pub model: Option<String>,
+	/// "open", "answered", or "abandoned".
+	pub status: String,
+	/// The answer, once given.
+	pub answer: Option<String>,
+	/// Records the answer cites.
+	pub citations: usize,
+	/// What was served under it, such as "12 records · 3.1 KB".
+	pub served: String,
 }
 
 /// An enrolled owner device: a hardware key that unlocks owner sessions after
@@ -189,6 +218,10 @@ pub struct PendingClient {
 	pub name: String,
 	/// What sort: agent, device, cli, app.
 	pub kind: String,
+	/// What it said it was, when an agent pairs: product, vendor, model,
+	/// version, host, such as "Claude Code (Anthropic) claude-opus-5-5 on
+	/// mini".
+	pub agent: Option<String>,
 	/// Its pairing code.
 	pub code: String,
 	/// The scopes it asked for.
@@ -210,6 +243,8 @@ pub struct GrantRow {
 	pub lookback: String,
 	/// When it expires, if it does.
 	pub expires: Option<String>,
+	/// What the agent holding it said it was, when an agent.
+	pub agent: Option<String>,
 }
 
 /// One audit entry.
@@ -227,6 +262,9 @@ pub struct AuditRow {
 	pub target: String,
 	/// "allowed", "denied: out of scope", "failed".
 	pub outcome: String,
+	/// Why the caller said it asked, when it said.
+	#[serde(default)]
+	pub purpose: Option<String>,
 }
 
 /// The result of an action.
@@ -436,6 +474,7 @@ mod tests {
 			id: "c1".into(),
 			name: "Claude Code".into(),
 			kind: "agent".into(),
+			agent: Some("Claude Code (Anthropic) claude-opus-5-5 on mini".into()),
 			code: "K7QD-M2XA".into(),
 			requested: requested.iter().map(|s| (*s).to_owned()).collect(),
 			asked: "Today 14:03".into(),

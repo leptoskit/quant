@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
+use quant_access::AgentIdentity;
 use quant_access::Grant;
 use quant_access::Level;
 use quant_access::Limits;
@@ -21,8 +22,10 @@ use quant_core::ClaimStatus;
 use quant_core::Class;
 use quant_core::ClientId;
 use quant_core::DeviceId;
+use quant_core::GrantId;
 use quant_core::MediaRef;
 use quant_core::OwnerDeviceId;
+use quant_core::QuestionId;
 use quant_core::Record;
 use quant_core::RecordId;
 use quant_core::SeriesBatch;
@@ -83,6 +86,22 @@ pub mod routes {
 	/// `POST` [`ContextRequest`](super::ContextRequest): a budgeted packet of
 	/// what the grant may know, assembled for one task.
 	pub const CONTEXT: &str = "/v1/context";
+	/// `POST` [`QuestionOpen`](super::QuestionOpen): open a question the
+	/// caller will answer with vault data, and get its id.
+	pub const QUESTIONS: &str = "/v1/questions";
+	/// `GET`: the caller's recent questions, with its answers.
+	pub const QUESTIONS_MINE: &str = "/v1/questions/mine";
+	/// `POST /v1/questions/{id}/answer`
+	/// [`QuestionAnswer`](super::QuestionAnswer): record the answer and its
+	/// citations.
+	pub const QUESTION_ANSWER: &str = "/v1/questions/{id}/answer";
+	/// `POST` [`QuestionListRequest`](super::QuestionListRequest): every
+	/// question, recent first (owner).
+	pub const OWNER_QUESTIONS: &str = "/v1/owner/questions";
+	/// `POST` [`QuestionTrailRequest`](super::QuestionTrailRequest): one
+	/// question's full trail — the question, the answer, and every audit
+	/// entry carrying its id (owner).
+	pub const OWNER_QUESTION_TRAIL: &str = "/v1/owner/questions/trail";
 	/// `POST` [`OwnerClaimRequest`](super::OwnerClaimRequest): the owner
 	/// states a claim.
 	pub const OWNER_CLAIMS: &str = "/v1/owner/memory/claims";
@@ -210,6 +229,12 @@ pub struct PairRequest {
 	/// The owner decides what it actually gets.
 	#[serde(default)]
 	pub scopes: Vec<String>,
+	/// What the agent is, when an agent pairs: product, vendor, model,
+	/// version, host, and an optional operator. Required for agents —
+	/// the owner sees it with the pairing request — and refused for
+	/// everyone else.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub agent: Option<AgentIdentity>,
 }
 
 /// Where a pairing stands.
@@ -244,6 +269,9 @@ pub struct ClientView {
 	pub name: String,
 	/// What sort.
 	pub kind: ClientKind,
+	/// What it said it was, when an agent paired.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub agent: Option<AgentIdentity>,
 	/// Its pairing code.
 	pub pairing_code: String,
 	/// Where it stands.
@@ -1139,6 +1167,138 @@ pub struct ClaimCorrectRequest {
 	pub id: ClaimId,
 	/// The corrected statement, in the owner's words.
 	pub statement: String,
+}
+
+/// `POST` [`routes::QUESTIONS`]: open a question. The caller gets an id to
+/// carry on the reads that answer it and to record the answer under.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOpen {
+	/// The question, in the caller's own words, 1 to 2,000 characters.
+	pub question: String,
+	/// Why the caller needs vault data to answer it, 8 to 500 characters.
+	pub purpose: String,
+	/// The model actually running this session, when it differs from the
+	/// one given at pairing.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub model: Option<String>,
+}
+
+/// Answer to [`routes::QUESTIONS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOpened {
+	/// The question's id.
+	pub id: QuestionId,
+}
+
+/// `POST` [`routes::QUESTION_ANSWER`]: record the answer. Only the client
+/// that opened the question may answer it; every cited record must be one
+/// it could read, or the whole request fails as not found.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionAnswer {
+	/// The answer, 1 to 8,000 characters.
+	pub answer: String,
+	/// Records the answer rests on.
+	#[serde(default)]
+	pub citations: Vec<RecordId>,
+}
+
+/// Where a question stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionStatus {
+	/// Opened, not yet answered.
+	Open,
+	/// Answered, with citations and a record of what was served.
+	Answered,
+	/// Left unanswered for 24 hours and closed by the vault.
+	Abandoned,
+}
+
+impl QuestionStatus {
+	/// The stored name.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			QuestionStatus::Open => "open",
+			QuestionStatus::Answered => "answered",
+			QuestionStatus::Abandoned => "abandoned",
+		}
+	}
+
+	/// Parse the stored name.
+	pub fn parse(s: &str) -> Option<Self> {
+		match s {
+			"open" => Some(QuestionStatus::Open),
+			"answered" => Some(QuestionStatus::Answered),
+			"abandoned" => Some(QuestionStatus::Abandoned),
+			_ => None,
+		}
+	}
+}
+
+/// A question as it is served: to the owner in full, to the client that
+/// asked it with the answer redacted like any other text, never to anyone
+/// else.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionView {
+	/// The question's id.
+	pub id: QuestionId,
+	/// The client that asked.
+	pub client: ClientId,
+	/// The grant it asked under.
+	pub grant: GrantId,
+	/// When it was asked.
+	pub asked_at: Timestamp,
+	/// The question.
+	pub question: String,
+	/// The purpose given for it.
+	pub purpose: String,
+	/// The model that ran the session, when it said.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub model: Option<String>,
+	/// Where it stands.
+	pub status: QuestionStatus,
+	/// The answer, once given.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub answer: Option<String>,
+	/// When it was answered.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub answered_at: Option<Timestamp>,
+	/// Records the answer cites.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub citations: Vec<RecordId>,
+	/// Records served under this question.
+	pub records: u64,
+	/// Bytes served under this question.
+	pub bytes: u64,
+}
+
+/// `POST` [`routes::OWNER_QUESTIONS`]: list questions, recent first.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionListRequest {
+	/// Most questions (default 50, at most 500).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<usize>,
+	/// Only this client's questions.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub client: Option<ClientId>,
+}
+
+/// `POST` [`routes::OWNER_QUESTION_TRAIL`]: one question's full trail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionTrailRequest {
+	/// The question.
+	pub id: QuestionId,
+}
+
+/// Answer to [`routes::OWNER_QUESTION_TRAIL`]: the question, its answer,
+/// and every audit entry that carried its id — what was asked for, what
+/// was served, and what was withheld.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QuestionTrail {
+	/// The question, its answer, and its totals.
+	pub question: QuestionView,
+	/// The audit entries for it, oldest first.
+	pub entries: Vec<AuditEntry>,
 }
 
 #[cfg(test)]

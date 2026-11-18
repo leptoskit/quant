@@ -144,6 +144,7 @@ mod tests {
 			requests_per_minute: 2,
 			records_per_hour: 100,
 			bytes_per_day: 1000,
+			questions_per_hour: Limits::default().questions_per_hour,
 		}
 	}
 
