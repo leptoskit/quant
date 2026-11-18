@@ -28,12 +28,22 @@ jobs:
           - target: desktop
             runner: macos-latest
             packages: -p quant_app -p quant_model -p quant_service
+            build: build --release
+          # The phone collector. A release needs the upload keystore, so this
+          # job builds the debug APK: the Rust host cross-compiled with the
+          # runner's NDK, the plugins' Kotlin, and the Gradle project.
+          - target: android
+            runner: ubuntu-latest
+            packages: -p quant_app -p quant_model -p quant_phone
+            build: build
           - target: relay
             runner: ubuntu-latest
             packages: -p relay -p relay_db
+            build: build --release
           - target: landing
             runner: ubuntu-latest
             packages: -p landing -p landing_app -p landing_backend -p landing_shared
+            build: build --release
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -79,8 +89,17 @@ jobs:
             --output "$RUNNER_TEMP/binaryen.tar.gz"
           tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
-      - name: Production build
-        run: leptoskit --app-target ${{ matrix.target }} build --release
+      - name: Add the Android Rust target
+        if: matrix.target == 'android'
+        run: rustup target add aarch64-linux-android
+      - name: Build
+        run: leptoskit --app-target ${{ matrix.target }} ${{ matrix.build }}
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'android'
+        with:
+          name: quant-android-debug
+          path: platforms/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
       - uses: actions/setup-node@v4
         if: matrix.target == 'landing'
         with:

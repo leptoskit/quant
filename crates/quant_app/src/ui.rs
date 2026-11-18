@@ -1068,6 +1068,10 @@ pub(crate) mod touch_id {
 
 	/// Check the hardware and enrollment, and record it on `state`.
 	#[cfg(not(feature = "ui-preview"))]
+	#[cfg_attr(
+		feature = "phone",
+		allow(dead_code, reason = "the phone's screen has no Touch ID")
+	)]
 	pub async fn check(state: State) {
 		let Ok(keys) = DeviceKeys::new() else {
 			state.touch_id.set(TouchIdAvailability {

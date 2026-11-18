@@ -1982,7 +1982,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2246,7 +2246,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4073,6 +4073,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_background"
+version = "0.3.0"
+source = "git+https://github.com/leptoskit/leptoskit?rev=bcb276a1a2672c779524375a3875fc0b39b9a36e#bcb276a1a2672c779524375a3875fc0b39b9a36e"
+dependencies = [
+ "leptoskit_bridge",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "leptoskit_plugin_battery"
 version = "0.3.0"
 source = "git+https://github.com/leptoskit/leptoskit?rev=bcb276a1a2672c779524375a3875fc0b39b9a36e#bcb276a1a2672c779524375a3875fc0b39b9a36e"
@@ -4168,6 +4177,15 @@ dependencies = [
  "objc2-foundation",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "leptoskit_plugin_notifications"
+version = "0.3.0"
+source = "git+https://github.com/leptoskit/leptoskit?rev=bcb276a1a2672c779524375a3875fc0b39b9a36e#bcb276a1a2672c779524375a3875fc0b39b9a36e"
+dependencies = [
+ "dbus",
+ "leptoskit_bridge",
 ]
 
 [[package]]
@@ -6049,6 +6067,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "quant_android"
+version = "0.1.0"
+dependencies = [
+ "leptoskit_bridge_ffi",
+ "leptoskit_plugin_app_usage",
+ "leptoskit_plugin_background",
+ "leptoskit_plugin_battery",
+ "leptoskit_plugin_location",
+ "leptoskit_plugin_notifications",
+ "leptoskit_plugin_secure_store",
+ "leptoskit_plugin_thermal",
+ "quant_phone",
+]
+
+[[package]]
 name = "quant_api"
 version = "0.1.0"
 dependencies = [
@@ -6066,7 +6099,14 @@ dependencies = [
  "leptoskit",
  "leptoskit_bridge",
  "leptoskit_build",
+ "leptoskit_plugin_app_usage",
+ "leptoskit_plugin_background",
+ "leptoskit_plugin_battery",
  "leptoskit_plugin_device_keys",
+ "leptoskit_plugin_location",
+ "leptoskit_plugin_notifications",
+ "leptoskit_plugin_secure_store",
+ "leptoskit_plugin_thermal",
  "leptoskit_testing",
  "quant_model",
  "reactive_graph",
@@ -6337,6 +6377,35 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "quant_phone"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
+ "leptoskit_bridge",
+ "leptoskit_bridge_ffi",
+ "leptoskit_native",
+ "leptoskit_plugin_app_usage",
+ "leptoskit_plugin_battery",
+ "leptoskit_plugin_location",
+ "leptoskit_plugin_thermal",
+ "leptoskit_wasm",
+ "quant_api",
+ "quant_client",
+ "quant_collector",
+ "quant_core",
+ "quant_crypto",
+ "quant_daemon",
+ "quant_model",
+ "quant_store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -9642,7 +9711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.13.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [package]
 name = "quant_model"
-description = "What the Quant desktop window and its native service say to each other."
+description = "What the Quant desktop window and the phone screen say to their native services."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

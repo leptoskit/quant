@@ -1,0 +1,46 @@
+[package]
+name = "quant_phone"
+description = "The Quant phone app's native side: the encrypted spool, the signed uploader, and the pairing with the owner's vault."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The phone's one native service. The host activates it before the screen's
+# guest starts; it registers the `quant-phone` capability the guest calls.
+[package.metadata.leptoskit.runtime]
+name = "quant-phone"
+rust-service-factory = "from_app_dirs"
+
+[dependencies]
+base64 = { workspace = true }
+jiff = { workspace = true }
+leptoskit_bridge = { workspace = true }
+leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
+leptoskit_native = { workspace = true }
+leptoskit_plugin_app_usage = { workspace = true }
+leptoskit_plugin_battery = { workspace = true }
+leptoskit_plugin_location = { workspace = true }
+leptoskit_plugin_thermal = { workspace = true }
+leptoskit_wasm = { workspace = true }
+quant_api = { workspace = true }
+quant_client = { workspace = true }
+quant_collector = { workspace = true }
+quant_core = { workspace = true }
+quant_crypto = { workspace = true, default-features = false }
+quant_model = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, default-features = false, features = ["rt", "time", "sync", "net", "macros"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+quant_daemon = { workspace = true }
+quant_store = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
