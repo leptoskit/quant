@@ -300,6 +300,9 @@ mod tests {
 		});
 		let limits: Limits = serde_json::from_value(old).unwrap();
 		assert_eq!(limits.questions_per_hour, DEFAULT_QUESTIONS_PER_HOUR);
-		assert_eq!(Limits::default().questions_per_hour, DEFAULT_QUESTIONS_PER_HOUR);
+		assert_eq!(
+			Limits::default().questions_per_hour,
+			DEFAULT_QUESTIONS_PER_HOUR
+		);
 	}
 }

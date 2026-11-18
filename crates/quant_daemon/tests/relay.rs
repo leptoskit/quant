@@ -141,7 +141,7 @@ impl Harness {
 	async fn paired(&self) -> Client {
 		let unix = Endpoint::Unix(self.socket.clone());
 		let mut client = Client::new(unix.clone(), Identity::generate("phone"));
-		let pairing = client.pair(ClientKind::Device, &[]).await.unwrap();
+		let pairing = client.pair(ClientKind::Device, &[], None).await.unwrap();
 		OwnerSession::open(unix, PASS)
 			.await
 			.unwrap()

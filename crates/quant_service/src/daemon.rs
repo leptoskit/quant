@@ -1204,7 +1204,7 @@ fn owner_view(
 					.ok()
 					.and_then(|v| v.as_str().map(ToOwned::to_owned))
 					.unwrap_or_default(),
-				agent: c.agent.as_ref().map(|agent| agent.summary()),
+				agent: c.agent.as_ref().map(quant_access::AgentIdentity::summary),
 				code: c.pairing_code.clone(),
 				requested: c.requested.clone(),
 				asked: words::when(c.created_at, now, tz),

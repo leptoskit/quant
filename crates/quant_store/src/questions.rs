@@ -108,9 +108,12 @@ fn question_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Question>> {
 	Ok((|| {
 		Ok(Question {
 			id: QuestionId(Uuid::from_slice(&id).map_err(|_| StoreError::Corrupt("question id"))?),
-			client:
-				ClientId(Uuid::from_slice(&client).map_err(|_| StoreError::Corrupt("question client"))?),
-			grant: GrantId(Uuid::from_slice(&grant).map_err(|_| StoreError::Corrupt("question grant"))?),
+			client: ClientId(
+				Uuid::from_slice(&client).map_err(|_| StoreError::Corrupt("question client"))?,
+			),
+			grant: GrantId(
+				Uuid::from_slice(&grant).map_err(|_| StoreError::Corrupt("question grant"))?,
+			),
 			asked_at: from_micros(asked)?,
 			question,
 			purpose,
@@ -420,7 +423,10 @@ mod tests {
 			.unwrap();
 		let answered = store.question(opened.id).unwrap().unwrap();
 		assert_eq!(answered.status, QuestionStatus::Answered);
-		assert_eq!(answered.answer.as_deref(), Some("Badly: 5.2 hours, waking twice."));
+		assert_eq!(
+			answered.answer.as_deref(),
+			Some("Badly: 5.2 hours, waking twice.")
+		);
 		assert_eq!(answered.answered_at, Some(at(5)));
 		let mut served = answered.citations.clone();
 		served.sort();
@@ -482,7 +488,9 @@ mod tests {
 		let back = store.question(a.id).unwrap().unwrap();
 		assert_eq!((back.records, back.bytes), (15, 3_500));
 		assert_eq!(
-			store.question_count(a.grant, at(0) - SignedDuration::from_hours(1)).unwrap(),
+			store
+				.question_count(a.grant, at(0) - SignedDuration::from_hours(1))
+				.unwrap(),
 			1
 		);
 		assert_eq!(store.question_count(GrantId::new(), at(0)).unwrap(), 0);
@@ -493,7 +501,12 @@ mod tests {
 		let store = store();
 		let mine = QuestionId::new();
 		let theirs = QuestionId::new();
-		for (seq, id) in [(1, None), (2, Some(mine)), (3, Some(theirs)), (4, Some(mine))] {
+		for (seq, id) in [
+			(1, None),
+			(2, Some(mine)),
+			(3, Some(theirs)),
+			(4, Some(mine)),
+		] {
 			let event = AuditEvent::new(
 				Actor::System,
 				&format!("query{seq}"),
@@ -524,9 +537,7 @@ mod tests {
 		let client = asker(&store);
 		let opened = question(client, at(0));
 		store.insert_question(&opened).unwrap();
-		let stored = store
-			.insert_records(&[record(1, "the citation")])
-			.unwrap();
+		let stored = store.insert_records(&[record(1, "the citation")]).unwrap();
 		assert_eq!(stored.stored, 1);
 		let cited: Vec<RecordId> = store
 			.records(&crate::RecordQuery::new(
@@ -537,7 +548,9 @@ mod tests {
 			.iter()
 			.map(|r| r.id)
 			.collect();
-		store.answer_question(opened.id, client, "an answer", &cited, at(2)).unwrap();
+		store
+			.answer_question(opened.id, client, "an answer", &cited, at(2))
+			.unwrap();
 
 		store
 			.purge(
@@ -547,6 +560,9 @@ mod tests {
 			.unwrap();
 		let back = store.question(opened.id).unwrap().unwrap();
 		assert_eq!(back.status, QuestionStatus::Answered);
-		assert!(back.citations.is_empty(), "the citation went with its record");
+		assert!(
+			back.citations.is_empty(),
+			"the citation went with its record"
+		);
 	}
 }

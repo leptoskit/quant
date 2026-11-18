@@ -83,16 +83,21 @@ pub async fn open(
 		return Err(Error::Invalid("a question needs text".into()));
 	}
 	if !crate::authn::PURPOSE_RANGE.contains(&purpose.chars().count()) {
-		return Err(Error::Invalid(
-			"the purpose is 8 to 500 characters".into(),
-		));
+		return Err(Error::Invalid("the purpose is 8 to 500 characters".into()));
 	}
-	let model = body.model.as_deref().map(|m| clean(m, 120)).filter(|m| !m.is_empty());
+	let model = body
+		.model
+		.as_deref()
+		.map(|m| clean(m, 120))
+		.filter(|m| !m.is_empty());
 	let now = Timestamp::now();
 	// At most the grant's questions per hour.
 	state.vault.store.abandon_stale_questions(now)?;
 	let hour_ago = now - SignedDuration::from_hours(1);
-	let recent = state.vault.store.question_count(caller.grant.id, hour_ago)?;
+	let recent = state
+		.vault
+		.store
+		.question_count(caller.grant.id, hour_ago)?;
 	if recent >= caller.grant.limits.questions_per_hour {
 		let (purpose, question, model) = audit_meta(&caller.meta);
 		let _ = state.vault.store.audit(
@@ -157,12 +162,16 @@ fn citation_readable(
 }
 
 /// `POST /v1/questions/{id}/answer`: record the answer and its citations.
-/// Only the client that opened the question may answer it.
+/// Only the client that opened the question may answer it. The id may be
+/// written as it is shown (`ques_…`) or as a bare UUID.
 pub async fn answer(
 	AxumState(state): Shared,
-	Path(id): Path<QuestionId>,
+	Path(id): Path<String>,
 	request: Signed<quant_api::QuestionAnswer>,
 ) -> ApiResult<Json<quant_api::QuestionView>> {
+	let id: QuestionId = id
+		.parse()
+		.map_err(|_| Error::Invalid("bad question id".into()))?;
 	let caller = &request.caller;
 	let body = request.body;
 	let answer_text = clean(&body.answer, MAX_ANSWER);
@@ -174,16 +183,25 @@ pub async fn answer(
 			"an answer cites at most {MAX_CITATIONS} records"
 		)));
 	}
-	state.vault.store.abandon_stale_questions(Timestamp::now())?;
+	state
+		.vault
+		.store
+		.abandon_stale_questions(Timestamp::now())?;
 	// The question must be the caller's own and still open; a question
 	// that does not exist, belongs to someone else, or is closed all
 	// answer the same way.
 	let question = state.vault.store.question(id)?;
-	let ok = question.is_some_and(|q| q.client == caller.client.id && q.status == QuestionStatus::Open);
+	let ok =
+		question.is_some_and(|q| q.client == caller.client.id && q.status == QuestionStatus::Open);
 	if !ok {
 		let _ = state.vault.store.audit(
-			AuditEvent::new(caller.actor(), "question.answer", id.to_string(), Outcome::Failed)
-				.meta(audit_meta(&caller.meta).0.as_deref(), Some(id), None),
+			AuditEvent::new(
+				caller.actor(),
+				"question.answer",
+				id.to_string(),
+				Outcome::Failed,
+			)
+			.meta(audit_meta(&caller.meta).0.as_deref(), Some(id), None),
 		);
 		return Err(Error::NotFound);
 	}
@@ -195,8 +213,13 @@ pub async fn answer(
 		.all(|record| citation_readable(&state, caller, *record))
 	{
 		let _ = state.vault.store.audit(
-			AuditEvent::new(caller.actor(), "question.answer", id.to_string(), Outcome::Failed)
-				.meta(audit_meta(&caller.meta).0.as_deref(), Some(id), None),
+			AuditEvent::new(
+				caller.actor(),
+				"question.answer",
+				id.to_string(),
+				Outcome::Failed,
+			)
+			.meta(audit_meta(&caller.meta).0.as_deref(), Some(id), None),
 		);
 		return Err(Error::NotFound);
 	}
@@ -222,11 +245,7 @@ pub async fn answer(
 			"answer_chars": answer_text.chars().count(),
 		})),
 	)?;
-	let answered = state
-		.vault
-		.store
-		.question(id)?
-		.ok_or(Error::NotFound)?;
+	let answered = state.vault.store.question(id)?.ok_or(Error::NotFound)?;
 	Ok(Json(shape(&answered, !caller.grant.unredacted)))
 }
 
@@ -237,11 +256,11 @@ pub async fn mine(
 	request: Signed<()>,
 ) -> ApiResult<Json<Vec<quant_api::QuestionView>>> {
 	let caller = &request.caller;
-	state.vault.store.abandon_stale_questions(Timestamp::now())?;
-	let mine = state
+	state
 		.vault
 		.store
-		.questions(Some(caller.client.id), 50)?;
+		.abandon_stale_questions(Timestamp::now())?;
+	let mine = state.vault.store.questions(Some(caller.client.id), 50)?;
 	Ok(Json(
 		mine.iter()
 			.map(|question| shape(question, !caller.grant.unredacted))
@@ -278,7 +297,10 @@ pub async fn owner_list(
 ) -> ApiResult<Json<Vec<quant_api::QuestionView>>> {
 	let body = body.unwrap_or_default();
 	let limit = body.limit.unwrap_or(50).clamp(1, 500);
-	state.vault.store.abandon_stale_questions(Timestamp::now())?;
+	state
+		.vault
+		.store
+		.abandon_stale_questions(Timestamp::now())?;
 	let questions = state.vault.store.questions(body.client, limit)?;
 	owner_audit(
 		&state,
@@ -298,7 +320,10 @@ pub async fn owner_trail(
 	_owner: Owner,
 	Json(body): Json<quant_api::QuestionTrailRequest>,
 ) -> ApiResult<Json<quant_api::QuestionTrail>> {
-	state.vault.store.abandon_stale_questions(Timestamp::now())?;
+	state
+		.vault
+		.store
+		.abandon_stale_questions(Timestamp::now())?;
 	let question = state
 		.vault
 		.store

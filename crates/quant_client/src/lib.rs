@@ -534,8 +534,13 @@ impl Client {
 		request: &OverviewRequest,
 		purpose: Option<&Purpose>,
 	) -> Result<Overview> {
-		self.signed(Method::POST, routes::OVERVIEW, Some(request), &meta_of(purpose))
-			.await
+		self.signed(
+			Method::POST,
+			routes::OVERVIEW,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
 	/// Records. Agents pass `purpose`.
@@ -544,8 +549,13 @@ impl Client {
 		request: &RecordsRequest,
 		purpose: Option<&Purpose>,
 	) -> Result<Records> {
-		self.signed(Method::POST, routes::RECORDS, Some(request), &meta_of(purpose))
-			.await
+		self.signed(
+			Method::POST,
+			routes::RECORDS,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
 	/// Full-text search. Agents pass `purpose`.
@@ -554,8 +564,13 @@ impl Client {
 		request: &RecordsRequest,
 		purpose: Option<&Purpose>,
 	) -> Result<Records> {
-		self.signed(Method::POST, routes::SEARCH, Some(request), &meta_of(purpose))
-			.await
+		self.signed(
+			Method::POST,
+			routes::SEARCH,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
 	/// A numeric stream, summarised or raw. Agents pass `purpose`.
@@ -564,8 +579,13 @@ impl Client {
 		request: &SeriesRequest,
 		purpose: Option<&Purpose>,
 	) -> Result<Series> {
-		self.signed(Method::POST, routes::SERIES, Some(request), &meta_of(purpose))
-			.await
+		self.signed(
+			Method::POST,
+			routes::SERIES,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
 	/// Time spent per group in an event stream. Agents pass `purpose`.
@@ -574,8 +594,13 @@ impl Client {
 		request: &DurationsRequest,
 		purpose: Option<&Purpose>,
 	) -> Result<Durations> {
-		self.signed(Method::POST, routes::DURATIONS, Some(request), &meta_of(purpose))
-			.await
+		self.signed(
+			Method::POST,
+			routes::DURATIONS,
+			Some(request),
+			&meta_of(purpose),
+		)
+		.await
 	}
 
 	/// Media bytes and type. Agents pass `purpose`.
@@ -656,26 +681,31 @@ impl Client {
 	/// Keep a stretch of the rolling audio buffer as a clip (needs
 	/// `audio:write`).
 	pub async fn save_audio(&self, request: &SaveAudio) -> Result<SavedClip> {
-		self.signed(Method::POST, routes::AUDIO_SAVE, Some(request), &no_purpose())
-			.await
+		self.signed(
+			Method::POST,
+			routes::AUDIO_SAVE,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// Give a saved clip a new title (needs `audio:write`).
 	pub async fn rename_clip(&self, request: &RenameClip) -> Result<()> {
-		self.signed(Method::POST, routes::AUDIO_RENAME, Some(request), &no_purpose())
-			.await
+		self.signed(
+			Method::POST,
+			routes::AUDIO_RENAME,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
 	}
 
 	/// The owner's profile claims, shaped by this grant's `memory.profile`
 	/// level. Agents pass `purpose`.
 	pub async fn profile(&self, purpose: Option<&Purpose>) -> Result<ProfileClaims> {
-		self.signed::<(), _>(
-			Method::GET,
-			routes::MEMORY_PROFILE,
-			None,
-			&meta_of(purpose),
-		)
-		.await
+		self.signed::<(), _>(Method::GET, routes::MEMORY_PROFILE, None, &meta_of(purpose))
+			.await
 	}
 
 	/// Propose claims about the owner (needs `memory.profile:write`).

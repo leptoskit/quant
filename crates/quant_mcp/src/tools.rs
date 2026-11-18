@@ -92,7 +92,11 @@ pub fn tools_for(me: Option<&Me>) -> Vec<Tool> {
 			}
 		})
 		.collect();
-	let mut tools = vec![Tool::AccessStatus, Tool::BeginQuestion, Tool::AnswerQuestion];
+	let mut tools = vec![
+		Tool::AccessStatus,
+		Tool::BeginQuestion,
+		Tool::AnswerQuestion,
+	];
 	if !levels.is_empty() {
 		tools.extend([Tool::Overview, Tool::Streams, Tool::TimeSpent, Tool::Series]);
 	}
@@ -137,9 +141,13 @@ fn time_props() -> Value {
 
 /// The purpose and question arguments every data tool takes. The purpose
 /// is required: reads without one are refused and audited.
+/// The purpose argument's description, shared by every data tool.
+const PURPOSE_HELP: &str = "Why you need this data, 8 to 500 characters, in your own words. \
+                            Signed and recorded in the owner's audit log; reads without one are \
+                            refused.";
 fn purpose_props() -> Value {
 	json!({
-		"purpose": { "type": "string", "description": "Why you need this data, 8 to 500 characters, in your own words. Signed and recorded in the owner's audit log; reads without one are refused." },
+		"purpose": { "type": "string", "description": PURPOSE_HELP },
 		"question_id": { "type": "string", "description": "The id from quant_begin_question, when this read serves it. Adds the read to that question's trail." },
 	})
 }
@@ -154,7 +162,8 @@ fn schema_with(extra: &Value, required: &[&str], purpose: bool) -> Value {
 	let mut properties = time_props();
 	let mut required: Vec<&str> = required.to_vec();
 	if purpose {
-		if let (Some(props), Some(extra)) = (properties.as_object_mut(), purpose_props().as_object())
+		if let (Some(props), Some(extra)) =
+			(properties.as_object_mut(), purpose_props().as_object())
 		{
 			for (k, v) in extra {
 				props.insert(k.clone(), v.clone());
@@ -283,24 +292,26 @@ impl Tool {
 					 question, and why you need the data to answer it. Returns a question id to \
 					 pass as question_id on every read that serves it, and to record your final \
 					 answer with quant_answer. Questions left unanswered for 24 hours are \
-					 abandoned; at most 60 per hour.",
-					schema_with(
-						&json!({
+					 abandoned, and the grant caps how many you may open each hour.",
+					json!({
+						"type": "object",
+						"properties": {
 							"question": { "type": "string", "description": "The question, in your own words." },
-						}),
-						&["question"],
-						false,
-					),
+							"purpose": { "type": "string", "description": PURPOSE_HELP },
+						},
+						"required": ["question", "purpose"],
+						"additionalProperties": false,
+					}),
 				)
 			}
 			Tool::AnswerQuestion => {
 				(
 					"Answer a question",
-					"Record your final answer to a question you opened with \
-					 quant_begin_question, citing the records it rests on. Only the agent that \
-					 opened the question may answer it; every citation must be a record you \
-					 could read. The owner sees the question, the answer, and the full trail of \
-					 what you asked for and what you got.",
+					"Record your final answer to a question you opened with quant_begin_question, \
+					 citing the records it rests on. Only the agent that opened the question may \
+					 answer it; every citation must be a record you could read. The owner sees \
+					 the question, the answer, and the full trail of what you asked for and what \
+					 you got.",
 					json!({
 						"type": "object",
 						"properties": {
@@ -500,7 +511,11 @@ impl Tool {
 		};
 		let read_only = !matches!(
 			self,
-			Tool::Note | Tool::SaveAudio | Tool::Propose | Tool::BeginQuestion | Tool::AnswerQuestion
+			Tool::Note
+				| Tool::SaveAudio
+				| Tool::Propose
+				| Tool::BeginQuestion
+				| Tool::AnswerQuestion
 		);
 		json!({
 			"name": self.name(),
@@ -572,14 +587,16 @@ impl Tool {
 					.ok_or("`answer` is required")?
 					.to_owned();
 				let citations: Vec<RecordId> = match args.get("citations") {
-					Some(Value::Array(items)) => items
-						.iter()
-						.filter_map(Value::as_str)
-						.map(|id| {
-							id.parse::<RecordId>()
-								.map_err(|_| format!("bad record id `{id}`"))
-						})
-						.collect::<Result<_, _>>()?,
+					Some(Value::Array(items)) => {
+						items
+							.iter()
+							.filter_map(Value::as_str)
+							.map(|id| {
+								id.parse::<RecordId>()
+									.map_err(|_| format!("bad record id `{id}`"))
+							})
+							.collect::<Result<_, _>>()?
+					}
 					_ => Vec::new(),
 				};
 				let answered = client

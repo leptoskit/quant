@@ -217,8 +217,8 @@ impl Store {
 		};
 		self.conn().execute(
 			&format!(
-				"INSERT INTO clients ({CLIENT_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, \
-				 NULL, ?8)"
+				"INSERT INTO clients ({CLIENT_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, \
+				 ?8)"
 			),
 			params![
 				client.id.0.as_bytes().as_slice(),
@@ -231,7 +231,7 @@ impl Store {
 				client
 					.agent
 					.as_ref()
-					.map(|agent| serde_json::to_string(agent))
+					.map(serde_json::to_string)
 					.transpose()?,
 			],
 		)?;
@@ -452,7 +452,13 @@ mod tests {
 			)
 			.unwrap();
 		let b = store
-			.register_client("Other name", ClientKind::Agent, key, &scopes, Some(&agent()))
+			.register_client(
+				"Other name",
+				ClientKind::Agent,
+				key,
+				&scopes,
+				Some(&agent()),
+			)
 			.unwrap();
 		assert_eq!(a, b);
 		assert_eq!(a.status, ClientStatus::Pending);
@@ -477,20 +483,38 @@ mod tests {
 		let store = store();
 		let scopes = Scopes::default();
 		assert!(matches!(
-			store.register_client("Bare", ClientKind::Agent, ClientKey::generate().public(), &scopes, None),
+			store.register_client(
+				"Bare",
+				ClientKind::Agent,
+				ClientKey::generate().public(),
+				&scopes,
+				None
+			),
 			Err(StoreError::Invalid(_))
 		));
 		// The identity is stored cleaned and read back.
 		let mut noisy = agent();
 		noisy.product = " Claude\u{7}Code ".into();
 		let client = store
-			.register_client("Claude", ClientKind::Agent, ClientKey::generate().public(), &scopes, Some(&noisy))
+			.register_client(
+				"Claude",
+				ClientKind::Agent,
+				ClientKey::generate().public(),
+				&scopes,
+				Some(&noisy),
+			)
 			.unwrap();
 		let back = store.client(client.id).unwrap().unwrap();
 		assert_eq!(back.agent.as_ref().unwrap().product, "ClaudeCode");
 		// Non-agents may not wear one.
 		assert!(matches!(
-			store.register_client("CLI", ClientKind::Cli, ClientKey::generate().public(), &scopes, Some(&agent())),
+			store.register_client(
+				"CLI",
+				ClientKind::Cli,
+				ClientKey::generate().public(),
+				&scopes,
+				Some(&agent())
+			),
 			Err(StoreError::Invalid(_))
 		));
 	}

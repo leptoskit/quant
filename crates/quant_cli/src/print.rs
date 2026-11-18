@@ -8,6 +8,8 @@ use quant_api::Durations;
 use quant_api::Me;
 use quant_api::Overview;
 use quant_api::OwnerDeviceView;
+use quant_api::QuestionTrail;
+use quant_api::QuestionView;
 use quant_api::Records;
 use quant_api::Series;
 use quant_api::SessionSource;
@@ -54,6 +56,9 @@ pub fn clients(clients: &[ClientView]) {
 			client.name,
 			client.id
 		);
+		if let Some(agent) = &client.agent {
+			println!("    agent: {}", agent.summary());
+		}
 		if let Some(grant) = &client.grant {
 			println!("    scopes: {}", grant.scopes.to_strings().join(", "));
 			if let Some(lookback) = grant.lookback {
@@ -63,9 +68,10 @@ pub fn clients(clients: &[ClientView]) {
 				println!("    expires: {}", local(expiry));
 			}
 			println!(
-				"    limits: {}/min, {} records/h, {} MB/day{}",
+				"    limits: {}/min, {} records/h, {} questions/h, {} MB/day{}",
 				grant.limits.requests_per_minute,
 				grant.limits.records_per_hour,
+				grant.limits.questions_per_hour,
 				grant.limits.bytes_per_day / (1024 * 1024),
 				if grant.unredacted { ", unredacted" } else { "" }
 			);
@@ -147,30 +153,7 @@ pub fn owner_devices(devices: &[OwnerDeviceView]) {
 
 pub fn audit(audit: &Audit) {
 	for entry in &audit.entries {
-		let actor = match &entry.actor {
-			quant_access::audit::Actor::Owner => "owner".to_owned(),
-			quant_access::audit::Actor::System => "system".to_owned(),
-			quant_access::audit::Actor::Client { client, .. } => client.to_string(),
-			quant_access::audit::Actor::Unknown { claimed } => {
-				format!("unknown({})", claimed.as_deref().unwrap_or("?"))
-			}
-		};
-		let outcome = match &entry.outcome {
-			quant_access::audit::Outcome::Allowed { records, bytes } => {
-				format!("ok {records} rec {bytes} B")
-			}
-			quant_access::audit::Outcome::Denied { reason } => format!("DENIED {reason}"),
-			quant_access::audit::Outcome::Failed => "failed".to_owned(),
-		};
-		println!(
-			"{:>6} {}  {:<16} {:<38} {:<20} {}",
-			entry.seq,
-			local(entry.at),
-			entry.action,
-			actor,
-			short(&entry.target, 20),
-			outcome
-		);
+		audit_entry(entry);
 	}
 	match (audit.chain_ok, audit.chain_len) {
 		(Some(true), Some(n)) => println!("\nAudit chain intact ({n} entries)."),
@@ -180,6 +163,40 @@ pub fn audit(audit: &Audit) {
 			);
 		}
 		_ => {}
+	}
+}
+
+/// One audit entry, with the purpose, question, and model it carried.
+fn audit_entry(entry: &quant_access::audit::AuditEntry) {
+	let actor = match &entry.actor {
+		quant_access::audit::Actor::Owner => "owner".to_owned(),
+		quant_access::audit::Actor::System => "system".to_owned(),
+		quant_access::audit::Actor::Client { client, .. } => client.to_string(),
+		quant_access::audit::Actor::Unknown { claimed } => {
+			format!("unknown({})", claimed.as_deref().unwrap_or("?"))
+		}
+	};
+	let outcome = match &entry.outcome {
+		quant_access::audit::Outcome::Allowed { records, bytes } => {
+			format!("ok {records} rec {bytes} B")
+		}
+		quant_access::audit::Outcome::Denied { reason } => format!("DENIED {reason}"),
+		quant_access::audit::Outcome::Failed => "failed".to_owned(),
+	};
+	println!(
+		"{:>6} {}  {:<16} {:<38} {:<20} {}",
+		entry.seq,
+		local(entry.at),
+		entry.action,
+		actor,
+		short(&entry.target, 20),
+		outcome
+	);
+	if let Some(purpose) = &entry.purpose {
+		println!("       why: {purpose}");
+	}
+	if let Some(model) = &entry.model {
+		println!("       model: {model}");
 	}
 }
 
@@ -331,6 +348,73 @@ pub fn claims(claims: &[quant_core::Claim]) {
 	}
 	for claim in claims {
 		self::claim(claim);
+	}
+}
+
+/// One question an agent asked, with what it answered and what it cost.
+pub fn question(question: &QuestionView) {
+	println!(
+		"{}  {}  {:<9} {}",
+		question.id,
+		local(question.asked_at),
+		question.status.as_str(),
+		short(&question.question, 80)
+	);
+	println!("    why: {}", short(&question.purpose, 120));
+	if let Some(model) = &question.model {
+		println!("    model: {model}");
+	}
+	println!(
+		"    served: {} records, {}",
+		question.records,
+		duration_bytes(question.bytes)
+	);
+	if let Some(answered) = question.answered_at {
+		println!("    answered: {}", local(answered));
+	}
+	if let Some(answer) = &question.answer {
+		println!("    answer: {}", short(answer, 120));
+	}
+}
+
+/// The questions agents asked, recent first.
+pub fn questions(questions: &[QuestionView]) {
+	if questions.is_empty() {
+		println!("No agent has asked a question yet.");
+	}
+	for question in questions {
+		self::question(question);
+	}
+}
+
+/// One question's full trail: what was asked, what was answered, and every
+/// read that served it.
+pub fn question_trail(trail: &QuestionTrail) {
+	self::question(&trail.question);
+	if let Some(answer) = &trail.question.answer {
+		println!("\nAnswer:\n{answer}");
+	}
+	for citation in &trail.question.citations {
+		println!("  cites {citation}");
+	}
+	if trail.entries.is_empty() {
+		println!("\nNo reads were recorded under this question.");
+		return;
+	}
+	println!("\nWhat was requested under this question:");
+	for entry in &trail.entries {
+		audit_entry(entry);
+	}
+}
+
+/// A byte count, short enough for a table.
+fn duration_bytes(bytes: u64) -> String {
+	if bytes < 1024 {
+		format!("{bytes} B")
+	} else if bytes < 1024 * 1024 {
+		format!("{} KB", bytes / 1024)
+	} else {
+		format!("{} MB", bytes / (1024 * 1024))
 	}
 }
 

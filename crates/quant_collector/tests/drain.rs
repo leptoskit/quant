@@ -50,7 +50,7 @@ async fn a_spool_drains_into_the_vault_and_empties() {
 	let endpoint = Endpoint::Unix(socket);
 
 	let mut phone = Client::new(endpoint.clone(), Identity::generate("Pixel"));
-	let pairing = phone.pair(ClientKind::Device, &[]).await.unwrap();
+	let pairing = phone.pair(ClientKind::Device, &[], None).await.unwrap();
 	OwnerSession::open(endpoint, PASS)
 		.await
 		.unwrap()

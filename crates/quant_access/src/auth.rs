@@ -306,9 +306,9 @@ pub fn canonical(
 	meta: &RequestMeta,
 ) -> Vec<u8> {
 	let body_hash = blake3::hash(body).to_hex();
+	let head = format!("QUANT-SIG-V2\n{method}\n{path}\n{timestamp}\n{nonce}\n{body_hash}");
 	let [purpose, question, model] = meta.values();
-	format!("QUANT-SIG-V2\n{method}\n{path}\n{timestamp}\n{nonce}\n{body_hash}\n{purpose}\n{question}\n{model}")
-		.into_bytes()
+	format!("{head}\n{purpose}\n{question}\n{model}").into_bytes()
 }
 
 /// The bytes a scheme V1 signature covered: no purpose headers. Kept only
@@ -450,18 +450,17 @@ mod tests {
 				now,
 			)
 			.unwrap();
-		let replay =
-			verifier.verify(
-				&key.public(),
-				&headers,
-				Verify {
-					method: "POST",
-					path: "/v1/query",
-					body: b"{}",
-					allow_legacy: false,
-				},
-				now,
-			);
+		let replay = verifier.verify(
+			&key.public(),
+			&headers,
+			Verify {
+				method: "POST",
+				path: "/v1/query",
+				body: b"{}",
+				allow_legacy: false,
+			},
+			now,
+		);
 		assert!(matches!(replay, Err(AccessError::Unauthenticated(why)) if why.contains("replay")));
 	}
 
@@ -495,6 +494,28 @@ mod tests {
 	}
 
 	#[test]
+	fn the_canonical_message_carries_each_part_on_its_own_line() {
+		let meta = RequestMeta {
+			purpose: Some("finding when the owner focuses best".into()),
+			question: Some("ques_0123456789abcdef".into()),
+			model: Some("claude-opus-5-5".into()),
+		};
+		let message =
+			String::from_utf8(canonical("POST", "/v1/query", 7, "abc", b"{}", &meta)).unwrap();
+		let lines: Vec<&str> = message.lines().collect();
+		assert_eq!(lines[0], "QUANT-SIG-V2");
+		assert_eq!(lines[1], "POST");
+		assert_eq!(lines[2], "/v1/query");
+		assert_eq!(lines[3], "7");
+		assert_eq!(lines[4], "abc");
+		// The body hash, then the purpose, the question, and the model.
+		assert_eq!(lines.len(), 9);
+		assert_eq!(lines[6], "finding when the owner focuses best");
+		assert_eq!(lines[7], "ques_0123456789abcdef");
+		assert_eq!(lines[8], "claude-opus-5-5");
+	}
+
+	#[test]
 	fn the_purpose_headers_are_part_of_the_signature() {
 		let (key, client, now) = setup();
 		let meta = RequestMeta {
@@ -519,16 +540,16 @@ mod tests {
 			assert!(
 				verifier
 					.verify(
-				&key.public(),
-				&altered,
-				Verify {
-					method: "POST",
-					path: "/v1/query/search",
-					body: b"{}",
-					allow_legacy: true,
-				},
-				now,
-			)
+						&key.public(),
+						&altered,
+						Verify {
+							method: "POST",
+							path: "/v1/query/search",
+							body: b"{}",
+							allow_legacy: true,
+						},
+						now,
+					)
 					.is_err()
 			);
 		}
@@ -551,10 +572,24 @@ mod tests {
 	#[test]
 	fn v1_signatures_still_work_where_purposes_are_not_required() {
 		let (key, client, now) = setup();
-		let mut headers = sign(&key, client, "GET", "/v1/me", b"", now, &RequestMeta::default());
+		let mut headers = sign(
+			&key,
+			client,
+			"GET",
+			"/v1/me",
+			b"",
+			now,
+			&RequestMeta::default(),
+		);
 		headers.signature = URL_SAFE_NO_PAD.encode(
 			key.0
-				.sign(&canonical_v1("GET", "/v1/me", headers.timestamp, &headers.nonce, b""))
+				.sign(&canonical_v1(
+					"GET",
+					"/v1/me",
+					headers.timestamp,
+					&headers.nonce,
+					b"",
+				))
 				.to_bytes(),
 		);
 		let mut verifier = RequestVerifier::new();
@@ -575,16 +610,16 @@ mod tests {
 		assert!(
 			verifier
 				.verify(
-				&key.public(),
-				&headers,
-				Verify {
-					method: "GET",
-					path: "/v1/me",
-					body: b"",
-					allow_legacy: false,
-				},
-				now,
-			)
+					&key.public(),
+					&headers,
+					Verify {
+						method: "GET",
+						path: "/v1/me",
+						body: b"",
+						allow_legacy: false,
+					},
+					now,
+				)
 				.is_err()
 		);
 	}
@@ -597,16 +632,16 @@ mod tests {
 		assert!(
 			RequestVerifier::new()
 				.verify(
-				&other.public(),
-				&headers,
-				Verify {
-					method: "GET",
-					path: "/",
-					body: b"",
-					allow_legacy: false,
-				},
-				now,
-			)
+					&other.public(),
+					&headers,
+					Verify {
+						method: "GET",
+						path: "/",
+						body: b"",
+						allow_legacy: false,
+					},
+					now,
+				)
 				.is_err()
 		);
 	}
@@ -626,16 +661,16 @@ mod tests {
 		assert!(
 			RequestVerifier::new()
 				.verify(
-				&key.public(),
-				&headers,
-				Verify {
-					method: "GET",
-					path: "/",
-					body: b"",
-					allow_legacy: false,
-				},
-				now,
-			)
+					&key.public(),
+					&headers,
+					Verify {
+						method: "GET",
+						path: "/",
+						body: b"",
+						allow_legacy: false,
+					},
+					now,
+				)
 				.is_err()
 		);
 	}

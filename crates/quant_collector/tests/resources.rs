@@ -49,7 +49,7 @@ async fn phone() -> (tempfile::TempDir, Arc<State>, Client) {
 	}
 	let endpoint = Endpoint::Unix(socket);
 	let mut phone = Client::new(endpoint.clone(), Identity::generate("phone"));
-	let pairing = phone.pair(ClientKind::Device, &[]).await.unwrap();
+	let pairing = phone.pair(ClientKind::Device, &[], None).await.unwrap();
 	OwnerSession::open(endpoint, "correct horse battery staple")
 		.await
 		.unwrap()

@@ -353,8 +353,13 @@ pub(crate) fn deny(
 	if let Error::Forbidden(reason) = &error {
 		let (purpose, question, model) = audit_meta(&caller.meta);
 		let _ = state.vault.store.audit(
-			AuditEvent::new(caller.actor(), action, target, Outcome::Denied { reason: *reason })
-				.meta(purpose.as_deref(), question, model.as_deref()),
+			AuditEvent::new(
+				caller.actor(),
+				action,
+				target,
+				Outcome::Denied { reason: *reason },
+			)
+			.meta(purpose.as_deref(), question, model.as_deref()),
 		);
 	}
 	error

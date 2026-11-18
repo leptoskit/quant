@@ -142,7 +142,12 @@ impl AuditEvent {
 	/// Attach why the caller asked, the question it served, and the model
 	/// that ran it — everything the request's headers said about intent.
 	#[must_use]
-	pub fn meta(mut self, purpose: Option<&str>, question: Option<QuestionId>, model: Option<&str>) -> Self {
+	pub fn meta(
+		mut self,
+		purpose: Option<&str>,
+		question: Option<QuestionId>,
+		model: Option<&str>,
+	) -> Self {
 		self.purpose = purpose.map(ToOwned::to_owned);
 		self.question = question;
 		self.model = model.map(ToOwned::to_owned);
@@ -274,7 +279,9 @@ mod tests {
 		)
 		.seal(1, Timestamp::UNIX_EPOCH, GENESIS);
 		let json = serde_json::to_string(&entry).unwrap();
-		assert!(!json.contains("purpose") && !json.contains("question") && !json.contains("\"model\""));
+		assert!(
+			!json.contains("purpose") && !json.contains("question") && !json.contains("\"model\"")
+		);
 		let back: AuditEntry = serde_json::from_str(&json).unwrap();
 		assert_eq!(back.purpose, None);
 		assert_eq!(back.question, None);

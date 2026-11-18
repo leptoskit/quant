@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use jiff::SignedDuration;
 use jiff::Timestamp;
+use quant_access::AgentIdentity;
 use quant_api::ApproveRequest;
 use quant_api::ClientKind;
 use quant_client::Client;
@@ -15,6 +16,7 @@ use quant_core::Record;
 use quant_core::Sink;
 use quant_crypto::KdfParams;
 use quant_daemon::State;
+use quant_mcp::AgentSetup;
 use quant_mcp::Server;
 use quant_store::Vault;
 use quant_store::VaultPaths;
@@ -42,9 +44,34 @@ async fn daemon() -> (tempfile::TempDir, Endpoint, Arc<State>) {
 	(dir, Endpoint::Unix(socket), state)
 }
 
+/// What the test agent says it is when it pairs.
+fn identity() -> AgentIdentity {
+	AgentIdentity {
+		product: "Claude Code".into(),
+		vendor: "Anthropic".into(),
+		model: "claude-opus-5-5".into(),
+		version: "2.1.0".into(),
+		host: "test-host".into(),
+		operator: None,
+	}
+}
+
+/// The setup the server needs to pair: already paired here, so the
+/// identity is only what the tool calls carry as the model.
+fn setup() -> AgentSetup {
+	AgentSetup {
+		agent: identity(),
+		scopes: Vec::new(),
+		identity_path: None,
+	}
+}
+
 async fn paired(endpoint: &Endpoint, scopes: Option<&[&str]>) -> Client {
 	let mut client = Client::new(endpoint.clone(), Identity::generate("Claude"));
-	let pairing = client.pair(ClientKind::Agent, &[]).await.unwrap();
+	let pairing = client
+		.pair(ClientKind::Agent, &[], Some(&identity()))
+		.await
+		.unwrap();
 	if let Some(scopes) = scopes {
 		let owner = OwnerSession::open(endpoint.clone(), PASS).await.unwrap();
 		owner
@@ -83,7 +110,7 @@ fn tool_names(list: &Value) -> Vec<String> {
 #[tokio::test]
 async fn unapproved_agents_only_see_how_to_get_approved() {
 	let (_dir, endpoint, _state) = daemon().await;
-	let mut server = Server::new(paired(&endpoint, None).await);
+	let mut server = Server::new(paired(&endpoint, None).await, setup());
 	let init = call(
 		&mut server,
 		1,
@@ -144,12 +171,14 @@ async fn tools_follow_the_grant() {
 		)
 		.unwrap();
 
-	let mut summary = Server::new(paired(&endpoint, Some(&["apps:summary"])).await);
+	let mut summary = Server::new(paired(&endpoint, Some(&["apps:summary"])).await, setup());
 	let list = call(&mut summary, 1, "tools/list", json!({})).await;
 	assert_eq!(
 		tool_names(&list),
 		vec![
 			"quant_access_status",
+			"quant_begin_question",
+			"quant_answer",
 			"quant_overview",
 			"quant_streams",
 			"quant_time_spent",
@@ -160,7 +189,7 @@ async fn tools_follow_the_grant() {
 		&mut summary,
 		2,
 		"tools/call",
-		json!({ "name": "quant_time_spent", "arguments": { "stream": "apps.focus", "group_by": "app", "from": "-1h" } }),
+		json!({ "name": "quant_time_spent", "arguments": { "stream": "apps.focus", "group_by": "app", "from": "-1h", "purpose": "seeing which app the owner used" } }),
 	)
 	.await;
 	let text = spent["result"]["content"][0]["text"].as_str().unwrap();
@@ -168,7 +197,10 @@ async fn tools_follow_the_grant() {
 	assert_eq!(value["items"][0]["group"], "Zed");
 	assert!((value["items"][0]["seconds"].as_f64().unwrap() - 1200.0).abs() < 1.0);
 
-	let mut full = Server::new(paired(&endpoint, Some(&["*:raw", "memory:write"])).await);
+	let mut full = Server::new(
+		paired(&endpoint, Some(&["*:raw", "memory:write"])).await,
+		setup(),
+	);
 	let list = call(&mut full, 1, "tools/list", json!({})).await;
 	for name in [
 		"quant_timeline",
@@ -188,7 +220,7 @@ async fn tools_follow_the_grant() {
 		&mut full,
 		3,
 		"tools/call",
-		json!({ "name": "quant_search", "arguments": { "query": "noon" } }),
+		json!({ "name": "quant_search", "arguments": { "query": "noon", "purpose": "finding what the owner wrote about focus" } }),
 	)
 	.await;
 	let text = found["result"]["content"][0]["text"].as_str().unwrap();
@@ -199,7 +231,7 @@ async fn tools_follow_the_grant() {
 		&mut full,
 		4,
 		"tools/call",
-		json!({ "name": "quant_timeline", "arguments": { "from": "whenever" } }),
+		json!({ "name": "quant_timeline", "arguments": { "from": "whenever", "purpose": "seeing when the owner worked" } }),
 	)
 	.await;
 	assert_eq!(bad_time["result"]["isError"], true);
@@ -234,6 +266,7 @@ async fn profile_propose_and_context_follow_the_grant() {
 			Some(&["memory.profile:read", "memory.profile:write", "screen:read"]),
 		)
 		.await,
+		setup(),
 	);
 	let list = call(&mut reader, 1, "tools/list", json!({})).await;
 	for name in ["quant_profile", "quant_propose", "quant_context"] {
@@ -245,7 +278,7 @@ async fn profile_propose_and_context_follow_the_grant() {
 		&mut reader,
 		2,
 		"tools/call",
-		json!({ "name": "quant_profile" }),
+		json!({ "name": "quant_profile", "arguments": { "purpose": "learning the owner's stated preferences" } }),
 	)
 	.await;
 	let text = profile["result"]["content"][0]["text"].as_str().unwrap();
@@ -305,7 +338,7 @@ async fn profile_propose_and_context_follow_the_grant() {
 		&mut reader,
 		7,
 		"tools/call",
-		json!({ "name": "quant_context", "arguments": { "task": "espresso", "budget_tokens": 500 } }),
+		json!({ "name": "quant_context", "arguments": { "task": "espresso", "budget_tokens": 500, "purpose": "planning the owner's afternoon" } }),
 	)
 	.await;
 	let text = context["result"]["content"][0]["text"].as_str().unwrap();
@@ -320,7 +353,7 @@ async fn profile_propose_and_context_follow_the_grant() {
 	assert_eq!(value["profile_claims_are_the_owners_words"], true);
 
 	// A grant without the profile sees none of the three, and no resource.
-	let mut blind = Server::new(paired(&endpoint, Some(&["apps:summary"])).await);
+	let mut blind = Server::new(paired(&endpoint, Some(&["apps:summary"])).await, setup());
 	let list = call(&mut blind, 1, "tools/list", json!({})).await;
 	for name in ["quant_profile", "quant_propose", "quant_context"] {
 		assert!(!tool_names(&list).contains(&name.to_owned()), "{name}");
@@ -331,8 +364,103 @@ async fn profile_propose_and_context_follow_the_grant() {
 		&mut blind,
 		3,
 		"tools/call",
-		json!({ "name": "quant_profile" }),
+		json!({ "name": "quant_profile", "arguments": { "purpose": "learning the owner's stated preferences" } }),
 	)
 	.await;
 	assert_eq!(refused["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn a_question_flows_through_begin_read_and_answer() {
+	let (_dir, endpoint, state) = daemon().await;
+	let device = DeviceId::new();
+	let record = Record::new("screen.frame".parse().unwrap(), device)
+		.starting(Timestamp::now() - SignedDuration::from_mins(5))
+		.with_text("Wrote the release notes in Zed before noon.");
+	let cited = record.id;
+	state.record(record).unwrap();
+
+	let mut server = Server::new(paired(&endpoint, Some(&["screen:read"])).await, setup());
+	let begun = call(
+		&mut server,
+		1,
+		"tools/call",
+		json!({ "name": "quant_begin_question", "arguments": {
+			"question": "Was I writing before noon?",
+			"purpose": "the owner asked what their mornings look like",
+		} }),
+	)
+	.await;
+	assert_eq!(begun["result"]["isError"], false);
+	let opened: Value =
+		serde_json::from_str(begun["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+	let question = opened["id"].as_str().unwrap().to_owned();
+
+	// The read carries the question id, so it lands in that question's
+	// trail rather than the audit log alone.
+	let found = call(
+		&mut server,
+		2,
+		"tools/call",
+		json!({ "name": "quant_search", "arguments": {
+			"query": "release notes",
+			"purpose": "checking the owner's morning writing",
+			"question_id": question,
+		} }),
+	)
+	.await;
+	assert_eq!(found["result"]["isError"], false);
+
+	let answered = call(
+		&mut server,
+		3,
+		"tools/call",
+		json!({ "name": "quant_answer", "arguments": {
+			"question_id": question,
+			"answer": "Yes: the release notes were written in Zed before noon.",
+			"citations": [cited.0.to_string()],
+		} }),
+	)
+	.await;
+	assert_eq!(answered["result"]["isError"], false);
+	let answer: Value =
+		serde_json::from_str(answered["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+	assert_eq!(answer["status"], "answered");
+	assert_eq!(answer["citations"][0], cited.0.to_string());
+
+	// A data tool without a purpose is refused before it reaches the vault.
+	let refused = call(
+		&mut server,
+		4,
+		"tools/call",
+		json!({ "name": "quant_search", "arguments": { "query": "anything" } }),
+	)
+	.await;
+	assert_eq!(refused["result"]["isError"], true);
+	assert!(
+		refused["result"]["content"][0]["text"]
+			.as_str()
+			.unwrap()
+			.contains("purpose")
+	);
+
+	// The owner reads the question, the answer, and the read behind it.
+	let trail = OwnerSession::open(endpoint, PASS)
+		.await
+		.unwrap()
+		.question_trail(question.parse().unwrap())
+		.await
+		.unwrap();
+	assert_eq!(trail.question.question, "Was I writing before noon?");
+	assert_eq!(
+		trail.question.answer.as_deref(),
+		Some("Yes: the release notes were written in Zed before noon.")
+	);
+	let actions: Vec<&str> = trail.entries.iter().map(|e| e.action.as_str()).collect();
+	for expected in ["question.open", "search", "question.answer"] {
+		assert!(
+			actions.contains(&expected),
+			"{expected} missing from {actions:?}"
+		);
+	}
 }

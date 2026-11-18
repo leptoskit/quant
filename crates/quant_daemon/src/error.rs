@@ -64,13 +64,15 @@ impl IntoResponse for Error {
 			Error::Forbidden(denied) => (StatusCode::FORBIDDEN, "forbidden", denied.to_string()),
 			Error::NotFound => (StatusCode::NOT_FOUND, "not_found", "not found".to_owned()),
 			Error::Invalid(why) => (StatusCode::BAD_REQUEST, "invalid", why),
-		Error::PurposeRequired => (
-			StatusCode::BAD_REQUEST,
-			"purpose_required",
-			"an agent must say why it needs this data: send x-quant-purpose with 8 to 500 \
-			 characters, covered by the request signature"
-				.to_owned(),
-		),
+			Error::PurposeRequired => {
+				(
+					StatusCode::BAD_REQUEST,
+					"purpose_required",
+					"an agent must say why it needs this data: send x-quant-purpose with 8 to 500 \
+					 characters, covered by the request signature"
+						.to_owned(),
+				)
+			}
 			Error::Locked(seconds) => {
 				(
 					StatusCode::TOO_MANY_REQUESTS,

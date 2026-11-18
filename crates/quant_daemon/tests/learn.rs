@@ -14,6 +14,7 @@ use axum::routing::post;
 use jiff::SignedDuration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use quant_access::AgentIdentity;
 use quant_api::ApproveRequest;
 use quant_api::ClientKind;
 use quant_api::RecordsRequest;
@@ -22,6 +23,7 @@ use quant_client::Client;
 use quant_client::Endpoint;
 use quant_client::Identity;
 use quant_client::OwnerSession;
+use quant_client::Purpose;
 use quant_core::Authority;
 use quant_core::ClaimStatus;
 use quant_core::Class;
@@ -185,7 +187,10 @@ impl Harness {
 
 	async fn paired(&self, name: &str, approve: ApproveRequest) -> Client {
 		let mut client = Client::new(self.endpoint.clone(), Identity::generate(name));
-		let pairing = client.pair(ClientKind::Agent, &[]).await.unwrap();
+		let pairing = client
+			.pair(ClientKind::Agent, &[], Some(&identity(name)))
+			.await
+			.unwrap();
 		self.owner()
 			.await
 			.approve(&ApproveRequest {
@@ -196,6 +201,23 @@ impl Harness {
 			.unwrap();
 		client
 	}
+}
+
+/// What an agent says about itself when it pairs.
+fn identity(name: &str) -> AgentIdentity {
+	AgentIdentity {
+		product: name.to_owned(),
+		vendor: "Quant tests".into(),
+		model: "test-model".into(),
+		version: env!("CARGO_PKG_VERSION").into(),
+		host: "test-host".into(),
+		operator: None,
+	}
+}
+
+/// Why an agent is reading: agents must send one on every data route.
+fn purpose() -> Purpose {
+	Purpose::purpose("answering a test question about the owner")
 }
 
 fn approve(scopes: &[&str]) -> ApproveRequest {
@@ -315,11 +337,14 @@ async fn hybrid_search_respects_scopes_and_deny_classes() {
 	let agent = h.paired("Cautious", request).await;
 	for mode in [None, Some(SearchMode::Hybrid), Some(SearchMode::Similar)] {
 		let answer = agent
-			.search(&RecordsRequest {
-				search: Some("coffee".into()),
-				mode,
-				..Default::default()
-			})
+			.search(
+				&RecordsRequest {
+					search: Some("coffee".into()),
+					mode,
+					..Default::default()
+				},
+				Some(&purpose()),
+			)
 			.await
 			.unwrap();
 		assert!(!answer.records.is_empty(), "mode {mode:?}");
@@ -339,11 +364,14 @@ async fn hybrid_search_respects_scopes_and_deny_classes() {
 
 	// Keyword-only still works and serves the health record when not denied.
 	let keyword = agent
-		.search(&RecordsRequest {
-			search: Some("coffee".into()),
-			mode: Some(SearchMode::Keyword),
-			..Default::default()
-		})
+		.search(
+			&RecordsRequest {
+				search: Some("coffee".into()),
+				mode: Some(SearchMode::Keyword),
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(
@@ -355,11 +383,14 @@ async fn hybrid_search_respects_scopes_and_deny_classes() {
 
 	let open = h.paired("Open", approve(&["*:read"])).await;
 	let answer = open
-		.search(&RecordsRequest {
-			search: Some("coffee".into()),
-			mode: Some(SearchMode::Hybrid),
-			..Default::default()
-		})
+		.search(
+			&RecordsRequest {
+				search: Some("coffee".into()),
+				mode: Some(SearchMode::Hybrid),
+				..Default::default()
+			},
+			Some(&purpose()),
+		)
 		.await
 		.unwrap();
 	assert!(

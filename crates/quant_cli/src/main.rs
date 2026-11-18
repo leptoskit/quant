@@ -237,7 +237,13 @@ enum Command {
 	/// (asks for the passphrase).
 	Questions {
 		#[command(subcommand)]
-		action: QuestionsAction,
+		action: Option<QuestionsAction>,
+		/// Most questions to list.
+		#[arg(long, default_value_t = 50)]
+		recent: usize,
+		/// Only this client's questions (client id or pairing code).
+		#[arg(long)]
+		agent: Option<String>,
 	},
 	/// Your profile: what you told Quant about yourself, then the rest by
 	/// confidence (asks for the passphrase).
@@ -339,7 +345,7 @@ impl Window {
 	}
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Kind {
 	Agent,
 	Cli,
@@ -541,19 +547,10 @@ impl From<PolicyArg> for quant_access::OwnerDevicePolicy {
 /// What to do with the questions ledger.
 #[derive(Subcommand)]
 enum QuestionsAction {
-	/// List questions agents asked, recent first.
-	List {
-		/// Most questions.
-		#[arg(long, default_value_t = 50)]
-		recent: usize,
-		/// Only this client's questions (client id or pairing code).
-		#[arg(long)]
-		agent: Option<String>,
-	},
 	/// Show one question's full trail: the question, the answer, and every
 	/// read that served it.
 	Show {
-		/// The question id, as `quant questions list` shows it.
+		/// The question id, as `quant questions` shows it.
 		id: QuestionId,
 	},
 }
@@ -747,7 +744,10 @@ async fn main() -> Result<()> {
 		}
 		Command::Overview(window) => {
 			let (from, to) = window.resolve()?;
-			let overview = cx.client()?.overview(&OverviewRequest { from, to }, None).await?;
+			let overview = cx
+				.client()?
+				.overview(&OverviewRequest { from, to }, None)
+				.await?;
 			cx.show(&overview, print::overview);
 			Ok(())
 		}
@@ -851,7 +851,11 @@ async fn main() -> Result<()> {
 			Ok(())
 		}
 		Command::Claims { action } => claims(&cx, action).await,
-		Command::Questions { action } => questions(&cx, action).await,
+		Command::Questions {
+			action,
+			recent,
+			agent,
+		} => questions(&cx, action, recent, agent).await,
 		Command::Profile => profile(&cx).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
 		Command::Import { source } => import::run(&cx, source).await,
@@ -933,9 +937,7 @@ async fn pair(cx: &Ctx, name: Option<String>, kind: Kind, scopes: &[String]) -> 
 			operator: None,
 		}
 	});
-	let response = client
-		.pair(kind.into(), scopes, agent.as_ref())
-		.await?;
+	let response = client.pair(kind.into(), scopes, agent.as_ref()).await?;
 	client.identity().save(&path)?;
 	println!("Pairing code: {}", response.pairing_code);
 	println!("Status: {:?}", response.status);
@@ -991,7 +993,8 @@ async fn approve(cx: &Ctx, args: ApproveArgs) -> Result<()> {
 	let owner = cx.owner().await?;
 	let limits = (args.requests_per_minute.is_some()
 		|| args.records_per_hour.is_some()
-		|| args.mb_per_day.is_some())
+		|| args.mb_per_day.is_some()
+		|| args.questions_per_hour.is_some())
 	.then(|| {
 		let defaults = Limits::default();
 		Limits {
@@ -999,6 +1002,9 @@ async fn approve(cx: &Ctx, args: ApproveArgs) -> Result<()> {
 				.requests_per_minute
 				.unwrap_or(defaults.requests_per_minute),
 			records_per_hour: args.records_per_hour.unwrap_or(defaults.records_per_hour),
+			questions_per_hour: args
+				.questions_per_hour
+				.unwrap_or(defaults.questions_per_hour),
 			bytes_per_day: args
 				.mb_per_day
 				.map_or(defaults.bytes_per_day, |mb| mb * 1024 * 1024),
@@ -1101,10 +1107,19 @@ async fn claims(cx: &Ctx, action: ClaimsAction) -> Result<()> {
 	Ok(())
 }
 
-async fn questions(cx: &Ctx, action: QuestionsAction) -> Result<()> {
+async fn questions(
+	cx: &Ctx,
+	action: Option<QuestionsAction>,
+	recent: usize,
+	agent: Option<String>,
+) -> Result<()> {
 	let owner = cx.owner().await?;
 	match action {
-		QuestionsAction::List { recent, agent } => {
+		Some(QuestionsAction::Show { id }) => {
+			let trail = owner.question_trail(id).await?;
+			cx.show(&trail, print::question_trail);
+		}
+		None => {
 			// A pairing code or client id narrows the list to one agent.
 			let client = if let Some(agent) = &agent {
 				let clients = owner.clients().await?;
@@ -1126,11 +1141,7 @@ async fn questions(cx: &Ctx, action: QuestionsAction) -> Result<()> {
 					client,
 				})
 				.await?;
-			cx.show(&questions, print::questions);
-		}
-		QuestionsAction::Show { id } => {
-			let trail = owner.question_trail(id).await?;
-			cx.show(&trail, print::question_trail);
+			cx.show(&questions, |questions| print::questions(questions));
 		}
 	}
 	Ok(())
@@ -1257,30 +1268,31 @@ async fn mcp(cx: &Ctx, scopes: &[String], setup: bool) -> Result<()> {
 			"Approve it with `quant approve <code>`; the code is printed to stderr and shown by"
 		);
 		println!("the agent's quant_access_status tool.");
+		println!(
+			"\nIt introduces itself as an agent: product, vendor, model, version, and host. Set \
+			 QUANT_MCP_PRODUCT, QUANT_MCP_VENDOR, QUANT_MCP_MODEL, QUANT_MCP_VERSION, and \
+			 QUANT_MCP_OPERATOR to say exactly what runs, or leave them for the MCP client's \
+			 initialize message to fill in."
+		);
 		return Ok(());
 	}
 	let path = cx.identity_path();
 	let client = if let Ok(identity) = Identity::load(&path) {
 		Client::new(cx.endpoint.clone(), identity)
 	} else {
-		let mut client = Client::new(
+		Client::new(
 			cx.endpoint.clone(),
 			Identity::generate(format!("{} (MCP)", cx.profile)),
-		);
-		match client.pair(ClientKind::Agent, scopes).await {
-			Ok(response) => {
-				client.identity().save(&path)?;
-				eprintln!(
-					"quant: asked the vault to pair this agent. Approve it with `quant approve \
-					 {}`.",
-					response.pairing_code
-				);
-			}
-			Err(error) => eprintln!("quant: could not pair yet: {error}"),
-		}
-		client
+		)
 	};
-	quant_mcp::serve_stdio(client).await?;
+	// The server pairs on `initialize`, once the MCP client has said who it
+	// is: the environment says what to claim, and `clientInfo` refines it.
+	let setup = quant_mcp::AgentSetup {
+		agent: quant_mcp::agent_from_env(&hostname()),
+		scopes: scopes.to_vec(),
+		identity_path: Some(path),
+	};
+	quant_mcp::serve_stdio(client, setup).await?;
 	Ok(())
 }
 

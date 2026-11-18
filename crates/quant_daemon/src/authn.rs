@@ -55,10 +55,7 @@ impl Caller {
 	/// The question this request serves, when it named one that is the
 	/// caller's to serve.
 	pub fn question(&self) -> Option<QuestionId> {
-		self.meta
-			.question
-			.as_deref()
-			.and_then(|q| q.parse().ok())
+		self.meta.question.as_deref().and_then(|q| q.parse().ok())
 	}
 }
 
@@ -127,16 +124,22 @@ fn admit(state: &State, client: Client, meta: RequestMeta, path: &str) -> Result
 		grant,
 		meta,
 	};
-	let refused = caller
-		.grant
-		.check_live(now)
-		.err()
-		.or_else(|| state.limiter().admit(caller.grant.id, &caller.grant.limits, now).err());
+	let refused = caller.grant.check_live(now).err().or_else(|| {
+		state
+			.limiter()
+			.admit(caller.grant.id, &caller.grant.limits, now)
+			.err()
+	});
 	if let Some(denied) = refused {
 		let (purpose, question, model) = audit_meta(&caller.meta);
 		state.vault.store.audit(
-			AuditEvent::new(caller.actor(), "request", "", Outcome::Denied { reason: denied })
-				.meta(purpose.as_deref(), question, model.as_deref()),
+			AuditEvent::new(
+				caller.actor(),
+				"request",
+				"",
+				Outcome::Denied { reason: denied },
+			)
+			.meta(purpose.as_deref(), question, model.as_deref()),
 		)?;
 		return Err(Error::Forbidden(denied));
 	}

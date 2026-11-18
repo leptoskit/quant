@@ -760,12 +760,7 @@ fn grant_card(state: &State, grant: &GrantRow) -> Element {
 		)
 		.child(Text(grant.scopes.join("  ")).class(BODY))
 		.child(Text(format!("Sees back {}{expires}", grant.lookback)).class(MUTED))
-		.children(
-			grant
-				.agent
-				.as_deref()
-				.map(|agent| Text(agent).class(MUTED)),
-		)
+		.children(grant.agent.as_deref().map(|agent| Text(agent).class(MUTED)))
 }
 
 fn devices_tab(state: &State) -> Element {
@@ -1313,6 +1308,10 @@ mod tests {
 					id: "c1".into(),
 					name: "Claude Code".into(),
 					kind: "agent".into(),
+					agent: Some(
+						"Claude Code (Anthropic) claude-opus-5-5 2.1.0 on mini, operated by Ada"
+							.into(),
+					),
 					code: "K7QD-M2XA".into(),
 					requested: vec!["health:summary".into(), "screen:read".into()],
 					asked: "Today 14:00".into(),
@@ -1323,6 +1322,7 @@ mod tests {
 					scopes: vec!["motion:write".into()],
 					lookback: "No limit".into(),
 					expires: None,
+					agent: None,
 				}],
 				audit: vec![AuditRow {
 					seq: 7,
