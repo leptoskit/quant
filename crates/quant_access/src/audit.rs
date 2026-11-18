@@ -3,6 +3,7 @@
 use jiff::Timestamp;
 use quant_core::ClientId;
 use quant_core::GrantId;
+use quant_core::QuestionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -55,7 +56,9 @@ pub enum Outcome {
 /// after it.
 ///
 /// Entries record the shape of a request (which stream, what range, which
-/// tool), never the data served.
+/// tool), never the data served. The purpose an agent gave for a read, the
+/// question it served, and the model it ran are part of the shape, so they
+/// are hashed into the chain like the rest.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditEntry {
 	/// Position in the chain, from 1.
@@ -71,6 +74,16 @@ pub struct AuditEntry {
 	pub target: String,
 	/// What came of it.
 	pub outcome: Outcome,
+	/// Why the caller asked, when it said. Purpose text is the caller's own
+	/// words about the request, not vault data, so the chain covers it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub purpose: Option<String>,
+	/// The question this request served, when one was open for it.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub question: Option<QuestionId>,
+	/// The model that actually ran this request, when the caller said.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub model: Option<String>,
 	/// The request's shape: ranges, limits, levels.
 	#[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
 	pub detail: serde_json::Value,
@@ -94,18 +107,27 @@ pub struct AuditEvent {
 	pub target: String,
 	/// What came of it.
 	pub outcome: Outcome,
+	/// Why the caller asked, when it said.
+	pub purpose: Option<String>,
+	/// The question this request served, when one was open for it.
+	pub question: Option<QuestionId>,
+	/// The model that actually ran this request, when the caller said.
+	pub model: Option<String>,
 	/// The request's shape.
 	pub detail: serde_json::Value,
 }
 
 impl AuditEvent {
-	/// An event with no detail.
+	/// An event with no detail and no stated purpose.
 	pub fn new(actor: Actor, action: &str, target: impl Into<String>, outcome: Outcome) -> Self {
 		Self {
 			actor,
 			action: action.to_owned(),
 			target: target.into(),
 			outcome,
+			purpose: None,
+			question: None,
+			model: None,
 			detail: serde_json::Value::Null,
 		}
 	}
@@ -114,6 +136,16 @@ impl AuditEvent {
 	#[must_use]
 	pub fn detail(mut self, detail: serde_json::Value) -> Self {
 		self.detail = detail;
+		self
+	}
+
+	/// Attach why the caller asked, the question it served, and the model
+	/// that ran it — everything the request's headers said about intent.
+	#[must_use]
+	pub fn meta(mut self, purpose: Option<&str>, question: Option<QuestionId>, model: Option<&str>) -> Self {
+		self.purpose = purpose.map(ToOwned::to_owned);
+		self.question = question;
+		self.model = model.map(ToOwned::to_owned);
 		self
 	}
 
@@ -126,6 +158,9 @@ impl AuditEvent {
 			action: self.action,
 			target: self.target,
 			outcome: self.outcome,
+			purpose: self.purpose,
+			question: self.question,
+			model: self.model,
 			detail: self.detail,
 			prev: prev.to_owned(),
 			hash: String::new(),
@@ -204,6 +239,11 @@ mod tests {
 						bytes: 10,
 					},
 				)
+				.meta(
+					Some("answering the owner's sleep question"),
+					Some(QuestionId::new()),
+					Some("claude-opus-5-5"),
+				)
 				.seal(seq, Timestamp::UNIX_EPOCH, &prev);
 				prev.clone_from(&entry.hash);
 				entry
@@ -213,7 +253,33 @@ mod tests {
 
 	#[test]
 	fn an_untouched_chain_verifies() {
-		assert_eq!(verify_chain(GENESIS, &chain(5)), Ok(()));
+		let entries = chain(5);
+		assert_eq!(verify_chain(GENESIS, &entries), Ok(()));
+		assert!(entries.iter().all(|e| e.purpose.is_some()));
+	}
+
+	#[test]
+	fn entries_written_before_purposes_still_verify() {
+		// An entry sealed without a purpose serialises exactly as entries
+		// written before purposes existed: no purpose, question, or model
+		// key at all. It must load and keep its hash.
+		let entry = AuditEvent::new(
+			Actor::System,
+			"query",
+			"health.heart_rate",
+			Outcome::Allowed {
+				records: 0,
+				bytes: 0,
+			},
+		)
+		.seal(1, Timestamp::UNIX_EPOCH, GENESIS);
+		let json = serde_json::to_string(&entry).unwrap();
+		assert!(!json.contains("purpose") && !json.contains("question") && !json.contains("\"model\""));
+		let back: AuditEntry = serde_json::from_str(&json).unwrap();
+		assert_eq!(back.purpose, None);
+		assert_eq!(back.question, None);
+		assert_eq!(back.model, None);
+		assert_eq!(back.compute_hash(), entry.hash);
 	}
 
 	#[test]
@@ -224,6 +290,13 @@ mod tests {
 			bytes: 0,
 		};
 		assert_eq!(verify_chain(GENESIS, &edited), Err(ChainBreak::Altered(3)));
+
+		let mut purpose_edited = chain(5);
+		purpose_edited[2].purpose = Some("no reason at all".into());
+		assert_eq!(
+			verify_chain(GENESIS, &purpose_edited),
+			Err(ChainBreak::Altered(3))
+		);
 
 		let mut removed = chain(5);
 		removed.remove(2);

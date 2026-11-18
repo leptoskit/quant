@@ -693,6 +693,12 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 	View()
 		.class(CARD)
 		.child(Text(format!("{} ({})", client.name, client.kind)).class(HEADING))
+		.children(
+			client
+				.agent
+				.as_deref()
+				.map(|agent| Text(agent).class(MUTED)),
+		)
 		.child(
 			Text(format!(
 				"Pairing code {} · asked {}",
@@ -754,6 +760,12 @@ fn grant_card(state: &State, grant: &GrantRow) -> Element {
 		)
 		.child(Text(grant.scopes.join("  ")).class(BODY))
 		.child(Text(format!("Sees back {}{expires}", grant.lookback)).class(MUTED))
+		.children(
+			grant
+				.agent
+				.as_deref()
+				.map(|agent| Text(agent).class(MUTED)),
+		)
 }
 
 fn devices_tab(state: &State) -> Element {

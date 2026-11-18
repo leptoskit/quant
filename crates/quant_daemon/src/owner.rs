@@ -109,17 +109,45 @@ pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
 }
 
 /// `POST /v1/pair`. Unauthenticated: it only ever creates a pending client
-/// with no access, and the number waiting is capped.
+/// with no access, and the number waiting is capped. An agent must say
+/// what it is — product, vendor, model, version, and host — and no other
+/// kind of client may wear an identity.
 pub async fn pair(
 	AxumState(state): Shared,
 	Json(body): Json<PairRequest>,
 ) -> ApiResult<Json<PairResponse>> {
 	let scopes = Scopes::parse(&body.scopes)?;
+	if body.kind == quant_api::ClientKind::Agent
+		&& body.agent.as_ref().is_none_or(|agent| !agent.is_complete())
+	{
+		state.vault.store.audit(
+			AuditEvent::new(
+				Actor::Unknown {
+					claimed: Some(body.name.clone()),
+				},
+				"pair.request",
+				"",
+				Outcome::Failed,
+			)
+			.detail(serde_json::json!({ "reason": "agent identity required", "kind": "agent" })),
+		)?;
+		return Err(Error::Invalid(
+			"an agent must say exactly what it is: product, vendor, model, version, and host \
+			 belong in the pairing request's `agent` field"
+				.into(),
+		));
+	}
+	if body.kind != quant_api::ClientKind::Agent && body.agent.is_some() {
+		return Err(Error::Invalid(
+			"only agents pair with an agent identity".into(),
+		));
+	}
 	let client = state.vault.store.register_client(
 		&body.name,
 		kind_in(body.kind),
 		body.public_key,
 		&scopes,
+		body.agent.as_ref(),
 	)?;
 	if client.status == ClientStatus::Pending
 		&& client.created_at > Timestamp::now() - SignedDuration::from_secs(5)
@@ -136,9 +164,18 @@ pub async fn pair(
 					bytes: 0,
 				},
 			)
-			.detail(
-				serde_json::json!({ "scopes": scopes.to_strings(), "code": client.pairing_code() }),
-			),
+			.detail(serde_json::json!({
+				"scopes": scopes.to_strings(),
+				"code": client.pairing_code(),
+				"agent": client.agent.as_ref().map(|agent| serde_json::json!({
+					"product": agent.product,
+					"vendor": agent.vendor,
+					"model": agent.model,
+					"version": agent.version,
+					"host": agent.host,
+					"operator": agent.operator,
+				})),
+			})),
 		)?;
 	}
 	Ok(Json(PairResponse {
@@ -195,6 +232,7 @@ fn view(state: &State, client: Client) -> ApiResult<ClientView> {
 		id: client.id,
 		name: client.name,
 		kind: kind_out(client.kind),
+		agent: client.agent,
 		status: status_out(client.status),
 		requested: client.requested.to_strings(),
 		created_at: client.created_at,

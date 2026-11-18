@@ -764,7 +764,10 @@ impl Worker {
 			.cloned()
 			.ok_or("This moment has no audio to play")?;
 		let client = self.ready_client()?;
-		let (_, bytes) = client.media(&media.hash).await.map_err(|e| problem(&e))?;
+		let (_, bytes) = client
+			.media(&media.hash, None)
+			.await
+			.map_err(|e| problem(&e))?;
 		let path = crate::playback::write(&self.config.cache, id, &bytes)
 			.map_err(|e| format!("Couldn't prepare the clip: {e}"))?;
 		let child = crate::playback::play(&path).map_err(|e| {
@@ -890,7 +893,7 @@ impl Worker {
 			.map(|s| (*s).to_owned())
 			.collect();
 		let before = client.identity().client;
-		let pairing = match client.pair(ClientKind::Device, &scopes).await {
+		let pairing = match client.pair(ClientKind::Device, &scopes, None).await {
 			Ok(pairing) => pairing,
 			Err(error) => {
 				return Link::Unreachable {
@@ -936,7 +939,7 @@ impl Worker {
 			limit: Some(50),
 			..RecordsRequest::default()
 		};
-		let records = match client.records(&request).await {
+		let records = match client.records(&request, None).await {
 			Ok(records) => records.records,
 			// No clips yet, or a daemon without them: nothing to list.
 			Err(_) => Vec::new(),
@@ -1201,10 +1204,22 @@ fn owner_view(
 					.ok()
 					.and_then(|v| v.as_str().map(ToOwned::to_owned))
 					.unwrap_or_default(),
+				agent: c.agent.as_ref().map(|agent| agent.summary()),
 				code: c.pairing_code.clone(),
 				requested: c.requested.clone(),
 				asked: words::when(c.created_at, now, tz),
 			}
+		})
+		.collect();
+	// Grants show the agent identity of the client holding them, when the
+	// client is still known.
+	let agent_of: HashMap<String, String> = data
+		.clients
+		.iter()
+		.filter_map(|c| {
+			c.agent
+				.as_ref()
+				.map(|agent| (c.id.to_string(), agent.summary()))
 		})
 		.collect();
 	let grants = data
@@ -1218,6 +1233,7 @@ fn owner_view(
 				scopes: g.scopes.to_strings(),
 				lookback: words::lookback(g.lookback),
 				expires: g.expires_at.map(|at| words::when(at, now, tz)),
+				agent: agent_of.get(&g.client.to_string()).cloned(),
 			}
 		})
 		.collect();

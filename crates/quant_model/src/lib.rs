@@ -189,6 +189,10 @@ pub struct PendingClient {
 	pub name: String,
 	/// What sort: agent, device, cli, app.
 	pub kind: String,
+	/// What it said it was, when an agent pairs: product, vendor, model,
+	/// version, host, such as "Claude Code (Anthropic) claude-opus-5-5 on
+	/// mini".
+	pub agent: Option<String>,
 	/// Its pairing code.
 	pub code: String,
 	/// The scopes it asked for.
@@ -210,6 +214,8 @@ pub struct GrantRow {
 	pub lookback: String,
 	/// When it expires, if it does.
 	pub expires: Option<String>,
+	/// What the agent holding it said it was, when an agent.
+	pub agent: Option<String>,
 }
 
 /// One audit entry.
@@ -436,6 +442,7 @@ mod tests {
 			id: "c1".into(),
 			name: "Claude Code".into(),
 			kind: "agent".into(),
+			agent: Some("Claude Code (Anthropic) claude-opus-5-5 on mini".into()),
 			code: "K7QD-M2XA".into(),
 			requested: requested.iter().map(|s| (*s).to_owned()).collect(),
 			asked: "Today 14:03".into(),

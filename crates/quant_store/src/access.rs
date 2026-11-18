@@ -1,4 +1,5 @@
 use jiff::Timestamp;
+use quant_access::AgentIdentity;
 use quant_access::Grant;
 use quant_access::Scopes;
 use quant_access::auth::PublicKey;
@@ -92,6 +93,8 @@ pub struct Client {
 	pub name: String,
 	/// What sort of client.
 	pub kind: ClientKind,
+	/// What it said it was, when an agent paired.
+	pub agent: Option<AgentIdentity>,
 	/// Its public signing key.
 	pub public_key: PublicKey,
 	/// Where it stands.
@@ -120,11 +123,16 @@ fn client_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Client>> {
 	let requested: String = row.get(5)?;
 	let created: i64 = row.get(6)?;
 	let seen: Option<i64> = row.get(7)?;
+	let agent: Option<String> = row.get(8)?;
 	Ok((|| {
 		Ok(Client {
 			id: ClientId(Uuid::from_slice(&id).map_err(|_| StoreError::Corrupt("client id"))?),
 			name,
 			kind: ClientKind::parse(&kind)?,
+			agent: agent
+				.map(|json| serde_json::from_str(&json))
+				.transpose()
+				.map_err(|_| StoreError::Corrupt("client agent identity"))?,
 			public_key: key.parse().map_err(|_| StoreError::Corrupt("client key"))?,
 			status: ClientStatus::parse(&status)?,
 			requested: serde_json::from_str(&requested)?,
@@ -135,7 +143,7 @@ fn client_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Client>> {
 }
 
 const CLIENT_COLUMNS: &str =
-	"id, name, kind, public_key, status, requested, created_us, last_seen_us";
+	"id, name, kind, public_key, status, requested, created_us, last_seen_us, agent";
 
 /// Most clients that may wait for approval at once, so an unauthenticated
 /// caller cannot flood the owner's list.
@@ -143,15 +151,17 @@ pub const MAX_PENDING: usize = 16;
 
 impl Store {
 	/// Record a pairing request. Asking again with the same key returns the
-	/// existing client unchanged.
+	/// existing client unchanged. `agent` is what an agent said it was; it
+	/// must be `Some` for agents and is refused for everyone else.
 	pub fn register_client(
 		&self,
 		name: &str,
 		kind: ClientKind,
 		public_key: PublicKey,
 		requested: &Scopes,
+		agent: Option<&AgentIdentity>,
 	) -> Result<Client> {
-		self.register_client_at(name, kind, public_key, requested, Timestamp::now())
+		self.register_client_at(name, kind, public_key, requested, agent, Timestamp::now())
 	}
 
 	fn register_client_at(
@@ -160,6 +170,7 @@ impl Store {
 		kind: ClientKind,
 		public_key: PublicKey,
 		requested: &Scopes,
+		agent: Option<&AgentIdentity>,
 		now: Timestamp,
 	) -> Result<Client> {
 		if let Some(existing) = self.client_by_key(&public_key)? {
@@ -176,10 +187,27 @@ impl Store {
 			));
 		}
 		let name: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
+		let agent = match (kind, agent) {
+			(ClientKind::Agent, Some(agent)) => Some(agent.sanitised()),
+			(ClientKind::Agent, None) => {
+				return Err(StoreError::Invalid(
+					"an agent must say what it is: product, vendor, model, version, and host \
+					 belong in the pairing request"
+						.into(),
+				));
+			}
+			(_, None) => None,
+			(_, Some(_)) => {
+				return Err(StoreError::Invalid(
+					"only agents pair with an agent identity".into(),
+				));
+			}
+		};
 		let client = Client {
 			id: ClientId::new(),
 			name,
 			kind,
+			agent,
 			public_key,
 			status: ClientStatus::Pending,
 			requested: requested.clone(),
@@ -189,7 +217,8 @@ impl Store {
 		};
 		self.conn().execute(
 			&format!(
-				"INSERT INTO clients ({CLIENT_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)"
+				"INSERT INTO clients ({CLIENT_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, \
+				 NULL, ?8)"
 			),
 			params![
 				client.id.0.as_bytes().as_slice(),
@@ -199,6 +228,11 @@ impl Store {
 				client.status.as_str(),
 				serde_json::to_string(&client.requested)?,
 				micros(client.created_at),
+				client
+					.agent
+					.as_ref()
+					.map(|agent| serde_json::to_string(agent))
+					.transpose()?,
 			],
 		)?;
 		Ok(client)
@@ -385,10 +419,22 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+	use quant_access::AgentIdentity;
 	use quant_access::auth::ClientKey;
 
 	use super::*;
 	use crate::test_support::store;
+
+	fn agent() -> AgentIdentity {
+		AgentIdentity {
+			product: "Claude Code".into(),
+			vendor: "Anthropic".into(),
+			model: "claude-opus-5-5".into(),
+			version: "2.1.0".into(),
+			host: "mini".into(),
+			operator: None,
+		}
+	}
 
 	#[test]
 	fn pairing_is_idempotent_per_key() {
@@ -401,14 +447,19 @@ mod tests {
 				ClientKind::Agent,
 				key,
 				&scopes,
+				Some(&agent()),
 				"2026-11-12T12:00:00.123456789Z".parse().unwrap(),
 			)
 			.unwrap();
 		let b = store
-			.register_client("Other name", ClientKind::Agent, key, &scopes)
+			.register_client("Other name", ClientKind::Agent, key, &scopes, Some(&agent()))
 			.unwrap();
 		assert_eq!(a, b);
 		assert_eq!(a.status, ClientStatus::Pending);
+		assert_eq!(
+			a.agent.as_ref().map(AgentIdentity::summary),
+			Some("Claude Code (Anthropic) claude-opus-5-5 2.1.0 on mini".to_owned())
+		);
 		assert_eq!(
 			store.find_pending(&a.pairing_code()).unwrap(),
 			Some(a.clone())
@@ -422,23 +473,48 @@ mod tests {
 	}
 
 	#[test]
+	fn agents_pair_with_an_identity_or_are_refused() {
+		let store = store();
+		let scopes = Scopes::default();
+		assert!(matches!(
+			store.register_client("Bare", ClientKind::Agent, ClientKey::generate().public(), &scopes, None),
+			Err(StoreError::Invalid(_))
+		));
+		// The identity is stored cleaned and read back.
+		let mut noisy = agent();
+		noisy.product = " Claude\u{7}Code ".into();
+		let client = store
+			.register_client("Claude", ClientKind::Agent, ClientKey::generate().public(), &scopes, Some(&noisy))
+			.unwrap();
+		let back = store.client(client.id).unwrap().unwrap();
+		assert_eq!(back.agent.as_ref().unwrap().product, "ClaudeCode");
+		// Non-agents may not wear one.
+		assert!(matches!(
+			store.register_client("CLI", ClientKind::Cli, ClientKey::generate().public(), &scopes, Some(&agent())),
+			Err(StoreError::Invalid(_))
+		));
+	}
+
+	#[test]
 	fn caps_waiting_pairings() {
 		let store = store();
 		for _ in 0..MAX_PENDING {
 			store
 				.register_client(
 					"x",
-					ClientKind::Agent,
+					ClientKind::Cli,
 					ClientKey::generate().public(),
 					&Scopes::default(),
+					None,
 				)
 				.unwrap();
 		}
 		let overflow = store.register_client(
 			"x",
-			ClientKind::Agent,
+			ClientKind::Cli,
 			ClientKey::generate().public(),
 			&Scopes::default(),
+			None,
 		);
 		assert!(matches!(overflow, Err(StoreError::Invalid(_))));
 	}
@@ -452,6 +528,7 @@ mod tests {
 				ClientKind::Agent,
 				ClientKey::generate().public(),
 				&Scopes::default(),
+				Some(&agent()),
 			)
 			.unwrap();
 		let first = Grant::new(

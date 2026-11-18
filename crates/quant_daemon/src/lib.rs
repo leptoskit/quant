@@ -18,6 +18,7 @@ mod memory;
 mod owner;
 mod owner_devices;
 pub mod query;
+mod questions;
 pub mod relay;
 mod state;
 pub mod tls;
@@ -96,6 +97,11 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::MEMORY_PROFILE, get(memory::profile))
 		.route(routes::MEMORY_PROPOSALS, post(memory::propose))
 		.route(routes::CONTEXT, post(memory::context))
+		.route(routes::QUESTIONS, post(questions::open))
+		.route(routes::QUESTIONS_MINE, get(questions::mine))
+		.route(routes::QUESTION_ANSWER, post(questions::answer))
+		.route(routes::OWNER_QUESTIONS, post(questions::owner_list))
+		.route(routes::OWNER_QUESTION_TRAIL, post(questions::owner_trail))
 		.route(routes::OWNER_CLAIMS, post(claims::tell))
 		.route(routes::OWNER_CLAIMS_LIST, post(claims::list))
 		.route(routes::OWNER_CLAIM_APPROVE, post(claims::approve))

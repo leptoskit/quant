@@ -18,6 +18,7 @@ use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use jiff::Timestamp;
+use quant_access::AgentIdentity;
 use quant_access::Limits;
 use quant_api::ApproveRequest;
 use quant_api::AuditRequest;
@@ -29,6 +30,7 @@ use quant_api::IngestRecords;
 use quant_api::OverviewRequest;
 use quant_api::OwnerClaimRequest;
 use quant_api::PurgeRequest;
+use quant_api::QuestionListRequest;
 use quant_api::RecordsRequest;
 use quant_api::SeriesRequest;
 use quant_client::Client;
@@ -42,6 +44,7 @@ use quant_core::ClaimStatus;
 use quant_core::Class;
 use quant_core::DeviceId;
 use quant_core::OwnerDeviceId;
+use quant_core::QuestionId;
 use quant_core::Record;
 use quant_store::VaultPaths;
 
@@ -229,6 +232,12 @@ enum Command {
 	Claims {
 		#[command(subcommand)]
 		action: ClaimsAction,
+	},
+	/// See what agents asked, what they answered, and what they got
+	/// (asks for the passphrase).
+	Questions {
+		#[command(subcommand)]
+		action: QuestionsAction,
 	},
 	/// Your profile: what you told Quant about yourself, then the rest by
 	/// confidence (asks for the passphrase).
@@ -529,6 +538,26 @@ impl From<PolicyArg> for quant_access::OwnerDevicePolicy {
 	}
 }
 
+/// What to do with the questions ledger.
+#[derive(Subcommand)]
+enum QuestionsAction {
+	/// List questions agents asked, recent first.
+	List {
+		/// Most questions.
+		#[arg(long, default_value_t = 50)]
+		recent: usize,
+		/// Only this client's questions (client id or pairing code).
+		#[arg(long)]
+		agent: Option<String>,
+	},
+	/// Show one question's full trail: the question, the answer, and every
+	/// read that served it.
+	Show {
+		/// The question id, as `quant questions list` shows it.
+		id: QuestionId,
+	},
+}
+
 /// What to do with claims.
 #[derive(Subcommand)]
 enum ClaimsAction {
@@ -593,6 +622,9 @@ struct ApproveArgs {
 	/// Serve text without redacting secrets.
 	#[arg(long)]
 	unredacted: bool,
+	/// Questions the grant may open per hour.
+	#[arg(long)]
+	questions_per_hour: Option<u64>,
 	/// Sensitivity classes the grant never sees.
 	#[arg(long = "deny", value_enum, value_delimiter = ',')]
 	deny_classes: Vec<ClassArg>,
@@ -715,7 +747,7 @@ async fn main() -> Result<()> {
 		}
 		Command::Overview(window) => {
 			let (from, to) = window.resolve()?;
-			let overview = cx.client()?.overview(&OverviewRequest { from, to }).await?;
+			let overview = cx.client()?.overview(&OverviewRequest { from, to }, None).await?;
 			cx.show(&overview, print::overview);
 			Ok(())
 		}
@@ -734,7 +766,7 @@ async fn main() -> Result<()> {
 				oldest_first: false,
 				mode: None,
 			};
-			let records = cx.client()?.records(&request).await?;
+			let records = cx.client()?.records(&request, None).await?;
 			cx.show(&records, print::records);
 			Ok(())
 		}
@@ -755,7 +787,7 @@ async fn main() -> Result<()> {
 				oldest_first: false,
 				mode: mode.map(quant_api::SearchMode::from),
 			};
-			let records = cx.client()?.search(&request).await?;
+			let records = cx.client()?.search(&request, None).await?;
 			cx.show(&records, print::records);
 			Ok(())
 		}
@@ -774,7 +806,7 @@ async fn main() -> Result<()> {
 				raw,
 				max_rows: None,
 			};
-			let series = cx.client()?.series(&request).await?;
+			let series = cx.client()?.series(&request, None).await?;
 			cx.show(&series, print::series);
 			Ok(())
 		}
@@ -792,7 +824,7 @@ async fn main() -> Result<()> {
 				group_by,
 				bucket_seconds: bucket,
 			};
-			let durations = cx.client()?.durations(&request).await?;
+			let durations = cx.client()?.durations(&request, None).await?;
 			cx.show(&durations, print::durations);
 			Ok(())
 		}
@@ -819,6 +851,7 @@ async fn main() -> Result<()> {
 			Ok(())
 		}
 		Command::Claims { action } => claims(&cx, action).await,
+		Command::Questions { action } => questions(&cx, action).await,
 		Command::Profile => profile(&cx).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
 		Command::Import { source } => import::run(&cx, source).await,
@@ -889,7 +922,20 @@ async fn pair(cx: &Ctx, name: Option<String>, kind: Kind, scopes: &[String]) -> 
 		}
 	};
 	let mut client = Client::new(cx.endpoint.clone(), identity);
-	let response = client.pair(kind.into(), scopes).await?;
+	// An agent must say what it is; the CLI pairs as itself.
+	let agent = (kind == Kind::Agent).then(|| {
+		AgentIdentity {
+			product: "quant".into(),
+			vendor: "leptoskit".into(),
+			model: String::new(),
+			version: env!("CARGO_PKG_VERSION").into(),
+			host: hostname(),
+			operator: None,
+		}
+	});
+	let response = client
+		.pair(kind.into(), scopes, agent.as_ref())
+		.await?;
 	client.identity().save(&path)?;
 	println!("Pairing code: {}", response.pairing_code);
 	println!("Status: {:?}", response.status);
@@ -1050,6 +1096,41 @@ async fn claims(cx: &Ctx, action: ClaimsAction) -> Result<()> {
 				})
 				.await?;
 			cx.show(&claim, print::claim);
+		}
+	}
+	Ok(())
+}
+
+async fn questions(cx: &Ctx, action: QuestionsAction) -> Result<()> {
+	let owner = cx.owner().await?;
+	match action {
+		QuestionsAction::List { recent, agent } => {
+			// A pairing code or client id narrows the list to one agent.
+			let client = if let Some(agent) = &agent {
+				let clients = owner.clients().await?;
+				let needle = agent.trim().to_ascii_uppercase().replace('-', "");
+				let found = clients
+					.iter()
+					.find(|c| {
+						c.pairing_code.replace('-', "") == needle
+							|| c.id.to_string().starts_with(agent.trim())
+					})
+					.with_context(|| format!("no client matches `{agent}`"))?;
+				Some(found.id)
+			} else {
+				None
+			};
+			let questions = owner
+				.questions(&QuestionListRequest {
+					limit: Some(recent),
+					client,
+				})
+				.await?;
+			cx.show(&questions, print::questions);
+		}
+		QuestionsAction::Show { id } => {
+			let trail = owner.question_trail(id).await?;
+			cx.show(&trail, print::question_trail);
 		}
 	}
 	Ok(())

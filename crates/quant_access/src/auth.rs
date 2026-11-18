@@ -28,6 +28,67 @@ pub const HEADER_TIMESTAMP: &str = "x-quant-timestamp";
 pub const HEADER_NONCE: &str = "x-quant-nonce";
 /// Header carrying the request signature.
 pub const HEADER_SIGNATURE: &str = "x-quant-signature";
+/// Header carrying why an agent is reading: its purpose, in its own words.
+/// Agents must send it on every read route; the signature covers it, so it
+/// cannot be stripped or rewritten in flight.
+pub const HEADER_PURPOSE: &str = "x-quant-purpose";
+/// Header carrying the question a read belongs to, as
+/// [`quant_api`](crate) ids it. Optional.
+pub const HEADER_QUESTION: &str = "x-quant-question";
+/// Header carrying the model actually running this session, when that
+/// differs from the one given at pairing. Optional.
+pub const HEADER_MODEL: &str = "x-quant-model";
+
+/// Why a request is being made, as the client states it. The purpose is
+/// required of agents on every read route and is signed with the rest of
+/// the request, then recorded in the audit log.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestMeta {
+	/// Why the data is needed, 8 to 500 characters once sanitised.
+	pub purpose: Option<String>,
+	/// The question this read belongs to.
+	pub question: Option<String>,
+	/// The model actually running this session.
+	pub model: Option<String>,
+}
+
+impl RequestMeta {
+	/// A meta carrying only a purpose.
+	pub fn purpose(purpose: impl Into<String>) -> Self {
+		Self {
+			purpose: Some(purpose.into()),
+			question: None,
+			model: None,
+		}
+	}
+
+	/// Serve the question with this id.
+	#[must_use]
+	pub fn with_question(mut self, question: quant_core::QuestionId) -> Self {
+		self.question = Some(question.to_string());
+		self
+	}
+
+	/// Name the model running this session.
+	#[must_use]
+	pub fn with_model(mut self, model: impl Into<String>) -> Self {
+		self.model = Some(model.into());
+		self
+	}
+
+	/// Whether any field is set.
+	pub fn is_empty(&self) -> bool {
+		self.purpose.is_none() && self.question.is_none() && self.model.is_none()
+	}
+
+	fn values(&self) -> [&str; 3] {
+		[
+			self.purpose.as_deref().unwrap_or(""),
+			self.question.as_deref().unwrap_or(""),
+			self.model.as_deref().unwrap_or(""),
+		]
+	}
+}
 
 /// How far a request's timestamp may drift from the vault's clock.
 pub const MAX_SKEW: SignedDuration = SignedDuration::from_secs(60);
@@ -70,18 +131,20 @@ impl ClientKey {
 		path: &str,
 		body: &[u8],
 		now: Timestamp,
+		meta: &RequestMeta,
 	) -> SignedHeaders {
 		let mut nonce = [0u8; 16];
 		getrandom::fill(&mut nonce).expect("the OS random source is available");
 		let nonce = hex::encode(nonce);
 		let timestamp = now.as_second();
-		let message = canonical(method, path, timestamp, &nonce, body);
+		let message = canonical(method, path, timestamp, &nonce, body, meta);
 		let signature = URL_SAFE_NO_PAD.encode(self.0.sign(&message).to_bytes());
 		SignedHeaders {
 			client,
 			timestamp,
 			nonce,
 			signature,
+			meta: meta.clone(),
 		}
 	}
 }
@@ -173,17 +236,30 @@ pub struct SignedHeaders {
 	pub nonce: String,
 	/// Base64 Ed25519 signature over the canonical request.
 	pub signature: String,
+	/// The purpose, question, and model headers, signed with the rest.
+	pub meta: RequestMeta,
 }
 
 impl SignedHeaders {
 	/// The headers as name/value pairs.
-	pub fn pairs(&self) -> [(&'static str, String); 4] {
-		[
+	pub fn pairs(&self) -> Vec<(&'static str, String)> {
+		let mut pairs = vec![
 			(HEADER_CLIENT, self.client.to_string()),
 			(HEADER_TIMESTAMP, self.timestamp.to_string()),
 			(HEADER_NONCE, self.nonce.clone()),
 			(HEADER_SIGNATURE, self.signature.clone()),
-		]
+		];
+		let mut push = |name: &'static str, value: &Option<String>| {
+			if let Some(value) = value
+				&& !value.is_empty()
+			{
+				pairs.push((name, value.clone()));
+			}
+		};
+		push(HEADER_PURPOSE, &self.meta.purpose);
+		push(HEADER_QUESTION, &self.meta.question);
+		push(HEADER_MODEL, &self.meta.model);
+		pairs
 	}
 
 	/// Read the headers back from a lookup function.
@@ -193,6 +269,12 @@ impl SignedHeaders {
 		let timestamp = get(HEADER_TIMESTAMP).ok_or_else(|| missing(HEADER_TIMESTAMP))?;
 		let nonce = get(HEADER_NONCE).ok_or_else(|| missing(HEADER_NONCE))?;
 		let signature = get(HEADER_SIGNATURE).ok_or_else(|| missing(HEADER_SIGNATURE))?;
+		let optional = |name: &str| {
+			get(name)
+				.map(str::trim)
+				.filter(|value| !value.is_empty())
+				.map(ToOwned::to_owned)
+		};
 		Ok(Self {
 			client: client
 				.parse()
@@ -202,15 +284,54 @@ impl SignedHeaders {
 				.map_err(|_| AccessError::Unauthenticated("bad timestamp".into()))?,
 			nonce: nonce.to_owned(),
 			signature: signature.to_owned(),
+			meta: RequestMeta {
+				purpose: optional(HEADER_PURPOSE),
+				question: optional(HEADER_QUESTION),
+				model: optional(HEADER_MODEL),
+			},
 		})
 	}
 }
 
-/// The bytes a request signature covers. The body is folded in by hash so
-/// large uploads are hashed once.
-pub fn canonical(method: &str, path: &str, timestamp: i64, nonce: &str, body: &[u8]) -> Vec<u8> {
+/// The bytes a request signature covers, folded into scheme V2: the
+/// purpose, question, and model headers are signed with the rest, so
+/// nothing in flight can strip the reason for a read. The body is folded
+/// in by hash so large uploads are hashed once.
+pub fn canonical(
+	method: &str,
+	path: &str,
+	timestamp: i64,
+	nonce: &str,
+	body: &[u8],
+	meta: &RequestMeta,
+) -> Vec<u8> {
+	let body_hash = blake3::hash(body).to_hex();
+	let [purpose, question, model] = meta.values();
+	format!("QUANT-SIG-V2\n{method}\n{path}\n{timestamp}\n{nonce}\n{body_hash}\n{purpose}\n{question}\n{model}")
+		.into_bytes()
+}
+
+/// The bytes a scheme V1 signature covered: no purpose headers. Kept only
+/// so clients that predate purposes — the CLI, devices, the app — keep
+/// working; an agent must sign V2.
+fn canonical_v1(method: &str, path: &str, timestamp: i64, nonce: &str, body: &[u8]) -> Vec<u8> {
 	let body_hash = blake3::hash(body).to_hex();
 	format!("QUANT-SIG-V1\n{method}\n{path}\n{timestamp}\n{nonce}\n{body_hash}").into_bytes()
+}
+
+/// What is being verified: the request's method, path, and body, and
+/// whether a signature from before purposes existed may still stand.
+#[derive(Clone, Copy)]
+pub struct Verify<'a> {
+	/// The HTTP method.
+	pub method: &'a str,
+	/// The path with its query string, as signed.
+	pub path: &'a str,
+	/// The body bytes.
+	pub body: &'a [u8],
+	/// Whether a V1 signature is acceptable: true for clients that never
+	/// send purposes, false for agents.
+	pub allow_legacy: bool,
 }
 
 /// Checks request signatures and refuses replays.
@@ -226,14 +347,14 @@ impl RequestVerifier {
 	}
 
 	/// Verify `headers` were made by `key` for this exact request, recently,
-	/// and only once.
+	/// and only once. Scheme V2 signatures cover the purpose headers; the
+	/// V1 fallback is allowed only for clients that never send purposes
+	/// (the CLI, devices, the app), never for agents.
 	pub fn verify(
 		&mut self,
 		key: &PublicKey,
 		headers: &SignedHeaders,
-		method: &str,
-		path: &str,
-		body: &[u8],
+		request: Verify<'_>,
 		now: Timestamp,
 	) -> Result<(), AccessError> {
 		let unauthenticated = |why: &str| AccessError::Unauthenticated(why.to_owned());
@@ -250,13 +371,36 @@ impl RequestVerifier {
 			.and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
 			.map(|bytes| Signature::from_bytes(&bytes))
 			.ok_or_else(|| unauthenticated("bad signature encoding"))?;
-		let message = canonical(method, path, headers.timestamp, &headers.nonce, body);
-		key.0
-			.verify(&message, &signature)
-			.map_err(|_| unauthenticated("signature does not match"))?;
+		let Verify {
+			method,
+			path,
+			body,
+			allow_legacy,
+		} = request;
+		let message = canonical(
+			method,
+			path,
+			headers.timestamp,
+			&headers.nonce,
+			body,
+			&headers.meta,
+		);
+		let verified = key.0.verify(&message, &signature).is_ok()
+			|| allow_legacy
+				&& key
+					.0
+					.verify(
+						&canonical_v1(method, path, headers.timestamp, &headers.nonce, body),
+						&signature,
+					)
+					.is_ok();
+		if !verified {
+			return Err(unauthenticated("signature does not match"));
+		}
 
-		// Only remember nonces of requests that verified, so junk cannot fill
-		// the table, and forget them once their timestamp could no longer pass.
+		// Only remember nonces of requests that verified, so junk cannot
+		// fill the table, and forget them once their timestamp could no
+		// longer pass.
 		self.seen
 			.retain(|_, at| (now - *at).abs() <= MAX_SKEW.as_secs());
 		let replay_key = format!("{}:{}", headers.client, headers.nonce);
@@ -275,22 +419,57 @@ mod tests {
 		(ClientKey::generate(), ClientId::new(), Timestamp::now())
 	}
 
+	fn sign(
+		key: &ClientKey,
+		client: ClientId,
+		method: &str,
+		path: &str,
+		body: &[u8],
+		now: Timestamp,
+		meta: &RequestMeta,
+	) -> SignedHeaders {
+		key.sign(client, method, path, body, now, meta)
+	}
+
 	#[test]
 	fn accepts_a_valid_signature_once() {
 		let (key, client, now) = setup();
-		let headers = key.sign(client, "POST", "/v1/query", b"{}", now);
+		let meta = RequestMeta::purpose("answering the owner's question about sleep");
+		let headers = sign(&key, client, "POST", "/v1/query", b"{}", now, &meta);
 		let mut verifier = RequestVerifier::new();
 		verifier
-			.verify(&key.public(), &headers, "POST", "/v1/query", b"{}", now)
+			.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "POST",
+					path: "/v1/query",
+					body: b"{}",
+					allow_legacy: false,
+				},
+				now,
+			)
 			.unwrap();
-		let replay = verifier.verify(&key.public(), &headers, "POST", "/v1/query", b"{}", now);
+		let replay =
+			verifier.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "POST",
+					path: "/v1/query",
+					body: b"{}",
+					allow_legacy: false,
+				},
+				now,
+			);
 		assert!(matches!(replay, Err(AccessError::Unauthenticated(why)) if why.contains("replay")));
 	}
 
 	#[test]
 	fn rejects_tampering() {
 		let (key, client, now) = setup();
-		let headers = key.sign(client, "POST", "/v1/query", b"{}", now);
+		let meta = RequestMeta::purpose("checking tamper detection works");
+		let headers = sign(&key, client, "POST", "/v1/query", b"{}", now, &meta);
 		let mut verifier = RequestVerifier::new();
 		for (method, path, body) in [
 			("GET", "/v1/query", b"{}".as_slice()),
@@ -299,20 +478,135 @@ mod tests {
 		] {
 			assert!(
 				verifier
-					.verify(&key.public(), &headers, method, path, body, now)
+					.verify(
+						&key.public(),
+						&headers,
+						Verify {
+							method,
+							path,
+							body,
+							allow_legacy: false,
+						},
+						now,
+					)
 					.is_err()
 			);
 		}
 	}
 
 	#[test]
+	fn the_purpose_headers_are_part_of_the_signature() {
+		let (key, client, now) = setup();
+		let meta = RequestMeta {
+			purpose: Some("finding when the owner focuses best".into()),
+			question: Some("ques_0123456789abcdef".into()),
+			model: Some("claude-opus-5-5".into()),
+		};
+		let headers = sign(&key, client, "POST", "/v1/query/search", b"{}", now, &meta);
+		let mut verifier = RequestVerifier::new();
+		// Stripping or rewriting the purpose fails the signature, legacy or
+		// not: an agent cannot read without its stated reason.
+		for rewrite in [
+			RequestMeta::default(),
+			RequestMeta::purpose("no reason given here"),
+			RequestMeta {
+				question: Some("ques_ffffffffffffffff".into()),
+				..RequestMeta::purpose("finding when the owner focuses best")
+			},
+		] {
+			let mut altered = headers.clone();
+			altered.meta = rewrite;
+			assert!(
+				verifier
+					.verify(
+				&key.public(),
+				&altered,
+				Verify {
+					method: "POST",
+					path: "/v1/query/search",
+					body: b"{}",
+					allow_legacy: true,
+				},
+				now,
+			)
+					.is_err()
+			);
+		}
+		// And the untampered request still verifies.
+		verifier
+			.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "POST",
+					path: "/v1/query/search",
+					body: b"{}",
+					allow_legacy: true,
+				},
+				now,
+			)
+			.unwrap();
+	}
+
+	#[test]
+	fn v1_signatures_still_work_where_purposes_are_not_required() {
+		let (key, client, now) = setup();
+		let mut headers = sign(&key, client, "GET", "/v1/me", b"", now, &RequestMeta::default());
+		headers.signature = URL_SAFE_NO_PAD.encode(
+			key.0
+				.sign(&canonical_v1("GET", "/v1/me", headers.timestamp, &headers.nonce, b""))
+				.to_bytes(),
+		);
+		let mut verifier = RequestVerifier::new();
+		verifier
+			.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "GET",
+					path: "/v1/me",
+					body: b"",
+					allow_legacy: true,
+				},
+				now,
+			)
+			.unwrap();
+		// An agent may not fall back to V1: it must sign its purpose.
+		assert!(
+			verifier
+				.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "GET",
+					path: "/v1/me",
+					body: b"",
+					allow_legacy: false,
+				},
+				now,
+			)
+				.is_err()
+		);
+	}
+
+	#[test]
 	fn rejects_other_keys() {
 		let (key, client, now) = setup();
-		let headers = key.sign(client, "GET", "/", b"", now);
+		let headers = sign(&key, client, "GET", "/", b"", now, &RequestMeta::default());
 		let other = ClientKey::generate();
 		assert!(
 			RequestVerifier::new()
-				.verify(&other.public(), &headers, "GET", "/", b"", now)
+				.verify(
+				&other.public(),
+				&headers,
+				Verify {
+					method: "GET",
+					path: "/",
+					body: b"",
+					allow_legacy: false,
+				},
+				now,
+			)
 				.is_err()
 		);
 	}
@@ -320,10 +614,28 @@ mod tests {
 	#[test]
 	fn rejects_stale_timestamps() {
 		let (key, client, now) = setup();
-		let headers = key.sign(client, "GET", "/", b"", now - SignedDuration::from_mins(5));
+		let headers = sign(
+			&key,
+			client,
+			"GET",
+			"/",
+			b"",
+			now - SignedDuration::from_mins(5),
+			&RequestMeta::default(),
+		);
 		assert!(
 			RequestVerifier::new()
-				.verify(&key.public(), &headers, "GET", "/", b"", now)
+				.verify(
+				&key.public(),
+				&headers,
+				Verify {
+					method: "GET",
+					path: "/",
+					body: b"",
+					allow_legacy: false,
+				},
+				now,
+			)
 				.is_err()
 		);
 	}
@@ -335,7 +647,12 @@ mod tests {
 		assert_eq!(public, key.public());
 		assert_eq!(ClientKey::from_seed(&key.seed()).public(), key.public());
 
-		let headers = key.sign(client, "GET", "/", b"", now);
+		let meta = RequestMeta {
+			purpose: Some("summarising the owner's week".into()),
+			question: None,
+			model: Some("claude-opus-5-5".into()),
+		};
+		let headers = sign(&key, client, "GET", "/", b"", now, &meta);
 		let pairs = headers.pairs();
 		let back = SignedHeaders::from_lookup(|name| {
 			pairs
@@ -345,6 +662,7 @@ mod tests {
 		})
 		.unwrap();
 		assert_eq!(back, headers);
+		assert!(pairs.len() > 4);
 	}
 
 	#[test]
