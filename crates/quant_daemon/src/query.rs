@@ -92,10 +92,27 @@ pub(crate) fn resolve(
 		.collect();
 	let denied_classes = &grant.deny_classes;
 	let intersects = |classes: &[Class]| classes.iter().any(|class| denied_classes.contains(class));
-	let family_denied = |family: Family| {
+	// True when any stream in the family carries a denied class. The family
+	// cannot be selected whole, but streams without that class still can.
+	let family_has_denial = |family: Family| {
 		specs
 			.values()
 			.any(|spec| spec.id.family() == family && intersects(&spec.classes))
+	};
+	// True when the family has streams and every one of them is denied.
+	// An empty family is not wholly denied: nothing in it is sensitive.
+	let family_wholly_denied = |family: Family| {
+		let mut saw = false;
+		for spec in specs.values() {
+			if spec.id.family() != family {
+				continue;
+			}
+			saw = true;
+			if !intersects(&spec.classes) {
+				return false;
+			}
+		}
+		saw
 	};
 	let stream_denied = |stream: &StreamId| {
 		let mut name = stream.as_str();
@@ -112,7 +129,7 @@ pub(crate) fn resolve(
 	let target_denied = |target: &Target| {
 		match target {
 			Target::All => false,
-			Target::Family(family) => family_denied(*family),
+			Target::Family(family) => family_wholly_denied(*family),
 			Target::Stream(stream) => stream_denied(stream),
 		}
 	};
@@ -121,7 +138,7 @@ pub(crate) fn resolve(
 			// Everything readable, minus streams with a denied class.
 			Target::All => {
 				for family in Family::ALL {
-					if !family_denied(family) && !selector.families.contains(&family) {
+					if !family_has_denial(family) && !selector.families.contains(&family) {
 						selector.families.push(family);
 					}
 				}
@@ -142,8 +159,27 @@ pub(crate) fn resolve(
 				}
 			}
 			Target::Family(family) => {
-				if !family_denied(*family) && !selector.families.contains(family) {
-					selector.families.push(*family);
+				if !family_has_denial(*family) {
+					if !selector.families.contains(family) {
+						selector.families.push(*family);
+					}
+					return;
+				}
+				// Mixed family, such as `memory` when health is denied:
+				// daily and episode summaries quote health data, notes do not.
+				for spec in specs.values() {
+					if spec.id.family() != *family || intersects(&spec.classes) {
+						continue;
+					}
+					if selector.families.contains(family)
+						|| selector
+							.streams
+							.iter()
+							.any(|s| Target::Stream(s.clone()).covers(&spec.id))
+					{
+						continue;
+					}
+					selector.streams.push(spec.id.clone());
 				}
 			}
 			Target::Stream(stream) => {
@@ -193,6 +229,23 @@ pub(crate) fn resolve(
 			{
 				add(&mut selector, &target);
 				matched = true;
+			}
+		}
+		// A mixed family was partly readable. Name the denied streams, not
+		// the whole family, so notes stay visible when health summaries are
+		// not.
+		if matched
+			&& let Target::Family(family) = want
+			&& family_has_denial(*family)
+			&& !family_wholly_denied(*family)
+		{
+			for spec in specs.values() {
+				if spec.id.family() == *family && intersects(&spec.classes) {
+					let name = spec.id.to_string();
+					if !withheld.contains(&name) {
+						withheld.push(name);
+					}
+				}
 			}
 		}
 		if !matched && !matches!(want, Target::All) {
@@ -929,6 +982,71 @@ mod tests {
 			vec!["health.heart_rate".parse::<StreamId>().unwrap()]
 		);
 		assert!(withheld.is_empty());
+	}
+
+	#[test]
+	fn a_denied_class_splits_a_mixed_family_instead_of_hiding_it() {
+		let specs = specs();
+		let mut memory = grant(&["memory:read"]);
+		memory.deny_classes = vec![Class::Health];
+
+		// An unfiltered read keeps notes and the profile, not the summaries
+		// that quote heart rate, sleep, and places.
+		let (selector, withheld) = resolve(&memory, &specs, &[], Level::Read).unwrap();
+		assert!(selector.families.is_empty());
+		assert!(withheld.is_empty());
+		let names: Vec<&str> = selector.streams.iter().map(StreamId::as_str).collect();
+		assert!(names.contains(&"memory.note"), "{names:?}");
+		assert!(names.contains(&"memory.profile"), "{names:?}");
+		assert!(
+			names
+				.iter()
+				.all(|name| !matches!(*name, "memory.daily" | "memory.episode" | "memory.weekly")),
+			"{names:?}"
+		);
+
+		// Asking for the family lists the denied streams and still returns the
+		// rest.
+		let (selector, withheld) =
+			resolve(&memory, &specs, &strings(&["memory"]), Level::Read).unwrap();
+		assert!(
+			selector
+				.streams
+				.iter()
+				.any(|stream| stream.as_str() == "memory.note")
+		);
+		assert!(!selector.families.contains(&Family::Memory));
+		assert_eq!(
+			withheld,
+			strings(&["memory.daily", "memory.episode", "memory.weekly"])
+		);
+
+		// A wildcard grant asking for the same family splits it the same way,
+		// while a family whose every stream is denied stays withheld whole.
+		let mut wild = grant(&["*:read"]);
+		wild.deny_classes = vec![Class::Health];
+		let (selector, withheld) =
+			resolve(&wild, &specs, &strings(&["memory"]), Level::Read).unwrap();
+		assert!(
+			selector
+				.streams
+				.iter()
+				.any(|stream| stream.as_str() == "memory.note")
+		);
+		assert_eq!(
+			withheld,
+			strings(&["memory.daily", "memory.episode", "memory.weekly"])
+		);
+		let (selector, withheld) =
+			resolve(&wild, &specs, &strings(&["health"]), Level::Read).unwrap();
+		assert!(selector.families.is_empty());
+		assert!(
+			selector
+				.streams
+				.iter()
+				.all(|stream| stream.family() != Family::Health)
+		);
+		assert_eq!(withheld, strings(&["health"]));
 	}
 
 	#[test]
