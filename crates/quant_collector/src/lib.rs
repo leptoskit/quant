@@ -1,13 +1,14 @@
 //! The phone side of Quant.
 //!
-//! Capture code on a phone (health data, motion, location, microphone)
-//! writes into a [`Spool`], which implements [`Sink`] by storing everything
-//! in a small encrypted database on the device. An [`Uploader`] drains the
-//! spool to the desktop daemon over pinned TLS whenever it can, deleting
-//! each item once the vault has it, so the phone keeps only what has not
-//! been delivered yet.
+//! Capture code on a phone (health data, motion, location, app usage,
+//! battery and thermal state, microphone) writes into a [`Spool`], which
+//! implements [`Sink`] by storing everything in a small encrypted database on
+//! the device. An [`Uploader`] drains the spool to the desktop daemon over
+//! pinned TLS whenever it can, deleting each item once the vault has it, so the
+//! phone keeps only what has not been delivered yet.
 
 mod ambient;
+mod phone;
 mod resources;
 
 use std::collections::BTreeMap;
@@ -16,6 +17,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub use ambient::AmbientAudio;
+pub use phone::LocationReport;
+pub use phone::PowerMonitor;
+pub use phone::PowerReport;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
 use quant_client::Client;

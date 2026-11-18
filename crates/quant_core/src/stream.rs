@@ -382,6 +382,12 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		)
 		.summarise_by(&["state"]),
 		StreamSpec::event(
+			"device.power",
+			"A change in a phone's power state: charging state, low-power mode, and thermal state \
+			 (nominal, fair, serious, critical), with the battery level at the time.",
+		)
+		.summarise_by(&["charging", "thermal"]),
+		StreamSpec::event(
 			"comms.notification",
 			"A notification shown on a device: app, title, and text.",
 		)
@@ -493,6 +499,8 @@ mod tests {
 			assert_eq!(classes(others), vec![Class::Others], "{others}");
 		}
 		assert!(classes("memory.profile").is_empty());
+		// Phone power and screen state say nothing about health or place.
+		assert!(classes("device.power").is_empty());
 		assert!(classes("screen.frame").is_empty());
 	}
 
