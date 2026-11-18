@@ -6011,6 +6011,7 @@ dependencies = [
  "quant_core",
  "quant_crypto",
  "quant_daemon",
+ "quant_import",
  "quant_learn",
  "quant_mcp",
  "quant_relay",
@@ -6141,6 +6142,35 @@ dependencies = [
  "quant_store",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "quant_import"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "blake3",
+ "bytes",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "jiff",
+ "quant_access",
+ "quant_api",
+ "quant_capture_macos",
+ "quant_client",
+ "quant_core",
+ "quant_crypto",
+ "quant_daemon",
+ "quant_store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
  "uuid",
 ]
 

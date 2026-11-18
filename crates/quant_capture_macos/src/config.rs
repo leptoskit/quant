@@ -120,6 +120,32 @@ pub fn default_excluded_title_patterns() -> Vec<String> {
 		.collect()
 }
 
+/// Password managers and credential stores as they show up as app names,
+/// never captured by default. Importers see display names rather than bundle
+/// ids, so they match these instead of [`default_excluded_bundle_ids`].
+pub fn default_excluded_app_names() -> Vec<String> {
+	[
+		"1password",
+		"onepassword",
+		"bitwarden",
+		"keepassxc",
+		"keepassium",
+		"macpass",
+		"strongbox",
+		"keychain access",
+		"passwords",
+		"dashlane",
+		"lastpass",
+		"proton pass",
+		"enpass",
+		"nordpass",
+		"roboform",
+	]
+	.into_iter()
+	.map(str::to_owned)
+	.collect()
+}
+
 /// Settings for the `apps` source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
