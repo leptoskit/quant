@@ -7,11 +7,16 @@
 #
 # The phone needs USB debugging switched on (Settings, Developer options) and
 # this computer allowed when the phone asks. See docs/phone.md.
+#
+# Installing, opening, stopping, screenshots, recent logs and the gesture
+# check go through `leptoskit device`, the same controller agents and tests
+# use. Plain adb is kept for what that controller has no driverless step
+# for: the port forward, typing a link, granting permissions and following
+# the log.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE="dev.leptoskit.quant"
-ACTIVITY="$PACKAGE/.MainActivity"
 APK="$ROOT/platforms/android/app/build/outputs/apk/debug/app-debug.apk"
 RUST_TARGET="aarch64-linux-android"
 PORT="${QUANT_PORT:-7717}"
@@ -34,6 +39,13 @@ Commands:
   open              Open the installed app.
   stop              Stop the app.
   logs              Follow the app's log. Stop with Ctrl-C.
+  recent [LINES]    Print the app's most recent log lines (default 200).
+  sanity            Install, open, and inject a tap, long press, pan and
+                    pinch, then take a screenshot.
+  devices           List what \`leptoskit device\` can see.
+  device ARGS...    Run any \`leptoskit device\` command against this phone,
+                    such as: device tap --app $PACKAGE --locator-text Connect
+                    (steps that find a control need an Appium server).
   usb [PORT]        Let the phone reach this computer's daemon through the
                     cable, at 127.0.0.1:PORT on the phone (default $PORT).
   link [LINK]       Type a pairing link into the field in focus on the phone.
@@ -73,6 +85,8 @@ find_sdk() {
 }
 
 find_adb() {
+	# Also tells `leptoskit device` where adb is, through ANDROID_HOME.
+	find_sdk
 	if command -v adb >/dev/null 2>&1; then
 		ADB="adb"
 		return
@@ -116,13 +130,40 @@ pinned_revision() {
 	sed -n 's/^leptoskit = .*rev = "\([0-9a-f]\{40\}\)".*/\1/p' "$ROOT/Cargo.toml" | head -n 1
 }
 
-need_build_tools() {
-	find_sdk
-	command -v cargo >/dev/null 2>&1 || fail "cargo was not found. Install Rust from https://rustup.rs."
+need_cli() {
 	if ! command -v leptoskit >/dev/null 2>&1; then
 		fail "The leptoskit CLI was not found. Install the pinned one:
   cargo install --git https://github.com/leptoskit/leptoskit --rev $(pinned_revision) --locked leptoskit_cli"
 	fi
+}
+
+# Run one \`leptoskit device\` command against the chosen phone. The CLI finds
+# adb through ANDROID_HOME, writes what it captures under
+# target/leptoskit-control, and prints a JSON outcome, kept in OUTCOME.
+control() {
+	local action="$1"
+	shift
+	need_cli
+	need_device
+	if ! OUTCOME="$(cd "$ROOT" && leptoskit device "$action" --kind android --device "$ANDROID_SERIAL" "$@" 2>&1)"; then
+		local error
+		error="$(printf '%s\n' "$OUTCOME" | sed -n 's/^  "error": "\(.*\)",\{0,1\}$/\1/p' | head -n 1)"
+		fail "${error:-$OUTCOME}"
+	fi
+}
+
+# The file the last step saved, as an absolute path.
+artifact() {
+	local path
+	path="$(printf '%s\n' "$OUTCOME" | sed -n 's/^ *"artifact": "\(.*\)",\{0,1\}$/\1/p' | head -n 1)"
+	[ -n "$path" ] || fail "leptoskit device saved nothing: $OUTCOME"
+	printf '%s\n' "$ROOT/$path"
+}
+
+need_build_tools() {
+	find_sdk
+	command -v cargo >/dev/null 2>&1 || fail "cargo was not found. Install Rust from https://rustup.rs."
+	need_cli
 	if [ -z "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}${ANDROID_NDK_HOME:-}" ]; then
 		fail "The Android SDK was not found. Install it with Android Studio, add an NDK (SDK Manager, SDK Tools, NDK), and set ANDROID_HOME."
 	fi
@@ -148,13 +189,40 @@ install() {
 	if [ "$abi" != "arm64-v8a" ]; then
 		say "warning: this device is $abi and the app is built for arm64-v8a; it may not install."
 	fi
-	"$ADB" install -r "$apk"
+	# An absolute path, because the controller runs from the repository root.
+	apk="$(cd "$(dirname "$apk")" && pwd)/$(basename "$apk")"
+	control install --path "$apk"
+	say "Installed $apk on $ANDROID_SERIAL."
 }
 
 open_app() {
-	need_device
-	"$ADB" shell am start -n "$ACTIVITY" >/dev/null
+	control open --app "$PACKAGE"
 	say "Opened Quant on $ANDROID_SERIAL."
+}
+
+recent() {
+	local lines="${1:-200}"
+	need_device
+	local pid
+	pid="$("$ADB" shell pidof -s "$PACKAGE" | tr -d '\r' || true)"
+	# The controller reads the whole system log, so ask for more than is
+	# wanted and keep the app's own lines.
+	control logs --tail 5000
+	if [ -n "$pid" ]; then
+		grep -E "\\( *$pid\\)" "$(artifact)" | tail -n "$lines" || say "Quant has logged nothing recently."
+	else
+		say "Quant is not running, so this is the whole system log."
+		tail -n "$lines" "$(artifact)"
+	fi
+}
+
+sanity() {
+	if [ -f "$APK" ]; then
+		control sanity --app "$PACKAGE" --path "$APK"
+	else
+		control sanity --app "$PACKAGE"
+	fi
+	printf '%s\n' "$OUTCOME"
 }
 
 logs() {
@@ -187,7 +255,9 @@ type_link() {
 		*\'*) fail "The link holds a quote character and can't be typed safely." ;;
 	esac
 	need_device
-	# The phone's shell would read & and ? itself, so the link goes in quotes.
+	# \`leptoskit device type-text\` needs an Appium session; adb's input tool
+	# does not. The phone's shell would read & and ? itself, so the link goes
+	# in quotes.
 	"$ADB" shell "input text '$link'"
 	say "Typed the link. Tap Connect on the phone."
 }
@@ -228,8 +298,8 @@ status() {
 
 screenshot() {
 	local file="${1:-quant-phone.png}"
-	need_device
-	"$ADB" exec-out screencap -p >"$file"
+	control screenshot --label quant-phone
+	cp "$(artifact)" "$file"
 	say "Saved $file"
 }
 
@@ -286,10 +356,22 @@ case "$command" in
 	install) install "$@" ;;
 	open) open_app ;;
 	stop)
-		need_device
-		"$ADB" shell am force-stop "$PACKAGE"
+		control stop-app --identifier "$PACKAGE"
+		say "Stopped Quant on $ANDROID_SERIAL."
 		;;
 	logs) logs ;;
+	recent) recent "$@" ;;
+	sanity) sanity ;;
+	devices)
+		need_cli
+		find_sdk
+		(cd "$ROOT" && leptoskit device list)
+		;;
+	device)
+		[ "$#" -gt 0 ] || fail "Give a \`leptoskit device\` command, such as: device source --app $PACKAGE"
+		control "$@"
+		printf '%s\n' "$OUTCOME"
+		;;
 	usb) usb "$@" ;;
 	link) type_link "$@" ;;
 	grant) grant ;;
