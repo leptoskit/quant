@@ -64,6 +64,12 @@ pub fn App() -> impl leptos::prelude::IntoView {
 
 	#[cfg(target_arch = "wasm32")]
 	{
+		let menu_store = store.clone();
+		let current = navigation.clone();
+		Effect::new(move |_: Option<()>| {
+			current.current();
+			menu_store.nav_open().set(false);
+		});
 		let applied = store.clone();
 		Effect::new(move |previous: Option<()>| {
 			if previous.is_none() {

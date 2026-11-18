@@ -74,6 +74,8 @@ The Status section has an "Open Quant at login" checkbox, off by default and nev
 
 Setting `QUANT_SNAPSHOT=<directory>` makes the app draw its own menu-bar menu and window into PNGs there, without needing Screen Recording permission. `QUANT_SNAPSHOT_STEPS` scripts what it does first (see `Snapshots` in `platforms/macos/App.swift`). It is a development aid and does nothing unless set.
 
+For screenshots with disconnected sample data, follow the [UI preview guide](ui-preview.md).
+
 ## Tests
 
 ```sh
