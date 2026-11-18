@@ -180,7 +180,7 @@ quant questions --agent K7QD-M2XA  # just one agent's
 quant questions show ques_019a…    # the question, the answer, and every read behind it
 ```
 
-Answers are only ever served to you and to the agent that wrote them; questions left unanswered for a day are abandoned, and a grant caps how many an agent may open per hour.
+The app's **Questions** tab shows the same ledger: who asked, why, which model, the answer, and what was served for it. Answers are only ever served to you and to the agent that wrote them; questions left unanswered for a day are abandoned, and a grant caps how many an agent may open per hour.
 
 ## Learning on the device
 

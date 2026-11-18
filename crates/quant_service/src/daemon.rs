@@ -36,6 +36,8 @@ use quant_api::ClientView;
 use quant_api::EnrolDeviceRequest;
 use quant_api::PauseRequest;
 use quant_api::Paused;
+use quant_api::QuestionListRequest;
+use quant_api::QuestionView;
 use quant_api::RecordsRequest;
 use quant_api::RenameClip;
 use quant_api::SaveAudio;
@@ -57,6 +59,7 @@ use quant_model::Notice;
 use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::QuestionRow;
 use quant_model::Reply;
 use quant_model::ReplyData;
 use quant_model::Snapshot;
@@ -386,6 +389,7 @@ struct OwnerData {
 	devices: Vec<quant_api::OwnerDeviceView>,
 	audit: Vec<AuditEntry>,
 	chain_ok: Option<bool>,
+	questions: Vec<QuestionView>,
 }
 
 /// What a job finished with: an optional notice, and optional reply data.
@@ -987,7 +991,15 @@ impl Worker {
 			})
 			.await
 			.ok();
+		let questions = owner
+			.questions(&QuestionListRequest {
+				limit: Some(30),
+				client: None,
+			})
+			.await
+			.unwrap_or_default();
 		self.owner_data = Some(OwnerData {
+			questions,
 			status: status.ok(),
 			clients: owner.clients().await.unwrap_or_default(),
 			grants: owner.grants().await.unwrap_or_default(),
@@ -1265,6 +1277,7 @@ fn owner_view(
 					Outcome::Denied { reason } => format!("denied: {reason}"),
 					Outcome::Failed => "failed".to_owned(),
 				},
+				purpose: entry.purpose.clone(),
 			}
 		})
 		.collect();
@@ -1281,6 +1294,31 @@ fn owner_view(
 			}
 		})
 		.collect();
+	// A question's asker is the client's name, with what an agent said it
+	// is, so the owner can tell two "Claude Code"s apart.
+	let questions = data
+		.questions
+		.iter()
+		.map(|q| {
+			let id = q.client.to_string();
+			let name = names.get(&id).map_or(id.as_str(), |name| name);
+			QuestionRow {
+				id: q.id.to_string(),
+				asker: match agent_of.get(&id) {
+					Some(agent) => format!("{name} · {agent}"),
+					None => name.to_owned(),
+				},
+				asked: words::when(q.asked_at, now, tz),
+				question: q.question.clone(),
+				purpose: q.purpose.clone(),
+				model: q.model.clone(),
+				status: q.status.as_str().to_owned(),
+				answer: q.answer.clone(),
+				citations: q.citations.len(),
+				served: words::served(q.records, q.bytes),
+			}
+		})
+		.collect();
 	let passphrase_session = data
 		.status
 		.as_ref()
@@ -1293,5 +1331,6 @@ fn owner_view(
 		chain_ok: data.chain_ok,
 		devices,
 		passphrase_session,
+		questions,
 	}
 }

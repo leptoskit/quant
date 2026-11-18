@@ -164,6 +164,35 @@ pub struct OwnerView {
 	/// Whether the session was opened with the passphrase, so it may enrol a
 	/// new device.
 	pub passphrase_session: bool,
+	/// The newest questions agents asked, newest first.
+	#[serde(default)]
+	pub questions: Vec<QuestionRow>,
+}
+
+/// One question in the ledger: what an agent asked, why, and what it
+/// answered.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct QuestionRow {
+	/// The question's id, such as `ques_…`.
+	pub id: String,
+	/// Who asked: the client's name and, for an agent, what it said it is.
+	pub asker: String,
+	/// When, such as "Today 14:03".
+	pub asked: String,
+	/// The question.
+	pub question: String,
+	/// The purpose the agent gave.
+	pub purpose: String,
+	/// The model that ran it, when it said.
+	pub model: Option<String>,
+	/// "open", "answered", or "abandoned".
+	pub status: String,
+	/// The answer, once given.
+	pub answer: Option<String>,
+	/// Records the answer cites.
+	pub citations: usize,
+	/// What was served under it, such as "12 records · 3.1 KB".
+	pub served: String,
 }
 
 /// An enrolled owner device: a hardware key that unlocks owner sessions after
@@ -233,6 +262,9 @@ pub struct AuditRow {
 	pub target: String,
 	/// "allowed", "denied: out of scope", "failed".
 	pub outcome: String,
+	/// Why the caller said it asked, when it said.
+	#[serde(default)]
+	pub purpose: Option<String>,
 }
 
 /// The result of an action.
