@@ -17,7 +17,8 @@ resources and release artifacts remain destinations of this one application.
 | `desktop` | Signed macOS app plus the `quant` CLI/daemon | Local install, owner pilot, then signed public distribution after packaging gates pass. |
 | `desktop-preview` | Local UI with explicitly labelled, synthetic sample data | Design review and screenshots only; never distribute as the product. |
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
-| `android`, `ios`, `harmonyos` | Native application packages | Blocked by their `unavailable` entries; hosts and collector lifecycles are unfinished. |
+| `android` | Debug APK of the phone collector | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
+| `ios`, `harmonyos` | Native application packages | Blocked by their `unavailable` entries; hosts and collector lifecycles are unfinished. |
 
 Deploy the landing site independently when ready. Prove the relay with a
 synthetic vault and existing CLI clients before connecting an owner's vault.
@@ -45,7 +46,7 @@ claims are already present. Each affects only the destinations listed.
 | Desktop | Produce a distribution signature. The SDK build currently applies an ad-hoc signature; `--release` alone is insufficient. | Developer ID signature, required entitlements, notarization and Gatekeeper checks. |
 | Desktop | Verify capture consent for the executable that actually requests access. | Required purpose strings, permission denial/revocation tests, and approved capture from an installed build. The menu-bar host's current plist alone does not prove this. |
 | Desktop | Synchronize package/app versions and architecture support. | Workspace/config version, plist version/build number, CLI version and native architecture recorded together. |
-| Web/mobile | Complete the implementation described by each unavailable target. | A working target plus the acceptance evidence in section 10; removing `unavailable` alone does not qualify. |
+| Web/mobile | Complete the implementation described by each unavailable target, and measure the Android development build. | A working target plus the acceptance evidence in section 10; removing `unavailable` alone does not qualify, and the `android` target building does not either. |
 
 Do not label a target production-ready while its prerequisites remain open.
 A website release does not imply the desktop or mobile collectors are ready.
@@ -435,7 +436,10 @@ reconnect, or sustained resource growth beyond the measured release budget.
 
 ## 10. Gates for future product web and mobile releases
 
-Do not deploy the currently unavailable targets. Their first release requires:
+Do not deploy the currently unavailable targets. The `android` target is
+available so that it can be built and run on a development phone; that is not
+a release, and it has none of the device evidence below. A first release of
+each platform requires:
 
 | Platform | Required implementation and acceptance |
 | --- | --- |

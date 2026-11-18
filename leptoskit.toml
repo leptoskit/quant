@@ -135,7 +135,7 @@ plugins = [
 [targets.ios]
 platform = "ios"
 frontend = "app"
-unavailable = "Quant's mobile native host and background collection lifecycle are not integrated yet."
+unavailable = "Quant has no iOS host yet. The phone screen and service build for iOS, but platforms/ios and its background modes do not exist; see docs/phone.md."
 
 [targets.harmonyos]
 platform = "harmonyos"
