@@ -4,7 +4,7 @@ Quantify your life, and decide exactly which AI may read it.
 
 Quant records what you do — what is on your screens, what you hear and say, which apps you use, and what your body is doing (heart rate, sleep, steps, posture, location, and any sensor you strap on later) — into an encrypted vault on your own machine. AI agents reach that vault through an MCP server, but only with a grant you approved, scoped like GitHub's fine-grained permissions, rate limited, redacted, and written to a tamper-evident audit log.
 
-> **Status: early.** The vault, access control, daemon, CLI, MCP server, and macOS capture work and are tested end to end. The Android collector (built with [leptoskit](https://github.com/leptoskit/leptoskit)) comes next. Single user by design.
+> **Status: early.** The vault, access control, daemon, CLI, MCP server, and macOS capture work and are tested end to end. The Android collector (built with [leptoskit](https://github.com/leptoskit/leptoskit)) builds and runs as a [development app](docs/phone.md); it has not been measured on devices or released. Single user by design.
 
 ## Why
 
@@ -103,11 +103,15 @@ Pair a phone over the local network (TLS, certificate pinned by the link):
 
 ```sh
 quant service install --tcp 0.0.0.0:7717
-quant link                        # shows a QR code for the Quant app
+quant link                        # prints a link to paste into the Quant app
 ```
 
-Approve the phone with the write scopes for what it records, for example
+The app shows a pairing code. Approve it with the write scopes for what the
+phone records, for example
 `quant approve <code> --scope location:write --scope apps:write --scope device:write`.
+[Quant on a phone](docs/phone.md) covers building the Android app, running it
+on a phone attached over USB with `scripts/android-device.sh`, and pairing over
+the cable.
 The phone collector stores background location as `location.fix`, app usage as
 `apps.focus` and `device.state`, and battery and thermal readings as
 `device.battery` and `device.power`; see
@@ -243,7 +247,8 @@ public website and relay deploy independently without becoming separate apps.
 | `desktop` | `platforms/macos`, `crates/quant_service`, `crates/quant_app` | Native menu-bar service, with a window created on demand. |
 | `landing` | `crates/landing_*`, `crates/quant_landing_server` | Public site, its own routes and assets; no vault access. |
 | `relay` | `crates/quant_relay_server`, `crates/relay_db` | Blind encrypted-connection relay with its own metadata database. |
-| `web`, `android`, `ios`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
+| `android` | `platforms/android`, `crates/quant_phone`, `crates/quant_app` | Phone collector for location, app usage, battery and heat. A development build, not a release. |
+| `web`, `ios`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
 
 From the repository root:
 
@@ -252,6 +257,7 @@ leptoskit targets
 leptoskit --app-target desktop build --release
 leptoskit --app-target landing dev
 leptoskit --app-target relay build --release
+scripts/android-device.sh          # build the phone app and run it on a USB phone
 ```
 
 Use the CLI from the SDK revision pinned in `Cargo.toml`. Public assets live in
@@ -262,7 +268,7 @@ permissions, derivation, CLI and MCP. `cargo test` selects those core packages;
 target-specific checks run separately in CI within the same workspace.
 
 See [project layout](docs/project-layout.md), [desktop](docs/desktop.md),
-[landing](docs/landing.md), and [relay](docs/relay.md). Follow the
+[phone](docs/phone.md), [landing](docs/landing.md), and [relay](docs/relay.md). Follow the
 [deployment plan](docs/deployment-plan.md) when preparing or deploying a release.
 Update all SDK pins and
 the single lockfile with `python3 scripts/update-leptoskit.py --no-check`.

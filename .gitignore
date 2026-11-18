@@ -16,3 +16,11 @@ node_modules/
 __pycache__/
 # Local SDK overrides are machine-specific.
 /.cargo/config.toml
+
+# Gradle and Android Studio state for the phone host.
+/platforms/android/.gradle/
+/platforms/android/.kotlin/
+/platforms/android/build/
+/platforms/android/app/build/
+/platforms/android/app/.cxx/
+/platforms/android/local.properties

@@ -1,6 +1,6 @@
 # Quant desktop app
 
-A menu-bar remote control for `quant daemon`. The daemon does all the capturing; this app shows what it is doing, saves the last few minutes of the rolling audio buffer, pauses and resumes capture, and opens a small window to approve agents and read the audit log. It is built with [leptoskit](https://github.com/leptoskit/leptoskit), and the same app will gain an Android target (the always-on collector).
+A menu-bar remote control for `quant daemon`. The daemon does all the capturing; this app shows what it is doing, saves the last few minutes of the rolling audio buffer, pauses and resumes capture, and opens a small window to approve agents and read the audit log. It is built with [leptoskit](https://github.com/leptoskit/leptoskit), and the same app has an Android target, [the phone collector](phone.md).
 
 It is meant to cost nothing while it sits in the menu bar: no Dock icon, no window until you open one, and a status check every 60 seconds (every 10 while the menu or window is open), with the thread asleep in between.
 

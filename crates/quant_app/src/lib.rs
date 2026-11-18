@@ -1,10 +1,18 @@
-//! The Quant desktop window, as a leptoskit guest.
+//! Quant's screens, as a leptoskit guest.
 //!
-//! It shows what the app's native service reports and sends it commands.
-//! It never talks to the daemon and never sees a key or a session token;
-//! the passphrase passes through it once, on its way to the service.
+//! On a Mac the guest is the desktop window ([`ui`]). It shows what the
+//! app's native service reports and sends it commands. It never talks to
+//! the daemon and never sees a key or a session token; the passphrase passes
+//! through it once, on its way to the service.
+//!
+//! On a phone (the `phone` feature, which `android` and `ios` turn on) the
+//! guest is the collector's screen ([`phone`]). It pairs the phone with the
+//! owner's vault, asks for the permissions the system grants only in
+//! person, and drives the plugins that record location, app usage, battery
+//! and thermal state.
 
 pub mod bridge;
+pub mod phone;
 pub mod ui;
 
 #[cfg(all(feature = "ui-preview", target_arch = "wasm32"))]
@@ -35,18 +43,49 @@ pub async fn follow(state: State) {
 mod entry {
 	use std::sync::Arc;
 
-	use leptoskit::prelude::RwSignal;
-	use leptoskit::prelude::Set;
-
-	use super::State;
-	use super::bridge;
-	#[cfg(not(feature = "ui-preview"))]
-	use super::follow;
-	use super::ui;
-
-	/// Mounts the window and starts following the service.
+	/// Mounts the screen and starts following the service.
 	#[unsafe(no_mangle)]
 	pub extern "C" fn leptoskit_main() {
+		#[cfg(feature = "phone")]
+		phone();
+		#[cfg(not(feature = "phone"))]
+		desktop();
+	}
+
+	/// The phone's screen and its collector.
+	#[cfg(feature = "phone")]
+	fn phone() {
+		use std::sync::OnceLock;
+
+		use super::phone::State;
+		use super::phone::collect;
+
+		// The screen's actions need the state they act on, and the state is
+		// built around the action handler, so the handler finds it here.
+		let slot: Arc<OnceLock<State>> = Arc::new(OnceLock::new());
+		let found = Arc::clone(&slot);
+		let state = State::new(Arc::new(move |action| {
+			if let Some(state) = found.get() {
+				collect::act(state, action);
+			}
+		}));
+		let _ = slot.set(state.clone());
+		collect::start(&state);
+		leptoskit::guest::mount(move || super::phone::Screen(state.clone()));
+	}
+
+	/// The desktop window.
+	#[cfg(not(feature = "phone"))]
+	fn desktop() {
+		use leptoskit::prelude::RwSignal;
+		use leptoskit::prelude::Set;
+
+		use super::State;
+		use super::bridge;
+		#[cfg(not(feature = "ui-preview"))]
+		use super::follow;
+		use super::ui;
+
 		let problem: RwSignal<Option<String>> = RwSignal::new(None);
 		let send: ui::Send = Arc::new(move |command| {
 			leptoskit::guest::spawn(async move {

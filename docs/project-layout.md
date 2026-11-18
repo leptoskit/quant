@@ -10,9 +10,10 @@ quant/
   Cargo.toml           one workspace and shared SDK revision
   Cargo.lock
   crates/
-    quant_app/         product UI, currently using the native service bridge
+    quant_app/         product UI: the desktop window and the phone screen
     quant_model/       UI/service contracts
     quant_service/     resident desktop service and daemon client
+    quant_phone/       phone service: encrypted spool, identity and uploads
     quant_landing_server/   public SSR binary (package: landing)
     landing_app/       public file routes, components and stores
     landing_backend/  public health/RPC endpoints
@@ -21,12 +22,14 @@ quant/
     relay_db/          relay metadata and migrations
     quant_*/           capture, vault, authorization, CLI, MCP and collector
   platforms/macos/     app-owned Swift lifecycle and Rust runner
+  platforms/android/   Gradle project, manifest and the Rust host's plugin list
   assets/app/          product assets
   assets/landing/      public assets
   web/landing/         public web entry files
   deploy/landing/      public deployment container and Fly configuration
   deploy/relay/        relay deployment container and Fly configuration
   tests/landing/       hydrated browser checks
+  scripts/android-device.sh   build, install and drive the app on a USB phone
   .leptoskit/          generated host/plugin state (ignored)
   dist/<target>/       isolated web/server output (ignored)
 ```
@@ -39,15 +42,20 @@ each target. The relay has its own database and forwards end-to-end encrypted
 traffic; sharing a build workspace does not give it the vault's keys.
 
 Build and deploy commands run at the root with `--app-target desktop`,
-`--app-target landing` or `--app-target relay`. Deployment files use that same
-root context. No credentials are stored in the target definitions.
+`--app-target landing`, `--app-target relay` or `--app-target android`.
+Deployment files use that same root context. No credentials are stored in the
+target definitions.
 
-`web`, `android`, `ios` and `harmonyos` reserve the intended destinations in the
-same system. Selection currently fails with an explanation because the
-existing product UI has a native desktop bridge and the mobile collector
-lifecycle is not integrated. The collector/spool library already remains a
-workspace member. Declaring a target does not enable background permissions
-or claim continuous capture support on a platform.
+The `android` target builds the phone collector: `quant_app` with its `android`
+feature is the screen, `quant_phone` is its native service, and
+`platforms/android` is the host. It is a development build, described in
+[Quant on a phone](phone.md).
+
+`web`, `ios` and `harmonyos` reserve the intended destinations in the same
+system. Selection currently fails with an explanation because the product web
+frontend has no authenticated transport and those platforms have no host.
+Declaring a target does not enable background permissions or claim continuous
+capture support on a platform.
 
 Run `python3 scripts/check-project.py` for structural checks. Core tests use
 the workspace's default members; target CI selects explicit packages and

@@ -1,10 +1,13 @@
-//! What the Quant desktop window and its native service say to each other.
+//! What the Quant desktop window and its native service say to each other,
+//! and in [`phone`] what the phone's screen and its service say.
 //!
 //! The window is a Wasm guest. It never talks to the daemon: it asks the
 //! native service, which holds the signed client and the owner session, and
 //! renders the [`Snapshot`] the service sends back. Everything here is plain
 //! data, already worded and formatted for display, so the guest needs no
 //! clock, time zone, or Quant crate.
+
+pub mod phone;
 
 use serde::Deserialize;
 use serde::Serialize;

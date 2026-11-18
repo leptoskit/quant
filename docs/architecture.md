@@ -56,7 +56,7 @@ Capture sources write to a `Sink`. In the daemon the sink writes straight into t
 
 - **macOS** (`quant_capture_macos`, run inside the daemon): focus spans and window titles; a ScreenCaptureKit screenshot every 10 seconds, kept only when a perceptual hash says the screen changed, read with Vision OCR; key, click and scroll counts per minute from system counters (no event tap, never content); lock, display sleep, idle and system sleep transitions; when enabled, microphone speech segments found by a voice activity detector, with optional on-device Whisper transcription; and **Rewind**, a rolling buffer of the last day of microphone and system audio as 60-second AAC `audio.buffer` chunks (`audio.clip` is a saved moment joined from them). Password managers and private browser windows are excluded from frames, and a frame is skipped when one has focus. Everything but Rewind pauses while the machine is idle or locked — Rewind keeps recording until the owner pauses capture, because its whole purpose is to hold what already happened. The settings live in the vault (`capture.config`); changing them or pausing capture is an owner action and is audited.
 - **Desktop app** (`platforms/macos`, built with leptoskit): a menu-bar remote control for the daemon, which still does all the capturing. It pairs as its own `device` client asking for `audio:write audio:read audio:raw`, shows the status line, saves the last minutes of the rolling audio buffer, pauses and resumes capture, and opens a window to approve agents, revoke grants, and read the audit log. Owner actions take the passphrase once per 15-minute session; the app keeps only the session token, in memory.
-- **Android** (next): a foreground service collecting Health Connect data (heart rate, HRV, sleep, steps), motion and posture, location, app usage, battery and thermal state, notifications, and microphone segments, built on leptoskit. The collector side of location, app usage and power is in place ([below](#phone-location-app-usage-and-power)). This needs upstream leptoskit support for foreground services and new plugins for Health Connect and audio capture.
+- **Android** (development build): the `android` target of the Leptoskit app collects location, app usage, and battery and thermal state behind a foreground service, and uploads them with write-only scopes ([below](#phone-location-app-usage-and-power), and [the phone guide](phone.md)). Health Connect data (heart rate, HRV, sleep, steps), motion and posture, notifications, and microphone segments are not collected by the app yet. It has not been measured on a device or released.
 - **Wearables**: Bluetooth LE bridges and custom hardware send series batches under `sensor.*`.
 - **Imports** (`quant_import`, run from the CLI): history the owner already has in other tools, so years before Quant existed still answer "where does my time go".
 
@@ -103,8 +103,9 @@ Ambient raw audio defaults to seven days of retention through the stream spec's
 have no media attachment or automatic expiry, so deleting expired audio does
 not delete searchable text. If recognition remains unavailable until raw audio
 expires, the segment is marked `media expired` and cannot be transcribed. The
-mobile AppService adapter and permission UI still need to connect the native
-recorder to this pipeline; adding the pipeline alone does not start recording.
+phone app does not record audio: its service and permission screen still need
+to connect a native recorder to this pipeline; adding the pipeline alone does
+not start recording.
 
 ### Phone resource budgets
 
@@ -131,9 +132,9 @@ the cancelled HTTP connection driver is aborted so it cannot retain its socket
 and buffers across retries. `drain_with_budget` can reduce these limits, including
 a zero-duration pause while the phone is too hot. It cannot raise the ceilings.
 
-The mobile AppService must honor `Delivered::yielded`: schedule the next catch-up
-burst through the OS background scheduler with a cooldown (at least a minute),
-rather than calling drain in a tight loop. Normal uploads can follow the
+The phone's service honors `Delivered::yielded`: it sends one budgeted burst,
+then waits at least a minute before the next, however often it is woken, so it
+never drains in a tight loop. Normal uploads can follow the
 five-minute recorder boundary or a connectivity event. Motion samples should
 be batched; use low-rate orientation or OS activity APIs, and increase sampling
 only for a feature that needs it. The OS thermal and low-power signals still
@@ -187,10 +188,17 @@ series batches are stored by content hash, so a reading handed over twice
 Pair a phone with `quant approve <code> --scope location:write --scope
 apps:write --scope device:write` (plus `health:write`, `motion:write` and
 `audio:write` for what else it captures). Write scopes never imply read
-access. The mobile AppService that starts these plugins, schedules
-`wait_for_change` and `next_updates`, and asks for background location and
-Usage Access is not part of this repository yet, and the plugins' Swift and
-Kotlin hosts have not run on a physical device.
+access.
+
+The Android app starts these plugins. Its screen (`quant_app`'s `phone`
+module) asks for location, background location, notifications and Usage
+Access, starts the background service, and keeps `next_updates` and
+`wait_for_change` waiting. A native service cannot call a Kotlin plugin, so
+the screen hands every reply, undecoded, to the `quant-phone` service
+(`quant_phone`), which owns the spool, the phone's identity and the uploads.
+[Quant on a phone](phone.md) describes the pieces and their limits. The
+plugins' Kotlin hosts have not been measured on a physical device, and there
+is no iOS host.
 
 ### Rewind
 
@@ -245,7 +253,7 @@ After the day's `memory.daily` exists, a daily job sends the day's texts — the
 ## Roadmap
 
 1. **The relay**, so phones, sensors, and agents reach the vault from anywhere while the relay sees only TLS ([hosting](hosting.md)).
-2. **One leptoskit app everywhere:** the Android collector as a second target of the desktop app, on leptoskit's sensor, health, and background plugins; Wear OS and watchOS for heart rate from the wrist.
+2. **One leptoskit app everywhere:** take the Android collector from a development build to a measured release, add health, motion and audio to it on leptoskit's sensor and health plugins, and give iOS a host; Wear OS and watchOS for heart rate from the wrist.
 3. **Desktop:** owner actions unlocked with Touch ID, and opening at login.
 4. iOS collector (HealthKit, background modes).
 5. Hosted vaults in attested enclaves ([hosting](hosting.md)).

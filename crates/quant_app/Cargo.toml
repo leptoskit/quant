@@ -1,6 +1,6 @@
 [package]
 name = "quant_app"
-description = "The Quant desktop window: status, saved moments, agents, and the audit log."
+description = "The Quant screens: the desktop window (status, saved moments, agents, audit) and the phone collector."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,7 +18,21 @@ ui-preview = []
 # The native Wasm guest. The window talks only to the app's own service.
 native = ["leptoskit/guest", "leptoskit_bridge/guest"]
 macos = ["native", "leptoskit/macos"]
-android = ["native", "leptoskit/android"]
+# The phone screen and its collector, in place of the desktop window. The
+# guest drives the plugins that record location, app usage, battery and
+# thermal state, and hands what they report to the `quant-phone` service.
+phone = [
+	"native",
+	"dep:leptoskit_plugin_app_usage",
+	"dep:leptoskit_plugin_background",
+	"dep:leptoskit_plugin_battery",
+	"dep:leptoskit_plugin_location",
+	"dep:leptoskit_plugin_notifications",
+	"dep:leptoskit_plugin_secure_store",
+	"dep:leptoskit_plugin_thermal",
+]
+android = ["phone", "leptoskit/android"]
+ios = ["phone", "leptoskit/ios"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 
@@ -29,7 +43,14 @@ serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 leptoskit_bridge = { workspace = true }
+leptoskit_plugin_app_usage = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_background = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_battery = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_device_keys = { workspace = true, features = ["guest"] }
+leptoskit_plugin_location = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_notifications = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_secure_store = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_thermal = { workspace = true, features = ["guest"], optional = true }
 
 [dev-dependencies]
 leptoskit_testing = { workspace = true }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "platforms/macos"]
+members = ["crates/*", "platforms/android", "platforms/macos"]
 default-members = ["crates/quant_access", "crates/quant_api", "crates/quant_capture_macos", "crates/quant_cli", "crates/quant_client", "crates/quant_collector", "crates/quant_core", "crates/quant_crypto", "crates/quant_daemon", "crates/quant_derive", "crates/quant_import", "crates/quant_learn", "crates/quant_mcp", "crates/quant_relay", "crates/quant_store"]
 
 [workspace.package]
@@ -13,6 +13,7 @@ publish = false
 
 [workspace.dependencies]
 quant_model = { path = "crates/quant_model" }
+quant_phone = { path = "crates/quant_phone" }
 quant_service = { path = "crates/quant_service" }
 leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e", default-features = false }
 leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e", default-features = false }
@@ -21,10 +22,13 @@ leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb27
 leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e", default-features = false }
 leptoskit_plugin_app_usage = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
+leptoskit_plugin_background = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_battery = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_location = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
+leptoskit_plugin_notifications = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e", default-features = false }
+leptoskit_plugin_secure_store = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_plugin_thermal = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
 leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "bcb276a1a2672c779524375a3875fc0b39b9a36e" }
@@ -45,6 +49,7 @@ quant_store = { path = "crates/quant_store" }
 quant_crypto = { path = "crates/quant_crypto" }
 quant_api = { path = "crates/quant_api" }
 quant_client = { path = "crates/quant_client" }
+quant_collector = { path = "crates/quant_collector" }
 quant_daemon = { path = "crates/quant_daemon" }
 quant_derive = { path = "crates/quant_derive" }
 quant_import = { path = "crates/quant_import" }

@@ -297,7 +297,7 @@ enum Command {
 		#[arg(long, default_value_t = 2)]
 		batch_seconds: u64,
 	},
-	/// Print the link (and QR code) a phone scans to reach this daemon over
+	/// Print the link (and QR code) a phone uses to reach this daemon over
 	/// the network. The daemon must be running with `--tcp`.
 	Link {
 		/// The address phones should use; defaults to this machine's LAN
@@ -1330,8 +1330,9 @@ async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
 			.build()
 	);
 	println!("{link}\n");
-	println!("Scan this in the Quant app on your phone. It will ask to pair; approve it with");
-	println!("`quant approve <code>` and the scopes the phone should write, such as");
+	println!("Paste this link into the Quant app on your phone. The app shows a pairing code");
+	println!("and the command that approves it: `quant approve <code>` with the scopes the");
+	println!("phone should write, such as");
 	println!("--scope health:write --scope motion:write --scope location:write --scope apps:write");
 	println!("--scope device:write.");
 	if relayed {

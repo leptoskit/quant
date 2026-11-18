@@ -112,15 +112,30 @@ platform = "web"
 frontend = "app"
 unavailable = "The product UI still uses the native service bridge; its authenticated browser transport is not implemented."
 
+# The phone collector. Its guest is the same `quant_app` crate with the
+# `android` feature, which swaps the desktop window for the phone's screen.
+# The host is platforms/android; its native service is `quant-phone`.
 [targets.android]
 platform = "android"
 frontend = "app"
-unavailable = "Quant's mobile native host and collector lifecycle are not integrated yet."
+
+[targets.android.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"location",
+	"app-usage",
+	"battery",
+	"thermal",
+	"background",
+	"secure-store",
+	"notifications",
+]
 
 [targets.ios]
 platform = "ios"
 frontend = "app"
-unavailable = "Quant's mobile native host and background collection lifecycle are not integrated yet."
+unavailable = "Quant has no iOS host yet. The phone screen and service build for iOS, but platforms/ios and its background modes do not exist; see docs/phone.md."
 
 [targets.harmonyos]
 platform = "harmonyos"

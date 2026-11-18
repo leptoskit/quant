@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app-owned half of the manifest. `leptoskit native prepare android` merges
+  in what the selected plugins declare (location, Usage Access, the foreground
+  service, notifications) and writes the result to
+  .leptoskit/android/AndroidManifest.xml, which is the one Gradle builds.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The native service delivers to the owner's vault over pinned TLS. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!--
+      Nothing here is backed up or copied to another phone. The spool key lives
+      in this phone's keystore and the signing identity belongs to this phone
+      alone: a restored copy would be a second device claiming to be the first.
+    -->
+    <application android:label="Quant" android:theme="@style/LeptosKitTheme" android:enableOnBackInvokedCallback="true" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules">
+        <activity android:name="dev.leptoskit.quant.MainActivity" android:exported="true" android:launchMode="singleTop" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize" android:resizeableActivity="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
