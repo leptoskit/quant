@@ -37,8 +37,7 @@ mod dhash;
 mod focus;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod privacy;
+pub mod privacy;
 pub mod resample;
 pub mod rewind;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

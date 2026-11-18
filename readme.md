@@ -47,6 +47,7 @@ Questions like "how did I sleep after late coffee?", "when do I focus best?", or
 | `quant_daemon`  | `quantd`: serves the API on a private socket and enforces every grant.                        |
 | `quant_client`  | A signing client for the CLI, the MCP server, and devices.                                    |
 | `quant_collector` | A device-side encrypted spool that queues captures offline and drains them to the vault.   |
+| `quant_import` | Imports existing history from Screenpipe and ActivityWatch through the signed ingest path.  |
 | `quant_mcp`     | The MCP server agents talk to; its tool list follows the agent's grant.                        |
 | `quant_cli`     | The `quant` command.                                                                           |
 
@@ -116,6 +117,20 @@ quant series health.heart_rate --from -12h --bucket 1800
 quant search "quarterly budget" --from -7d
 quant audit                # who read what, and whether the log was tampered with
 ```
+
+## Importing history
+
+Quant's own capture starts the moment the daemon does, but you may already have years of history in other tools. `quant import` pulls it in through the same signed ingest path as everything else — the importer pairs like a device, needs write scopes for the families it touches, and never opens the vault directly:
+
+```sh
+quant import screenpipe                          # ~/.screenpipe/db.sqlite, read-only
+quant import screenpipe --since 2025-01-01 --dry-run
+quant import screenpipe --follow --every 5m      # keep pulling as new frames arrive
+quant import activitywatch                       # aw-server at http://localhost:5600
+quant import activitywatch --file aw-export.json # an export, offline
+```
+
+Screenpipe frames become `apps.focus` spans (a gap of more than twice the median frame interval, capped at 60 s, ends a span) and `screen.frame` records carrying the OCR text, deduplicated when consecutive frames read the same; its audio transcriptions become `audio.transcript`. ActivityWatch window events become `apps.focus`, afk events become `device.state` idle and active spans, and web events become focus spans carrying the page URL. Re-running an import never duplicates anything: every record's id is derived from the source event, a per-source watermark keeps `--follow` cheap, and `--dry-run` counts what would arrive without writing it. Imported records are marked `source = "screenpipe"` or `source = "activitywatch"`, and the same password-manager and private-window exclusions apply as to live capture.
 
 ## Custom hardware
 

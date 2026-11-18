@@ -3,6 +3,7 @@
 mod capture;
 mod daemon;
 mod hardware;
+mod import;
 mod print;
 mod relay;
 mod rewind;
@@ -301,6 +302,11 @@ enum Command {
 		/// exit.
 		#[arg(long)]
 		setup: bool,
+	},
+	/// Import existing history from Screenpipe or `ActivityWatch`.
+	Import {
+		#[command(subcommand)]
+		source: import::Source,
 	},
 }
 
@@ -815,6 +821,7 @@ async fn main() -> Result<()> {
 		Command::Claims { action } => claims(&cx, action).await,
 		Command::Profile => profile(&cx).await,
 		Command::Mcp { scopes, setup } => mcp(&cx, &scopes, setup).await,
+		Command::Import { source } => import::run(&cx, source).await,
 		Command::Link { host, port } => link(&cx, host, port).await,
 		Command::Stream { action } => hardware::stream(&cx, action).await,
 		Command::Capture { action } => capture::run(&cx, action).await,
