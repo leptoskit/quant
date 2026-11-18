@@ -337,9 +337,9 @@ pub(crate) fn audit_meta(
 ) -> (Option<String>, Option<QuestionId>, Option<String>) {
 	let sanitise = |text: &str| quant_access::redact::sanitize(text).trim().to_owned();
 	(
-		meta.purpose.as_deref().map(|p| sanitise(p)),
+		meta.purpose.as_deref().map(sanitise),
 		meta.question.as_deref().and_then(|q| q.parse().ok()),
-		meta.model.as_deref().map(|m| sanitise(m)),
+		meta.model.as_deref().map(sanitise),
 	)
 }
 
