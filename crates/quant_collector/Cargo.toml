@@ -10,6 +10,10 @@ rust-version.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 jiff = { workspace = true }
+leptoskit_plugin_app_usage = { workspace = true }
+leptoskit_plugin_battery = { workspace = true }
+leptoskit_plugin_location = { workspace = true }
+leptoskit_plugin_thermal = { workspace = true }
 quant_api = { workspace = true }
 quant_client = { workspace = true }
 quant_core = { workspace = true }
@@ -20,6 +24,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true, default-features = false, features = ["time"] }
 
 [dev-dependencies]
+quant_access = { workspace = true }
 quant_daemon = { workspace = true }
 tempfile = { workspace = true }
 
