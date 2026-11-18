@@ -31,6 +31,8 @@ relay_db = { path = "crates/relay_db" }
 leptoskit_axum = { git = "https://github.com/leptoskit/leptoskit", rev = "92ac609ece229043427c7edd7964a7ec7518696e" }
 leptoskit_db = { git = "https://github.com/leptoskit/leptoskit", rev = "92ac609ece229043427c7edd7964a7ec7518696e" }
 landing_shared = { path = "crates/landing_shared" }
+# Test harnesses own a reactive Owner; Leptoskit does not re-export it.
+reactive_graph = "0.3.0-rc1"
 leptoskit_router = { git = "https://github.com/leptoskit/leptoskit", rev = "92ac609ece229043427c7edd7964a7ec7518696e", default-features = false }
 skribble_leptoskit = { git = "https://github.com/openbudgetfun/skribble", rev = "46b8e635b1d983f92054d13fcc0bc513e7b9a43c" }
 quant_core = { path = "crates/quant_core" }

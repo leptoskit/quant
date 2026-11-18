@@ -5964,6 +5964,7 @@ dependencies = [
  "leptoskit_plugin_device_keys",
  "leptoskit_testing",
  "quant_model",
+ "reactive_graph",
  "serde_json",
 ]
 

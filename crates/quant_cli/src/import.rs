@@ -176,7 +176,7 @@ async fn paired_client(cx: &Ctx, scopes: &[String]) -> Result<Client> {
 		cx.endpoint.clone(),
 		Identity::generate(format!("quant import on {}", crate::hostname())),
 	);
-	match client.pair(ClientKind::Device, scopes).await {
+	match client.pair(ClientKind::Device, scopes, None).await {
 		Ok(response) => {
 			client.identity().save(&path)?;
 			println!(

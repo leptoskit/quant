@@ -1254,6 +1254,13 @@ mod tests {
 	use super::*;
 
 	fn harness(snapshot: Snapshot) -> (WidgetTester, State, Arc<Mutex<Vec<Command>>>) {
+		// The state's signals need a reactive owner. With Leptos's
+		// `sandboxed-arenas` feature on (the landing crates turn it on in
+		// a workspace build), a signal made outside one panics. The owner
+		// lives for the rest of the test's thread.
+		let owner = reactive_graph::owner::Owner::new();
+		owner.set();
+		std::mem::forget(owner);
 		let sent = Arc::new(Mutex::new(Vec::new()));
 		let log = Arc::clone(&sent);
 		let state = State::new(Arc::new(move |c| log.lock().unwrap().push(c)));

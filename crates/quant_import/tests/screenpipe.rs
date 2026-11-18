@@ -174,7 +174,7 @@ async fn start(dir: &tempfile::TempDir, scopes: &[&str]) -> Harness {
 	let endpoint = Endpoint::Unix(socket);
 
 	let mut client = Client::new(endpoint.clone(), Identity::generate("importer"));
-	let pairing = client.pair(ClientKind::Device, &[]).await.unwrap();
+	let pairing = client.pair(ClientKind::Device, &[], None).await.unwrap();
 	OwnerSession::open(endpoint, PASS)
 		.await
 		.unwrap()
