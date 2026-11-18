@@ -158,6 +158,48 @@ async fn unapproved_agents_only_see_how_to_get_approved() {
 }
 
 #[tokio::test]
+async fn initialize_pairs_with_what_client_info_says() {
+	let (_dir, endpoint, _state) = daemon().await;
+	let client = Client::new(endpoint.clone(), Identity::generate("Claude (MCP)"));
+	// The configuration names the vendor and model; the MCP host names
+	// itself and its version.
+	let mut server = Server::new(
+		client,
+		AgentSetup {
+			agent: AgentIdentity {
+				product: String::new(),
+				version: String::new(),
+				..identity()
+			},
+			scopes: vec!["apps:summary".into()],
+			identity_path: None,
+		},
+	);
+	call(
+		&mut server,
+		1,
+		"initialize",
+		json!({
+			"protocolVersion": "2025-06-18",
+			"clientInfo": { "name": "claude-code", "version": "2.1.0" }
+		}),
+	)
+	.await;
+	let owner = OwnerSession::open(endpoint, PASS).await.unwrap();
+	let clients = owner.clients().await.unwrap();
+	let [pending] = clients.as_slice() else {
+		panic!("one pending client, got {clients:?}");
+	};
+	assert_eq!(pending.kind, ClientKind::Agent);
+	assert_eq!(pending.requested, vec!["apps:summary".to_owned()]);
+	let agent = pending.agent.as_ref().expect("the agent said what it is");
+	assert_eq!(agent.product, "claude-code");
+	assert_eq!(agent.version, "2.1.0");
+	assert_eq!(agent.vendor, "Anthropic");
+	assert_eq!(agent.model, "claude-opus-5-5");
+}
+
+#[tokio::test]
 async fn tools_follow_the_grant() {
 	let (_dir, endpoint, state) = daemon().await;
 	let device = DeviceId::new();

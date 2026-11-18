@@ -149,6 +149,8 @@ impl Server {
 		if self.client.identity().client.is_some() {
 			return;
 		}
+		// A client that skipped `initialize` still pairs with a name.
+		self.refine_identity(&Value::Null);
 		match self
 			.client
 			.pair(
@@ -203,7 +205,8 @@ impl Server {
 		let id = id?;
 		let result = match method.as_str() {
 			"initialize" => {
-				self.refine_identity(&params);
+				let info = params.get("clientInfo").cloned().unwrap_or(Value::Null);
+				self.refine_identity(&info);
 				self.try_pair().await;
 				Ok(Self::initialize(&params))
 			}
@@ -365,4 +368,62 @@ pub async fn serve_stdio(client: Client, setup: AgentSetup) -> std::io::Result<(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use quant_client::Identity;
+
+	use super::*;
+
+	fn new_server(agent: AgentIdentity) -> Server {
+		Server::new(
+			Client::new(
+				quant_client::Endpoint::Tcp("127.0.0.1:9".into()),
+				Identity::generate("test"),
+			),
+			AgentSetup {
+				agent,
+				scopes: Vec::new(),
+				identity_path: None,
+			},
+		)
+	}
+
+	fn blank() -> AgentIdentity {
+		AgentIdentity {
+			product: String::new(),
+			vendor: String::new(),
+			model: String::new(),
+			version: String::new(),
+			host: "mini".into(),
+			operator: None,
+		}
+	}
+
+	#[test]
+	fn client_info_fills_what_configuration_left_empty() {
+		let mut server = new_server(blank());
+		server.refine_identity(&json!({ "name": "claude-code", "version": "2.1.0" }));
+		assert_eq!(server.setup.agent.product, "claude-code");
+		assert_eq!(server.setup.agent.version, "2.1.0");
+
+		let mut configured = new_server(AgentIdentity {
+			product: "Claude Code".into(),
+			..blank()
+		});
+		configured.refine_identity(&json!({ "name": "other", "version": "9" }));
+		assert_eq!(configured.setup.agent.product, "Claude Code");
+		assert_eq!(configured.setup.agent.version, "9");
+	}
+
+	#[test]
+	fn an_agent_never_pairs_nameless() {
+		let mut server = new_server(AgentIdentity {
+			host: String::new(),
+			..blank()
+		});
+		server.refine_identity(&Value::Null);
+		assert!(server.setup.agent.is_complete());
+	}
 }
