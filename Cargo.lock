@@ -6326,6 +6326,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "quant_ios"
+version = "0.1.0"
+dependencies = [
+ "leptoskit_bridge_ffi",
+ "leptoskit_plugin_app_usage",
+ "leptoskit_plugin_battery",
+ "leptoskit_plugin_location",
+ "leptoskit_plugin_secure_store",
+ "leptoskit_plugin_thermal",
+ "quant_phone",
+]
+
+[[package]]
 name = "quant_learn"
 version = "0.1.0"
 dependencies = [

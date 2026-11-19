@@ -58,10 +58,11 @@ pub enum Step {
 	/// Location all the time.
 	Always,
 	/// The notification Android shows while the app works in the background.
+	/// The iPhone app has none.
 	Notifications,
 	/// Usage Access, which Android grants only on its own settings screen.
 	Usage,
-	/// An exemption from battery optimisation.
+	/// An exemption from battery optimisation, which only Android has.
 	Battery,
 }
 
@@ -90,6 +91,11 @@ impl Step {
 			Step::Location => {
 				"Records where this phone goes. Nothing is collected in the background until you \
 				 allow it."
+			}
+			Step::Always if cfg!(feature = "ios") => {
+				"Keeps location coming while Quant is in the background. Choose “Change to Always \
+				 Allow”. If iOS doesn't ask, set Location to Always in Quant's settings, then tap \
+				 this again."
 			}
 			Step::Always => {
 				"Keeps location coming when Quant is restarted in the background. Choose “Allow \

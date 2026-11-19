@@ -7,6 +7,13 @@
 //! hands every plugin reply to the service as it arrived. It decodes a reply
 //! only to learn whether to ask again.
 //!
+//! Android and iOS keep collecting in the background differently. Android
+//! needs the background plugin's location-typed foreground service running
+//! before it allows background location. iOS has no such service: location
+//! updates themselves keep the app running once the owner chose "Always",
+//! so the iOS app selects neither the background nor the notifications
+//! plugin, and those steps report themselves unavailable.
+//!
 //! The guest has no clock. Stretches of time come from the service
 //! ([`Command::UsagePlan`]), and the service stamps what arrives.
 
@@ -60,6 +67,9 @@ const RETRY: Duration = Duration::from_secs(30);
 const POWER_POLL: Duration = Duration::from_mins(5);
 /// An app usage reply holding nothing: a count of zero.
 const NO_SESSIONS: [u8; 4] = [0; 4];
+/// Whether this is the iPhone app, which collects in the background through
+/// the "Always" location grant instead of a foreground service.
+const IOS: bool = cfg!(feature = "ios");
 
 thread_local! {
 	/// What the collector has running. The guest is single-threaded.
@@ -71,6 +81,8 @@ struct Running {
 	background: Cell<bool>,
 	/// Whether location updates were started.
 	location: Cell<bool>,
+	/// Whether the running location updates continue in the background.
+	location_background: Cell<bool>,
 	/// Bumped whenever location updates start or stop, so a loop left over
 	/// from an earlier start knows to end.
 	generation: Cell<u32>,
@@ -89,6 +101,7 @@ impl Running {
 		Self {
 			background: Cell::new(false),
 			location: Cell::new(false),
+			location_background: Cell::new(false),
 			generation: Cell::new(0),
 			usage: Cell::new(false),
 			syncing: Cell::new(false),
@@ -434,9 +447,9 @@ async fn sync_once(state: &State) {
 		}
 	}
 	let mut problem = None;
-	// The background service comes first: the system refuses background
+	// The background service comes first: Android refuses background
 	// location updates unless a location-typed service is already running.
-	if !RUN.with(|run| run.background.get()) {
+	if !IOS && !RUN.with(|run| run.background.get()) {
 		match start_background().await {
 			Ok(()) => RUN.with(|run| run.background.set(true)),
 			Err(error) => {
@@ -446,13 +459,19 @@ async fn sync_once(state: &State) {
 			}
 		}
 	}
+	let background = background_wanted(state);
+	if RUN.with(|run| run.location.get() && run.location_background.get() != background) {
+		// Started before the background service or the "Always" grant;
+		// start again so updates continue in the background.
+		stop_location().await;
+	}
 	if !RUN.with(|run| run.location.get()) {
-		let background = RUN.with(|run| run.background.get());
-		match start_location(background).await {
+		match start_location_for(state, background).await {
 			// Busy means updates are already running from an earlier start.
-			Ok(()) | Err(Error::Busy) => {
+			Ok(started) => {
 				let generation = RUN.with(|run| {
 					run.location.set(true);
+					run.location_background.set(started);
 					run.generation.set(run.generation.get().wrapping_add(1));
 					run.generation.get()
 				});
@@ -461,7 +480,57 @@ async fn sync_once(state: &State) {
 			Err(error) => problem = Some(format!("Location updates could not start: {error}")),
 		}
 	}
+	if IOS && problem.is_none() && !RUN.with(|run| run.location_background.get()) {
+		problem = Some(
+			"Allow location all the time to keep collecting while Quant is in the background. \
+			 Until then this iPhone collects only while Quant is open."
+				.to_owned(),
+		);
+	}
 	state.collector.set(problem);
+}
+
+/// Whether location updates should continue in the background. Android
+/// needs the background service running. iOS needs the "Always" grant, which
+/// nothing can read without a prompt, so an unknown grant is tried and the
+/// start reveals it.
+fn background_wanted(state: &State) -> bool {
+	if IOS {
+		state.permissions.get_untracked().always != Grant::Needed
+	} else {
+		RUN.with(|run| run.background.get())
+	}
+}
+
+/// Start location updates, in the background when `background`. Returns
+/// whether they continue in the background. On iOS a refused background
+/// start means the owner allowed location only while Quant is in use: that
+/// is recorded, and updates start for the foreground instead.
+async fn start_location_for(state: &State, background: bool) -> Result<bool, Error> {
+	match start_location(background).await {
+		Ok(()) | Err(Error::Busy) => {
+			if IOS && background {
+				note_always(state, Grant::Granted);
+			}
+			Ok(background)
+		}
+		Err(Error::PermissionDenied) if IOS && background => {
+			note_always(state, Grant::Needed);
+			match start_location(false).await {
+				Ok(()) | Err(Error::Busy) => Ok(false),
+				Err(error) => Err(error),
+			}
+		}
+		Err(error) => Err(error),
+	}
+}
+
+fn note_always(state: &State, grant: Grant) {
+	let mut permissions = state.permissions.get_untracked();
+	if permissions.always != grant {
+		permissions.always = grant;
+		state.permissions.set(permissions);
+	}
 }
 
 async fn start_background() -> Result<(), Error> {
@@ -478,21 +547,34 @@ async fn start_location(background: bool) -> Result<(), Error> {
 	let options = location::UpdateOptions::new(location::UpdateAccuracy::Balanced)
 		.with_interval_ms(LOCATION_INTERVAL_MS)?
 		.with_distance_filter_m(LOCATION_DISTANCE_M)?
-		.with_background(background);
+		.with_background(background)
+		// iOS only. A paused update never resumes while the app is in the
+		// background, so standing still would end collection until Quant is
+		// opened. The blue indicator shows the owner Quant is collecting, as
+		// Android's notification does.
+		.with_pauses_automatically(false)
+		.with_show_background_indicator(true);
 	Location::new()?.start_updates(options).await
 }
 
 async fn stop() {
-	let (location, background) = RUN.with(|run| {
+	stop_location().await;
+	if RUN.with(|run| run.background.replace(false))
+		&& let Ok(plugin) = Background::new()
+	{
+		let _ = plugin.stop().await;
+	}
+}
+
+async fn stop_location() {
+	let location = RUN.with(|run| {
 		run.generation.set(run.generation.get().wrapping_add(1));
-		(run.location.replace(false), run.background.replace(false))
+		run.location_background.set(false);
+		run.location.replace(false)
 	});
 	if location && let Ok(plugin) = Location::new() {
 		// The waiting loop is answered with what is buffered, then ends.
 		let _ = plugin.stop_updates().await;
-	}
-	if background && let Ok(plugin) = Background::new() {
-		let _ = plugin.stop().await;
 	}
 }
 

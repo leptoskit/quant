@@ -18,7 +18,8 @@ resources and release artifacts remain destinations of this one application.
 | `desktop-preview` | Local UI with explicitly labelled, synthetic sample data | Design review and screenshots only; never distribute as the product. |
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
 | `android` | Debug APK of the phone collector | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
-| `ios`, `harmonyos` | Native application packages | Blocked by their `unavailable` entries; hosts and collector lifecycles are unfinished. |
+| `ios` | Unsigned device build of the phone collector | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
+| `harmonyos` | Native application package | Blocked by its `unavailable` entry; the host and collector lifecycle are unfinished. |
 
 Deploy the landing site independently when ready. Prove the relay with a
 synthetic vault and existing CLI clients before connecting an owner's vault.

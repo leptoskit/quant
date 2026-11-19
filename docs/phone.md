@@ -5,28 +5,36 @@ in front, and its battery and thermal state, and delivers that to your vault.
 It has no vault of its own and can read nothing back: it pairs with write
 scopes only.
 
-It is the `android` target of the same Leptoskit application as the desktop
-window. Nothing has been published; this page covers building it yourself and
-running it on a phone attached over USB.
+It is the `android` and `ios` targets of the same Leptoskit application as
+the desktop window. Nothing has been published; this page covers building it
+yourself and running it on an Android phone attached over USB, an iPhone, or
+the iOS simulator.
 
 > **Status.** The Android app builds in CI and its Rust side is tested against
-> a live daemon. It has not been through the device, battery and thermal
-> measurements the [deployment plan](deployment-plan.md#10-gates-for-future-product-web-and-mobile-releases)
-> requires before a release. Treat it as a development build.
+> a live daemon. The iPhone app's Xcode project builds in CI for a device,
+> unsigned, and has not yet run in a simulator or on an iPhone. Neither has
+> been through the device, battery and thermal measurements the
+> [deployment plan](deployment-plan.md#10-gates-for-future-product-web-and-mobile-releases)
+> requires before a release. Treat both as development builds.
 
 ## What it records
 
 | Source | Vault streams | Scope | Needs |
 | --- | --- | --- | --- |
 | Location | `location.fix` | `location:write` | Location permission |
-| App usage | `apps.focus`, `device.state` | `apps:write`, `device:write` | Usage Access |
+| App usage | `apps.focus`, `device.state` | `apps:write`, `device:write` | Usage Access (Android) |
 | Battery and temperature | `device.battery`, `device.power` | `device:write` | Nothing |
+
+An iPhone records less. iOS gives apps no way to see which other apps were
+in front, so it sends no `apps.focus`, only the lock and unlock events in
+`device.state`, and only while Quant is running. Its thermal state has no
+raw value beside the four levels.
 
 What each stream holds is described in
 [the architecture notes](architecture.md#phone-location-app-usage-and-power).
 Audio, health and motion are not collected by this app yet.
 
-## Run it on a phone attached over USB
+## Run it on an Android phone attached over USB
 
 You need:
 
@@ -87,6 +95,65 @@ kept under `target/leptoskit-control`. The port forward, typing a link,
 `grant`, `status` and `logs` use `adb` directly, because the controller has no
 step for them that works without Appium.
 
+## Run it on an iPhone or in the simulator
+
+You need a Mac with:
+
+- [Xcode](https://developer.apple.com/xcode/) and an iOS simulator runtime
+  (Xcode, Settings, Components).
+- [Rust](https://rustup.rs) and the Leptoskit CLI at the revision `Cargo.toml`
+  pins. `scripts/ios-device.sh doctor` prints the exact install command.
+- `perl` and `make`, which come with Xcode's command line tools.
+- For an iPhone: [Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)
+  switched on, the iPhone trusting this Mac, and an Apple developer team to
+  sign for. A free Apple account has one. Its ID is in Xcode, Settings,
+  Accounts.
+
+Then, from the repository root:
+
+```sh
+scripts/ios-device.sh doctor                       # checks the tools, simulators and iPhones
+scripts/ios-device.sh                              # builds, installs and opens the app
+QUANT_IOS_TEAM=ABCDE12345 scripts/ios-device.sh    # the same, on an attached iPhone
+```
+
+Without `-s UDID` the script uses the one booted simulator or the one
+attached iPhone, and boots the newest iPhone simulator when there is
+neither. The first build compiles the Rust host for iOS and takes several
+minutes. Simulator builds are signed ad hoc and need no team. The script wraps
+steps you can also run yourself, with an id from `leptoskit device list`:
+
+```sh
+rustup target add aarch64-apple-ios-sim    # aarch64-apple-ios for an iPhone
+leptoskit --app-target ios native build ios-simulator
+leptoskit device install --kind ios-simulator --device UDID \
+  --path .leptoskit/ios/build/Build/Products/Debug-iphonesimulator/App.app
+leptoskit device open --kind ios-simulator --device UDID --app dev.leptoskit.quant
+```
+
+For an iPhone, `leptoskit --app-target ios build` writes the Xcode project at
+`.leptoskit/ios/Host.xcodeproj` and builds it unsigned, which a phone refuses.
+The script then builds it again signed for `QUANT_IOS_TEAM`. You can instead
+open the project in Xcode, choose a team under Signing & Capabilities and
+press Run. The project is rewritten by every build; change `platforms/ios`
+instead.
+
+Other commands, as for Android:
+
+| Command | What it does |
+| --- | --- |
+| `link [LINK]` | Puts a pairing link on the simulator's clipboard, or on this Mac's for an iPhone to paste through [Universal Clipboard](https://support.apple.com/en-us/102430). |
+| `location LAT,LON` | Moves the simulator to a place, so location readings arrive. `location clear` stops it. |
+| `grant` | Allows location all the time in the simulator, for testing. |
+| `screenshot [FILE]` | Saves what the simulator shows. |
+| `recent [LINES]`, `logs` | Prints or follows the app's log in the simulator. For an iPhone, open Console.app and search for `App`. |
+| `sanity` | Installs and opens the app and runs a tap, long press, pan and pinch. On iOS these need an [Appium](https://appium.io) server with the XCUITest driver. |
+| `device ARGS...` | Runs any `leptoskit device` command against the simulator or iPhone. |
+| `boot [UDID]`, `devices` | Boots a simulator, or lists what `leptoskit device` can see. |
+| `status`, `stop`, `uninstall` | What is installed and running; stops the app; removes it and everything it stored. |
+
+`scripts/ios-device.sh help` lists them all.
+
 ## Pair it with your vault
 
 The daemon has to listen on the network, and the phone has to be able to
@@ -123,6 +190,18 @@ quant approve <code> --scope location:write --scope apps:write --scope device:wr
 
 Tap "I approved it", or wait a minute for the app to notice.
 
+**In the iOS simulator.** The simulator shares this Mac's network, so the
+daemon can listen on loopback. Tap the link field in the app, then:
+
+```sh
+quant service install --tcp 127.0.0.1:7717
+quant link --host 127.0.0.1 | scripts/ios-device.sh link
+```
+
+Paste into the field and tap Connect. An iPhone pairs over Wi-Fi or a relay
+like an Android phone; `scripts/ios-device.sh link` puts the link on this
+Mac's clipboard for it.
+
 The link carries the vault's certificate fingerprint. The phone talks to
 nothing whose certificate does not match it, directly or through a relay, and
 refuses any address that does not come as a pairing link.
@@ -139,6 +218,18 @@ what it is for.
 | Notifications | The collecting notification is hidden. Collection continues. |
 | Usage Access | No app usage or screen and lock events. Android grants this only on its own settings screen; the button opens it. |
 | Battery exemption | Android may pause the app to save battery. |
+
+On an iPhone there are two steps, both the system's own prompts:
+
+| Permission | What happens without it |
+| --- | --- |
+| Location | No location. The app usage and power readings still arrive while Quant is open. |
+| Location all the time ("Change to Always Allow") | Location arrives only while Quant is open. With it, updates keep Quant running in the background, and the blue location indicator shows while they do. |
+
+iOS has no notification, Usage Access or battery exemption to ask for, so the
+app does not show those steps. It cannot read the "Always" grant without
+asking, so it learns it by starting updates for the background and falling
+back to the foreground when iOS refuses.
 
 Switch "Collect on this phone" off to stop everything: location updates and
 the background service stop, and readings that arrive are discarded.
@@ -158,7 +249,20 @@ guest can. So the app is three pieces.
   `quant_collector`, and uploads them within the battery and thermal budget.
 - **The host** (`platforms/android`) is the Gradle project, the manifest, and
   a Rust crate whose dependencies tell the Leptoskit CLI which plugins to
-  register. Generated files go to `.leptoskit/android`.
+  register. Generated files go to `.leptoskit/android`. On iOS the host is
+  `platforms/ios`: Leptoskit's generated `App.swift`, the `Info.plist` with
+  the two location usage strings, a UI test, and the same kind of Rust
+  crate. `leptoskit build` writes the Xcode project to `.leptoskit/ios` and
+  adds the `location` background mode the location plugin declares.
+
+The iPhone app leaves out the `background` and `notifications` plugins.
+Android needs a foreground service, announced by a notification, before it
+allows background location; iOS has no such service, and keeps an app running
+for as long as it receives location updates it started for the background.
+Leptoskit's background plugin also registers its iOS background tasks when it
+is started, after launch, and iOS stops an app that does that. Delivery on an
+iPhone is driven by location replies and the screen's one-minute timer, which
+run while Quant does.
 
 `quant_model::phone` is the contract between the screen and the service.
 
@@ -189,6 +293,10 @@ Everything is in the app's private data directory.
 The app opts out of Android backup and device-to-device transfer. A restored
 copy would be a second phone claiming to be the first, with a spool it could
 not open.
+
+On an iPhone the same files are in the app's Application Support folder, the
+spool key is in the keychain for this device only, and the app excludes the
+folder from iCloud and computer backups when it starts.
 
 Uninstalling the app deletes all of it. Readings already delivered stay in
 your vault. To stop the vault accepting the phone, revoke its grant on the
@@ -225,18 +333,26 @@ quant series device.battery --from -6h
   upload keystore described in the Leptoskit
   [Android guide](https://leptoskit.dev/docs/platforms/android.html).
 
-## iOS
+## iOS limits
 
-There is no iOS app. The screen and the service are written to run on both
-platforms, and the `ios` feature of `quant_app` selects the phone screen, but
-the target stays marked unavailable in `leptoskit.toml` until these exist:
-
-- A host in `platforms/ios`: the Swift lifecycle, the purpose strings for
-  location while in use and always, and the location, fetch and processing
-  background modes the plugins declare.
-- A decision about what collection iOS permits. The app usage plugin reports
-  only lock and unlock there, and only while the app is alive. Background
-  location needs the "Always" grant and should use visits and significant
-  changes instead of continuous updates.
-- A build and a run on a device. None of the Swift plugin code has been
-  compiled for this app.
+- **Collection stops when Quant is swiped away or the iPhone restarts**,
+  until Quant is opened again. iOS relaunches an app in the background for
+  significant location changes and visits, which the location plugin
+  supports, but the screen that hands readings to the service only exists
+  while a window does. Collecting after a relaunch needs the host to start
+  the guest without a window first.
+- **Continuous updates cost battery.** The app asks for 100-metre accuracy,
+  25 metres between fixes, and no automatic pausing, because iOS does not
+  resume paused updates while the app is in the background. Visits and
+  significant changes would cost less and record less. Nothing has been
+  measured on an iPhone.
+- **App usage is only lock and unlock**, buffered while Quant runs. Screen
+  Time data reaches only report extensions, which cannot send it back to the
+  app.
+- **Nothing has run in the simulator or on an iPhone.** CI builds the app for
+  a device, unsigned. None of the Swift has been exercised, and the UI test in
+  `platforms/ios/AppUITests.swift` has not run.
+- **Distribution is not set up.** A TestFlight or App Store build needs the
+  signing described in the Leptoskit
+  [iOS guide](https://leptoskit.dev/docs/platforms/ios.html), privacy
+  answers, and an export compliance answer for the encryption the app uses.
