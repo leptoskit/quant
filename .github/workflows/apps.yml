@@ -89,9 +89,19 @@ jobs:
             --output "$RUNNER_TEMP/binaryen.tar.gz"
           tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+      - name: Install esbuild
+        if: matrix.target == 'landing'
+        # Release builds minify the Wasm glue with esbuild.
+        run: npm install --global esbuild@0.28.2
       - name: Add the Android Rust target
         if: matrix.target == 'android'
         run: rustup target add aarch64-linux-android
+      - name: Point cc at the NDK's ranlib
+        if: matrix.target == 'android'
+        # The pinned CLI gives cc the NDK's llvm-ar but not llvm-ranlib, so
+        # the vendored OpenSSL looks for aarch64-linux-android-ranlib, which
+        # no NDK ships. Drop this once the pin includes leptoskit's fix.
+        run: scripts/android-device.sh ranlib >> "$GITHUB_ENV"
       - name: Build
         run: leptoskit --app-target ${{ matrix.target }} ${{ matrix.build }}
       - uses: actions/upload-artifact@v4
