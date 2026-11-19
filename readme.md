@@ -248,7 +248,8 @@ public website and relay deploy independently without becoming separate apps.
 | `landing` | `crates/landing_*`, `crates/quant_landing_server` | Public site, its own routes and assets; no vault access. |
 | `relay` | `crates/quant_relay_server`, `crates/relay_db` | Blind encrypted-connection relay with its own metadata database. |
 | `android` | `platforms/android`, `crates/quant_phone`, `crates/quant_app` | Phone collector for location, app usage, battery and heat. A development build, not a release. |
-| `web`, `ios`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
+| `ios` | `platforms/ios`, `crates/quant_phone`, `crates/quant_app` | The same collector on an iPhone; app usage is lock and unlock only. A development build, not yet run on a device. |
+| `web`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
 
 From the repository root:
 
@@ -258,6 +259,7 @@ leptoskit --app-target desktop build --release
 leptoskit --app-target landing dev
 leptoskit --app-target relay build --release
 scripts/android-device.sh          # build the phone app and run it on a USB phone
+scripts/ios-device.sh              # the same in the iOS simulator, or on an iPhone
 ```
 
 Use the CLI from the SDK revision pinned in `Cargo.toml`. Public assets live in

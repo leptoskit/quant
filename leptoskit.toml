@@ -132,10 +132,24 @@ plugins = [
 	"notifications",
 ]
 
+# The same phone collector on an iPhone. The host is platforms/ios. iOS has
+# no foreground service to start, so `background` and `notifications` are
+# not selected: location updates with the "Always" grant keep the app
+# running. App usage is only lock and unlock there. See docs/phone.md.
 [targets.ios]
 platform = "ios"
 frontend = "app"
-unavailable = "Quant has no iOS host yet. The phone screen and service build for iOS, but platforms/ios and its background modes do not exist; see docs/phone.md."
+
+[targets.ios.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"location",
+	"app-usage",
+	"battery",
+	"thermal",
+	"secure-store",
+]
 
 [targets.harmonyos]
 platform = "harmonyos"

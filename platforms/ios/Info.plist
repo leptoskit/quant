@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The app-owned Info.plist. `leptoskit build` copies it to
+  .leptoskit/ios/Info.plist, sets the two version keys from leptoskit.toml,
+  and adds what the selected plugins declare: the `location` background mode.
+  The location plugin's build check fails unless both usage strings below
+  are present.
+-->
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.leptoskit.quant</string>
+<key>CFBundleName</key><string>Quant</string>
+<key>CFBundleDisplayName</key><string>Quant</string>
+<key>CFBundleExecutable</key><string>App</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>UILaunchScreen</key><dict/>
+<key>UIApplicationSceneManifest</key><dict>
+<key>UIApplicationSupportsMultipleScenes</key><false/>
+<key>UISceneConfigurations</key><dict/>
+</dict>
+<!-- Shown in the system's location prompts, which Quant asks for one at a time. -->
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Quant records where this iPhone goes and keeps it in your own vault on your computer. Nobody else receives it.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>With Always, Quant keeps recording where this iPhone goes while it is in the background, for your own vault on your computer. Nobody else receives it.</string>
+<!-- Background location shows the blue indicator, so the owner can see when Quant collects. -->
+<key>UIBackgroundModes</key>
+<array><string>location</string></array>
+</dict></plist>

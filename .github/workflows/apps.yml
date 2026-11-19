@@ -36,6 +36,13 @@ jobs:
             runner: ubuntu-latest
             packages: -p quant_app -p quant_model -p quant_phone
             build: build
+          # The same collector on an iPhone. This builds the Rust host, the
+          # guest and the generated Xcode project for a device, unsigned:
+          # signing needs an Apple team, which CI does not have.
+          - target: ios
+            runner: macos-latest
+            packages: -p quant_app -p quant_model -p quant_phone
+            build: build
           - target: relay
             runner: ubuntu-latest
             packages: -p relay -p relay_db
@@ -96,6 +103,9 @@ jobs:
       - name: Add the Android Rust target
         if: matrix.target == 'android'
         run: rustup target add aarch64-linux-android
+      - name: Add the iOS Rust target
+        if: matrix.target == 'ios'
+        run: rustup target add aarch64-apple-ios
       - name: Point cc at the NDK's ranlib
         if: matrix.target == 'android'
         # The pinned CLI gives cc the NDK's llvm-ar but not llvm-ranlib, so

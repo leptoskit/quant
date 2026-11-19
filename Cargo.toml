@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "platforms/android", "platforms/macos"]
+members = ["crates/*", "platforms/android", "platforms/ios", "platforms/macos"]
 default-members = ["crates/quant_access", "crates/quant_api", "crates/quant_capture_macos", "crates/quant_cli", "crates/quant_client", "crates/quant_collector", "crates/quant_core", "crates/quant_crypto", "crates/quant_daemon", "crates/quant_derive", "crates/quant_import", "crates/quant_learn", "crates/quant_mcp", "crates/quant_relay", "crates/quant_store"]
 
 [workspace.package]

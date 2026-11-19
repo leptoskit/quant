@@ -197,8 +197,10 @@ Access, starts the background service, and keeps `next_updates` and
 the screen hands every reply, undecoded, to the `quant-phone` service
 (`quant_phone`), which owns the spool, the phone's identity and the uploads.
 [Quant on a phone](phone.md) describes the pieces and their limits. The
-plugins' Kotlin hosts have not been measured on a physical device, and there
-is no iOS host.
+plugins' Kotlin hosts have not been measured on a physical device. The iPhone
+app (`platforms/ios`) runs the same screen and service without the background
+and notifications plugins: location updates started for the background keep
+it running once the owner allows "Always". It has been built, not run.
 
 ### Rewind
 
@@ -253,7 +255,7 @@ After the day's `memory.daily` exists, a daily job sends the day's texts — the
 ## Roadmap
 
 1. **The relay**, so phones, sensors, and agents reach the vault from anywhere while the relay sees only TLS ([hosting](hosting.md)).
-2. **One leptoskit app everywhere:** take the Android collector from a development build to a measured release, add health, motion and audio to it on leptoskit's sensor and health plugins, and give iOS a host; Wear OS and watchOS for heart rate from the wrist.
+2. **One leptoskit app everywhere:** take the Android collector from a development build to a measured release, add health, motion and audio to it on leptoskit's sensor and health plugins, and run the iOS host on an iPhone; Wear OS and watchOS for heart rate from the wrist.
 3. **Desktop:** owner actions unlocked with Touch ID, and opening at login.
-4. iOS collector (HealthKit, background modes).
+4. iOS collector: HealthKit, and collecting again after iOS relaunches the app in the background.
 5. Hosted vaults in attested enclaves ([hosting](hosting.md)).

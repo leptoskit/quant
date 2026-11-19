@@ -42,18 +42,20 @@ each target. The relay has its own database and forwards end-to-end encrypted
 traffic; sharing a build workspace does not give it the vault's keys.
 
 Build and deploy commands run at the root with `--app-target desktop`,
-`--app-target landing`, `--app-target relay` or `--app-target android`.
+`--app-target landing`, `--app-target relay`, `--app-target android` or
+`--app-target ios`.
 Deployment files use that same root context. No credentials are stored in the
 target definitions.
 
 The `android` target builds the phone collector: `quant_app` with its `android`
 feature is the screen, `quant_phone` is its native service, and
-`platforms/android` is the host. It is a development build, described in
-[Quant on a phone](phone.md).
+`platforms/android` is the host. The `ios` target is the same collector with
+`quant_app`'s `ios` feature and `platforms/ios` as the host. Both are
+development builds, described in [Quant on a phone](phone.md).
 
-`web`, `ios` and `harmonyos` reserve the intended destinations in the same
-system. Selection currently fails with an explanation because the product web
-frontend has no authenticated transport and those platforms have no host.
+`web` and `harmonyos` reserve the intended destinations in the same system.
+Selection currently fails with an explanation because the product web
+frontend has no authenticated transport and HarmonyOS has no collector.
 Declaring a target does not enable background permissions or claim continuous
 capture support on a platform.
 
