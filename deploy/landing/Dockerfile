@@ -16,12 +16,22 @@
 ARG RUST_VERSION=1
 # The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
 ARG LEPTOSKIT_REV=bcb276a1a2672c779524375a3875fc0b39b9a36e
-# binaryen's wasm-opt shrinks the release client.
+# binaryen's wasm-opt shrinks the release client, and esbuild minifies its
+# JavaScript glue.
 ARG BINARYEN_VERSION=132
+ARG ESBUILD_VERSION=0.28.2
 
 FROM rust:${RUST_VERSION}-bookworm AS build
 ARG LEPTOSKIT_REV
 ARG BINARYEN_VERSION
+ARG ESBUILD_VERSION
+RUN case "$(uname -m)" in x86_64) esbuild=linux-x64 ;; aarch64) esbuild=linux-arm64 ;; *) exit 1 ;; esac \
+ && curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+      --output /tmp/esbuild.tgz \
+      "https://registry.npmjs.org/@esbuild/${esbuild}/-/${esbuild}-${ESBUILD_VERSION}.tgz" \
+ && tar -xzf /tmp/esbuild.tgz -C /tmp \
+ && install -m 0755 /tmp/package/bin/esbuild /usr/local/bin/esbuild \
+ && rm -rf /tmp/esbuild.tgz /tmp/package
 RUN curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
       --output /tmp/binaryen.tar.gz \
       "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-$(uname -m)-linux.tar.gz" \
