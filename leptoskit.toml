@@ -132,10 +132,12 @@ plugins = [
 	"notifications",
 ]
 
-# The same phone collector on an iPhone. The host is platforms/ios. iOS has
-# no foreground service to start, so `background` and `notifications` are
-# not selected: location updates with the "Always" grant keep the app
-# running. App usage is only lock and unlock there. See docs/phone.md.
+# The same phone collector on an iPhone. The host is platforms/ios. Location
+# updates with the "Always" grant keep the app running; `background` adds
+# iOS app refresh, which wakes the service to deliver while Quant is
+# suspended. iOS has no foreground service to announce, so `notifications`
+# is not selected. App usage is only lock and unlock there. See
+# docs/phone.md.
 [targets.ios]
 platform = "ios"
 frontend = "app"
@@ -148,6 +150,7 @@ plugins = [
 	"app-usage",
 	"battery",
 	"thermal",
+	"background",
 	"secure-store",
 ]
 

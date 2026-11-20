@@ -17,11 +17,12 @@ leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
 # strings it checks are present). The Rust host never names them; the
 # screen's guest calls them.
 #
-# `background` and `notifications` are left out on purpose. iOS has no
-# foreground service to start or announce: location updates keep the app
-# running, and the background plugin registers its BGTaskScheduler handlers
-# after launch, which iOS refuses. See docs/phone.md.
+# `notifications` is left out on purpose: iOS has no foreground service to
+# announce. `background` registers its app-refresh handler from App.swift
+# while the app launches, which is the only time iOS accepts it. See
+# docs/phone.md.
 leptoskit_plugin_app_usage = { workspace = true }
+leptoskit_plugin_background = { workspace = true }
 leptoskit_plugin_battery = { workspace = true }
 leptoskit_plugin_location = { workspace = true }
 leptoskit_plugin_secure_store = { workspace = true }

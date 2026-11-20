@@ -198,9 +198,11 @@ the screen hands every reply, undecoded, to the `quant-phone` service
 (`quant_phone`), which owns the spool, the phone's identity and the uploads.
 [Quant on a phone](phone.md) describes the pieces and their limits. The
 plugins' Kotlin hosts have not been measured on a physical device. The iPhone
-app (`platforms/ios`) runs the same screen and service without the background
-and notifications plugins: location updates started for the background keep
-it running once the owner allows "Always". It has been built, not run.
+app (`platforms/ios`) runs the same screen and service without the
+notifications plugin: location updates started for the background keep it
+running once the owner allows "Always", and the background plugin's app
+refresh wakes the service to deliver while it is suspended. It has been
+built, not run.
 
 ### Rewind
 

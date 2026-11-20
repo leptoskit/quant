@@ -253,16 +253,28 @@ guest can. So the app is three pieces.
   `platforms/ios`: Leptoskit's generated `App.swift`, the `Info.plist` with
   the two location usage strings, a UI test, and the same kind of Rust
   crate. `leptoskit build` writes the Xcode project to `.leptoskit/ios` and
-  adds the `location` background mode the location plugin declares.
+  adds what the plugins declare to `Info.plist`: the `location` background
+  mode, and the background plugin's `fetch` and `processing` modes and task
+  identifiers.
 
-The iPhone app leaves out the `background` and `notifications` plugins.
-Android needs a foreground service, announced by a notification, before it
-allows background location; iOS has no such service, and keeps an app running
-for as long as it receives location updates it started for the background.
-Leptoskit's background plugin also registers its iOS background tasks when it
-is started, after launch, and iOS stops an app that does that. Delivery on an
+The iPhone app leaves out the `notifications` plugin. Android needs a
+foreground service, announced by a notification, before it allows background
+location; iOS has no such service, and keeps an app running for as long as it
+receives location updates it started for the background. Delivery on an
 iPhone is driven by location replies and the screen's one-minute timer, which
 run while Quant does.
+
+The `background` plugin does something smaller on an iPhone: it schedules iOS
+app refresh, which wakes the service at most every fifteen minutes, and only
+when iOS chooses, to deliver what is waiting while Quant is suspended. iOS
+ends an app that registers a background task after it has finished
+launching, so `platforms/ios/App.swift` registers the plugin's handlers in
+`application(_:didFinishLaunchingWithOptions:)`, and the screen's start only
+schedules the next refresh. If that registration is missing, the start
+answers `Unavailable` and collection carries on without the wakes. The
+simulator never runs app refresh; to see one on an iPhone, pause the app in
+Xcode's debugger and run
+`e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.leptoskit.background.refresh"]`.
 
 `quant_model::phone` is the contract between the screen and the service.
 
