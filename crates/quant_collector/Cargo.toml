@@ -12,8 +12,13 @@ blake3 = { workspace = true }
 jiff = { workspace = true }
 leptoskit_plugin_app_usage = { workspace = true }
 leptoskit_plugin_battery = { workspace = true }
+leptoskit_plugin_ble = { workspace = true }
+leptoskit_plugin_health = { workspace = true }
 leptoskit_plugin_location = { workspace = true }
+leptoskit_plugin_pedometer = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
+leptoskit_plugin_wearable = { workspace = true }
+leptoskit_sensor = { workspace = true }
 quant_api = { workspace = true }
 quant_client = { workspace = true }
 quant_core = { workspace = true }

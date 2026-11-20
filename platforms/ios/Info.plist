@@ -25,7 +25,13 @@
 <string>Quant records where this iPhone goes and keeps it in your own vault on your computer. Nobody else receives it.</string>
 <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 <string>With Always, Quant keeps recording where this iPhone goes while it is in the background, for your own vault on your computer. Nobody else receives it.</string>
-<!-- Background location shows the blue indicator, so the owner can see when Quant collects. -->
+<key>NSHealthShareUsageDescription</key>
+<string>Quant reads heart rate, HRV, SpO2, steps, sleep, workouts, and wrist temperature from Apple Health into your private vault on your computer. Nobody else receives it.</string>
+<key>NSMotionUsageDescription</key>
+<string>Quant reads step counts and motion activity into your private vault on your computer. Nobody else receives it.</string>
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Quant connects to Bluetooth heart-rate straps, smart rings, oximeters, and fitness sensors to record readings into your private vault.</string>
+<!-- Background location and BLE keep collection alive when authorized. -->
 <key>UIBackgroundModes</key>
-<array><string>location</string></array>
+<array><string>location</string><string>bluetooth-central</string></array>
 </dict></plist>

@@ -1,0 +1,32 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "Quant collector for Huawei HarmonyOS phones, tablets, and Huawei Watch wearables.",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "wearable"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.READ_HEALTH_DATA"
+      },
+      {
+        "name": "ohos.permission.ACTIVITY_MOTION"
+      },
+      {
+        "name": "ohos.permission.ACCESS_BLUETOOTH"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      }
+    ]
+  }
+}

@@ -64,16 +64,25 @@ pub enum Step {
 	Usage,
 	/// An exemption from battery optimisation, which only Android has.
 	Battery,
+	/// Health store (`HealthKit`, Health Connect, `HarmonyOS` Health).
+	Health,
+	/// Direct on-watch body sensors (heart rate, `SpO2`, temperature, steps).
+	Wearable,
+	/// Bluetooth scanning for chest straps, rings, and BLE sensors.
+	Bluetooth,
 }
 
 impl Step {
 	/// Every step, in the order the screen lists them.
-	pub const ALL: [Step; 5] = [
+	pub const ALL: [Step; 8] = [
 		Step::Location,
 		Step::Always,
 		Step::Notifications,
 		Step::Usage,
 		Step::Battery,
+		Step::Health,
+		Step::Wearable,
+		Step::Bluetooth,
 	];
 
 	fn title(self) -> &'static str {
@@ -83,6 +92,9 @@ impl Step {
 			Step::Notifications => "Notification",
 			Step::Usage => "App usage",
 			Step::Battery => "Battery",
+			Step::Health => "Health store",
+			Step::Wearable => "Watch sensors",
+			Step::Bluetooth => "Bluetooth sensors",
 		}
 	}
 
@@ -109,6 +121,17 @@ impl Step {
 				 Quant there and switch it on."
 			}
 			Step::Battery => "Stops the system pausing Quant to save battery.",
+			Step::Health => {
+				"Reads heart rate, HRV, SpO2, sleep, workouts, steps, and wrist temperature from \
+				 HealthKit or Health Connect into your vault."
+			}
+			Step::Wearable => {
+				"Reads direct wrist biometrics (heart rate, HRV, SpO2, skin temperature, steps, \
+				 and wear state) on your watch."
+			}
+			Step::Bluetooth => {
+				"Connects to Bluetooth chest straps, smart rings, oximeters, and fitness sensors."
+			}
 		}
 	}
 
@@ -119,6 +142,9 @@ impl Step {
 			Step::Notifications => "Allow notifications",
 			Step::Usage => "Open Usage Access",
 			Step::Battery => "Keep Quant running",
+			Step::Health => "Allow health data",
+			Step::Wearable => "Allow watch sensors",
+			Step::Bluetooth => "Allow Bluetooth",
 		}
 	}
 
@@ -129,6 +155,9 @@ impl Step {
 			Step::Notifications => "notifications",
 			Step::Usage => "usage",
 			Step::Battery => "battery",
+			Step::Health => "health",
+			Step::Wearable => "wearable",
+			Step::Bluetooth => "bluetooth",
 		}
 	}
 }
@@ -146,6 +175,12 @@ pub struct Permissions {
 	pub usage: Grant,
 	/// The battery optimisation exemption.
 	pub battery: Grant,
+	/// Health store access.
+	pub health: Grant,
+	/// Direct watch body sensors.
+	pub wearable: Grant,
+	/// Bluetooth scanning/subscriptions.
+	pub bluetooth: Grant,
 }
 
 impl Permissions {
@@ -157,6 +192,9 @@ impl Permissions {
 			Step::Notifications => self.notifications,
 			Step::Usage => self.usage,
 			Step::Battery => self.battery,
+			Step::Health => self.health,
+			Step::Wearable => self.wearable,
+			Step::Bluetooth => self.bluetooth,
 		}
 	}
 
@@ -168,6 +206,9 @@ impl Permissions {
 			Step::Notifications => self.notifications = grant,
 			Step::Usage => self.usage = grant,
 			Step::Battery => self.battery = grant,
+			Step::Health => self.health = grant,
+			Step::Wearable => self.wearable = grant,
+			Step::Bluetooth => self.bluetooth = grant,
 		}
 	}
 }
@@ -181,6 +222,12 @@ pub enum Action {
 	Allow(Step),
 	/// Give up on storage that can't be opened and start an empty one.
 	ResetStorage,
+	/// Push this phone's saved vault pairing link to a paired watch over
+	/// `watch-sync`.
+	PushPairLinkToWatch,
+	/// Scan for nearby BLE GATT heart-rate, pulse-oximeter, thermometer, and
+	/// fitness sensors and subscribe automatically.
+	ScanBleSensors,
 }
 
 /// Carries out an [`Action`].
@@ -215,7 +262,7 @@ impl State {
 		}
 	}
 
-	fn act(&self, action: Action) {
+	pub(crate) fn act(&self, action: Action) {
 		self.problem.set(None);
 		(self.act)(action);
 	}
@@ -248,6 +295,7 @@ pub fn Screen(state: State) -> Element {
 				.child(header(&state))
 				.child(storage_card(&state))
 				.child(vault_card(&state))
+				.child(wearables_card(&state))
 				.child(permissions_card(&state))
 				.child(collecting_card(&state))
 				.child(delivery_card(&state)),
@@ -695,6 +743,81 @@ fn delivery_card(state: &State) -> Element {
 	)
 }
 
+/// What the wearables & companion watch card shows, as a region key.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WearablesPart {
+	vault_ready: bool,
+	watch_connected: bool,
+	watch_name: Option<String>,
+	latest_heart_rate_bpm: Option<u16>,
+	steps_today: Option<u64>,
+	ble_devices: Vec<String>,
+}
+
+fn wearables_card(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let state = state.clone();
+	For(
+		move || {
+			let s = snapshot.get();
+			vec![WearablesPart {
+				vault_ready: s.link == Link::Ready,
+				watch_connected: s.watch_connected,
+				watch_name: s.watch_name,
+				latest_heart_rate_bpm: s.latest_heart_rate_bpm,
+				steps_today: s.steps_today,
+				ble_devices: s.ble_devices,
+			}]
+		},
+		Clone::clone,
+		move |part| {
+			let push = state.clone();
+			let scan = state.clone();
+			let watch_line = if part.watch_connected {
+				part.watch_name.as_deref().map_or_else(
+					|| "Watch connected".to_owned(),
+					|name| format!("Watch connected · {name}"),
+				)
+			} else {
+				"No watch linked yet · Wear OS, Apple Watch, Huawei Watch".to_owned()
+			};
+			let vitals = match (part.latest_heart_rate_bpm, part.steps_today) {
+				(Some(bpm), Some(steps)) => Some(format!("Latest: {bpm} bpm · {steps} steps")),
+				(Some(bpm), None) => Some(format!("Latest: {bpm} bpm")),
+				(None, Some(steps)) => Some(format!("Latest: {steps} steps")),
+				(None, None) => None,
+			};
+			let ble_line = if part.ble_devices.is_empty() {
+				"No Bluetooth straps or rings connected".to_owned()
+			} else {
+				format!("Bluetooth sensors: {}", part.ble_devices.join(", "))
+			};
+			View()
+				.class(CARD)
+				.child(Text("Watches and sensors").class(HEADING))
+				.child(Text(watch_line).class(BODY).test_id("watch-status"))
+				.children(vitals.map(|line| Text(line).class(MUTED).test_id("phone-vitals")))
+				.child(Text(ble_line).class(MUTED).test_id("ble-status"))
+				.child(
+					View()
+						.class("flex-row flex-wrap gap-2")
+						.children(part.vault_ready.then(|| {
+							Button("Pair watch with vault")
+								.class(CONTROL)
+								.test_id("push-watch-link")
+								.on_press(move || push.act(Action::PushPairLinkToWatch))
+						}))
+						.child(
+							Button("Scan Bluetooth sensors")
+								.class(CONTROL)
+								.test_id("scan-ble")
+								.on_press(move || scan.act(Action::ScanBleSensors)),
+						),
+				)
+		},
+	)
+}
+
 #[cfg(test)]
 mod tests {
 	use std::sync::Mutex;
@@ -719,7 +842,7 @@ mod tests {
 		let view = state.clone();
 		// Taller than a phone, so a test can reach every card without
 		// scrolling.
-		let tester = WidgetTester::new(move || Screen(view.clone()), 390.0, 2600.0).unwrap();
+		let tester = WidgetTester::new(move || Screen(view.clone()), 390.0, 3200.0).unwrap();
 		(tester, state, done)
 	}
 
@@ -755,6 +878,7 @@ mod tests {
 			upload_problem: None,
 			sources: rows(12),
 			notice: None,
+			..Snapshot::default()
 		}
 	}
 
@@ -865,6 +989,9 @@ mod tests {
 			notifications: Grant::Granted,
 			usage: Grant::Needed,
 			battery: Grant::Unavailable,
+			health: Grant::Unavailable,
+			wearable: Grant::Unavailable,
+			bluetooth: Grant::Unavailable,
 		});
 		state
 			.collector
@@ -894,6 +1021,29 @@ mod tests {
 		tester.pump();
 		assert!(tester.query_by_text("Allow location").unwrap().is_none());
 		tester.get_by_text("Open Usage Access").unwrap();
+	}
+
+	#[test]
+	fn wearables_card_pushes_pair_link_and_scans_ble_sensors() {
+		let (mut tester, _, done) = harness(Snapshot {
+			watch_connected: true,
+			watch_name: Some("Galaxy Watch 7".into()),
+			latest_heart_rate_bpm: Some(67),
+			steps_today: Some(4_100),
+			ble_devices: vec!["Polar H10".into()],
+			..ready()
+		});
+		tester
+			.get_by_text("Watch connected · Galaxy Watch 7")
+			.unwrap();
+		tester.get_by_text("Latest: 67 bpm · 4100 steps").unwrap();
+		tester.get_by_text("Bluetooth sensors: Polar H10").unwrap();
+		tester.tap(&Finder::test_id("push-watch-link")).unwrap();
+		tester.tap(&Finder::test_id("scan-ble")).unwrap();
+		assert_eq!(
+			*done.lock().unwrap(),
+			[Action::PushPairLinkToWatch, Action::ScanBleSensors]
+		);
 	}
 
 	#[test]

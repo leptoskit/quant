@@ -333,6 +333,54 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			.summarise_by(&["activity"])
 			.sensitive(&[Class::Health]),
 		StreamSpec::series(
+			"health.resting_heart_rate",
+			&[("bpm", "bpm")],
+			"Resting heart rate samples from a watch or health store.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.respiratory_rate",
+			&[("breaths_per_min", "brpm")],
+			"Breaths per minute recorded during sleep or rest.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.skin_temperature",
+			&[("celsius", "C")],
+			"Wrist or skin temperature readings in degrees Celsius.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.active_calories",
+			&[("kcal", "kcal")],
+			"Active energy burned per interval.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.distance",
+			&[("meters", "m")],
+			"Distance travelled per interval.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.floors",
+			&[("floors", "count")],
+			"Floors or flights climbed per interval.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
+			"health.stress",
+			&[("score", "score")],
+			"Wearable stress score.",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::event(
+			"health.body_composition",
+			"Body composition measurement (body fat, muscle mass, body water) from a watch or scale.",
+		)
+		.summarise_by(&["source"])
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
 			"motion.accelerometer",
 			&[("x", "m/s2"), ("y", "m/s2"), ("z", "m/s2")],
 			"Raw acceleration including gravity.",
@@ -346,6 +394,11 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			"motion.orientation",
 			&[("pitch", "deg"), ("roll", "deg"), ("yaw", "deg")],
 			"Device or body orientation.",
+		),
+		StreamSpec::series(
+			"motion.barometer",
+			&[("hpa", "hPa")],
+			"Barometric pressure readings for elevation changes.",
 		),
 		StreamSpec::event(
 			"motion.posture",
@@ -379,6 +432,11 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		StreamSpec::event(
 			"device.state",
 			"Screen on/off, lock, sleep, and wake transitions.",
+		)
+		.summarise_by(&["state"]),
+		StreamSpec::event(
+			"device.wear_state",
+			"Watch on-wrist and off-body state transitions.",
 		)
 		.summarise_by(&["state"]),
 		StreamSpec::event(

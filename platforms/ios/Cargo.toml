@@ -24,9 +24,14 @@ leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
 leptoskit_plugin_app_usage = { workspace = true }
 leptoskit_plugin_background = { workspace = true }
 leptoskit_plugin_battery = { workspace = true }
+leptoskit_plugin_ble = { workspace = true }
+leptoskit_plugin_health = { workspace = true }
 leptoskit_plugin_location = { workspace = true }
+leptoskit_plugin_pedometer = { workspace = true }
 leptoskit_plugin_secure_store = { workspace = true }
+leptoskit_plugin_sensors = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
+leptoskit_plugin_watch_sync = { workspace = true }
 # The app's own native service: the encrypted spool and the vault connection.
 quant_phone = { workspace = true }
 

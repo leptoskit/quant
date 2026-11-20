@@ -22,14 +22,19 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use leptoskit_plugin_app_usage as app_usage;
 use leptoskit_plugin_battery as battery;
+use leptoskit_plugin_ble as ble;
+use leptoskit_plugin_health as health;
 use leptoskit_plugin_location as location;
+use leptoskit_plugin_pedometer as pedometer;
 use leptoskit_plugin_thermal as thermal;
+use leptoskit_plugin_wearable as wearable;
 use quant_api::ClientKind;
 use quant_api::ClientStatus;
 use quant_client::Client;
 use quant_client::ClientError;
 use quant_client::Endpoint;
 use quant_client::Identity;
+use quant_collector::CompanionEnvelope;
 use quant_collector::DrainError;
 use quant_collector::PowerMonitor;
 use quant_collector::Spool;
@@ -83,8 +88,12 @@ pub struct Config {
 impl Config {
 	/// The configuration for an app whose private data lives in `data`.
 	pub fn for_app(data: PathBuf) -> Self {
-		let name = if cfg!(target_os = "android") {
-			"Android phone"
+		let name = if cfg!(target_os = "watchos") {
+			"Apple Watch"
+		} else if cfg!(target_env = "ohos") {
+			"Huawei wearable"
+		} else if cfg!(target_os = "android") {
+			"Android device"
 		} else if cfg!(target_os = "ios") {
 			"iPhone"
 		} else {
@@ -309,6 +318,11 @@ struct Worker {
 	upload_pause: Pause,
 	upload_problem: Option<String>,
 	notice: Option<(Notice, Timestamp)>,
+	latest_heart_rate_bpm: Option<u16>,
+	steps_today: u64,
+	watch_connected: bool,
+	watch_name: Option<String>,
+	ble_devices: Vec<String>,
 }
 
 impl Worker {
@@ -342,6 +356,11 @@ impl Worker {
 			upload_pause: Pause::default(),
 			upload_problem: None,
 			notice: None,
+			latest_heart_rate_bpm: None,
+			steps_today: 0,
+			watch_connected: false,
+			watch_name: None,
+			ble_devices: Vec::new(),
 		};
 		if let Some(problem) = problem {
 			worker.say(problem, true);
@@ -353,7 +372,7 @@ impl Worker {
 		let Request { job, ticket } = request;
 		let reply = match job {
 			Job::Reading(frame) => {
-				self.reading(&frame);
+				self.reading(&frame).await;
 				Reply::ok()
 			}
 			Job::Wake => {
@@ -393,14 +412,28 @@ impl Worker {
 				self.save()?;
 				self.say(
 					if enabled {
-						"Collecting on this phone"
+						"Collecting on this device"
 					} else {
-						"Stopped collecting on this phone"
+						"Stopped collecting on this device"
 					},
 					false,
 				);
 			}
 			Command::UsagePlan => return Ok(self.usage_plan(Timestamp::now())),
+			Command::HealthPlan => return Ok(self.health_plan(Timestamp::now())),
+			Command::SetHealthToken { token } => {
+				self.saved.health_token = token;
+				self.saved.health_until_ms = Some(Timestamp::now().as_millisecond());
+				self.save()?;
+			}
+			Command::ExportPairLink => {
+				let link = self
+					.saved
+					.link
+					.clone()
+					.ok_or_else(|| "Connect to your vault first before pairing a watch".to_owned())?;
+				return Ok(Some(ReplyData::PairLink { link }));
+			}
 		}
 		Ok(None)
 	}
@@ -517,19 +550,88 @@ impl Worker {
 		})
 	}
 
+	/// The next health-store sync window and saved incremental changes token.
+	fn health_plan(&self, now: Timestamp) -> Option<ReplyData> {
+		if !self.saved.collecting || self.spool.is_none() {
+			return None;
+		}
+		let earliest = now - FIRST_USAGE;
+		let since = self
+			.saved
+			.health_until_ms
+			.and_then(|ms| Timestamp::from_millisecond(ms).ok())
+			.filter(|since| *since <= now)
+			.map_or(earliest, |since| since.max(now - FIRST_USAGE * 7));
+		let until = now.min(since + USAGE_SPAN);
+		Some(ReplyData::HealthWindow {
+			since_ms: since.as_millisecond(),
+			until_ms: until.as_millisecond(),
+			token: self.saved.health_token.clone(),
+		})
+	}
+
 	/// Queue one reading. A problem is shown on its source; it never stops
 	/// the others.
-	fn reading(&mut self, frame: &[u8]) {
-		let Some(reading) = Reading::decode(frame) else {
+	async fn reading(&mut self, frame: &[u8]) {
+		// Handle companion watch-sync envelopes at top level so PairLink can
+		// trigger async pairing and ReadingFrame can ferry an inner frame.
+		if let Some(Reading::WatchSync(inner)) = Reading::decode(frame) {
+			if let Ok(envelope) = serde_json::from_slice::<CompanionEnvelope>(inner) {
+				match envelope {
+					CompanionEnvelope::PairLink { link } => {
+						self.watch_connected = true;
+						if self.saved.link.is_none() {
+							let _ = self.pair(&link).await;
+						}
+						return;
+					}
+					CompanionEnvelope::ReadingFrame {
+						watch_name,
+						frame: nested,
+					} => {
+						self.watch_connected = true;
+						if !watch_name.trim().is_empty() {
+							self.watch_name = Some(watch_name);
+						}
+						let stored = self.reading_local(&nested);
+						let counter = self.sources.entry(Source::WatchSync).or_default();
+						counter.readings += stored;
+						if stored > 0 {
+							counter.last = Some(Timestamp::now());
+						}
+						return;
+					}
+				}
+			}
+			// Fallback: treat raw inner bytes as a ferried Reading frame.
+			self.watch_connected = true;
+			let stored = self.reading_local(inner);
+			let counter = self.sources.entry(Source::WatchSync).or_default();
+			counter.readings += stored;
+			if stored > 0 {
+				counter.last = Some(Timestamp::now());
+			}
 			return;
+		}
+		let _ = self.reading_local(frame);
+	}
+
+	fn reading_local(&mut self, frame: &[u8]) -> u64 {
+		let Some(reading) = Reading::decode(frame) else {
+			return 0;
 		};
 		if !self.saved.collecting {
-			return;
+			return 0;
 		}
 		let source = reading.source();
 		let now = Timestamp::now();
+		let mut health_token_update = HealthTokenUpdate::Unchanged;
+		let mut new_bpm: Option<u16> = None;
+		let mut steps_delta: u64 = 0;
+		let mut seen_ble: Vec<String> = Vec::new();
+
 		let outcome = match &self.spool {
-			None => Err("This phone's storage is not open yet".to_owned()),
+			None => Err("This device's storage is not open yet".to_owned()),
 			Some(spool) => {
 				match reading {
 					Reading::Location(updates) => location_reading(spool, &self.saved, updates),
@@ -552,29 +654,102 @@ impl Worker {
 						)
 						.map(|stored| (stored, None, None))
 					}
+					Reading::Health {
+						is_changes,
+						payload,
+					} => {
+						health_reading(spool, &self.saved, is_changes, payload).map(
+							|(stored, update)| {
+								health_token_update = update;
+								(stored, None, None)
+							},
+						)
+					}
+					Reading::Wearable(batch) => {
+						wearable_reading(spool, &self.saved, batch).map(
+							|(stored, problem, bpm, steps)| {
+								new_bpm = bpm;
+								steps_delta = steps;
+								(stored, problem, None)
+							},
+						)
+					}
+					Reading::Pedometer(payload) => {
+						pedometer_reading(spool, &self.saved, now, payload).map(|(stored, steps)| {
+							steps_delta = steps;
+							(stored, None, None)
+						})
+					}
+					Reading::Motion { kind_code, batch } => {
+						spool
+							.motion_batch(self.saved.device, now, kind_code, batch)
+							.map(|stored| (stored as u64, None, None))
+							.map_err(|error| error.to_string())
+					}
+					Reading::Ble(batch) => {
+						ble_reading(spool, &self.saved, batch).map(|(stored, bpm, devices)| {
+							new_bpm = bpm;
+							seen_ble = devices;
+							(stored, None, None)
+						})
+					}
+					Reading::WatchSync(_) => {
+						// Nested WatchSync frames are ignored to prevent recursion.
+						Ok((0, None, None))
+					}
 				}
 			}
 		};
+
+		let mut total_stored = 0;
 		let counter = self.sources.entry(source).or_default();
 		match outcome {
 			Ok((stored, problem, usage_until)) => {
+				total_stored = stored;
 				counter.readings += stored;
 				if stored > 0 {
 					counter.last = Some(now);
 				}
 				counter.problem = problem;
+				if let Some(bpm) = new_bpm {
+					self.latest_heart_rate_bpm = Some(bpm);
+				}
+				if steps_delta > 0 {
+					self.steps_today = self.steps_today.saturating_add(steps_delta);
+				}
+				for dev in seen_ble {
+					if !self.ble_devices.contains(&dev) && self.ble_devices.len() < 16 {
+						self.ble_devices.push(dev);
+					}
+				}
+				let mut dirty = false;
 				if let Some(until_ms) = usage_until
 					&& until_ms <= now.as_millisecond()
 					&& self.saved.usage_until_ms.is_none_or(|seen| until_ms > seen)
 				{
 					self.saved.usage_until_ms = Some(until_ms);
-					if let Err(problem) = self.save() {
-						self.say(problem, true);
+					dirty = true;
+				}
+				match health_token_update {
+					HealthTokenUpdate::Unchanged => {}
+					HealthTokenUpdate::Clear => {
+						self.saved.health_token = None;
+						self.saved.health_until_ms = Some(now.as_millisecond());
+						dirty = true;
 					}
+					HealthTokenUpdate::Set(token) => {
+						self.saved.health_token = Some(token);
+						self.saved.health_until_ms = Some(now.as_millisecond());
+						dirty = true;
+					}
+				}
+				if dirty && let Err(problem) = self.save() {
+					self.say(problem, true);
 				}
 			}
 			Err(problem) => counter.problem = Some(problem),
 		}
+		total_stored
 	}
 
 	/// Look at the vault if that is due, then deliver what is waiting.
@@ -802,6 +977,11 @@ impl Worker {
 			upload_problem: self.upload_problem.clone(),
 			sources,
 			notice: self.notice.as_ref().map(|(notice, _)| notice.clone()),
+			latest_heart_rate_bpm: self.latest_heart_rate_bpm,
+			steps_today: (self.steps_today > 0).then_some(self.steps_today),
+			watch_connected: self.watch_connected,
+			watch_name: self.watch_name.clone(),
+			ble_devices: self.ble_devices.clone(),
 		});
 	}
 }
@@ -882,6 +1062,103 @@ fn power_reading(
 		.observe(spool, device, now, battery, thermal)
 		.map_err(|error| error.to_string())?;
 	Ok(u64::from(report.level) + u64::from(report.changed))
+}
+
+enum HealthTokenUpdate {
+	Unchanged,
+	Clear,
+	Set(String),
+}
+
+fn health_reading(
+	spool: &Spool,
+	saved: &Saved,
+	is_changes: bool,
+	payload: &[u8],
+) -> Result<(u64, HealthTokenUpdate), String> {
+	if is_changes {
+		let changes = health::Changes::decode(payload)
+			.map_err(|error| format!("The health changes reply could not be read: {error}"))?;
+		let report = spool
+			.health_samples(saved.device, &changes.upserted)
+			.map_err(|error| error.to_string())?;
+		let next = if changes.token_expired {
+			HealthTokenUpdate::Clear
+		} else if let Some(token) = changes.next_token {
+			HealthTokenUpdate::Set(token.as_str().to_owned())
+		} else {
+			HealthTokenUpdate::Unchanged
+		};
+		Ok((report.stored as u64, next))
+	} else {
+		let page = health::Page::decode(payload)
+			.map_err(|error| format!("The health page could not be read: {error}"))?;
+		let report = spool
+			.health_samples(saved.device, &page.samples)
+			.map_err(|error| error.to_string())?;
+		Ok((report.stored as u64, HealthTokenUpdate::Unchanged))
+	}
+}
+
+fn wearable_reading(
+	spool: &Spool,
+	saved: &Saved,
+	payload: &[u8],
+) -> Result<(u64, Option<String>, Option<u16>, u64), String> {
+	let batch = wearable::Batch::decode(payload)
+		.map_err(|error| format!("The watch sensor batch could not be read: {error}"))?;
+	let report = spool
+		.wearable_batch(saved.device, &batch)
+		.map_err(|error| error.to_string())?;
+	let problem = (report.dropped > 0).then(|| {
+		format!(
+			"The watch dropped {} sensor readings before they could be saved",
+			report.dropped
+		)
+	});
+	Ok((
+		report.stored as u64,
+		problem,
+		report.latest_heart_rate_bpm,
+		report.steps_delta,
+	))
+}
+
+fn pedometer_reading(
+	spool: &Spool,
+	saved: &Saved,
+	now: Timestamp,
+	payload: &[u8],
+) -> Result<(u64, u64), String> {
+	let reading = pedometer::Reading::decode(payload)
+		.map_err(|error| format!("The pedometer reading could not be read: {error}"))?;
+	let steps = match reading {
+		pedometer::Reading::Interval { reported_steps, .. }
+		| pedometer::Reading::BootCounter { reported_steps, .. } => reported_steps,
+	};
+	let stored = spool
+		.pedometer_reading(saved.device, now, &reading)
+		.map_err(|error| error.to_string())?;
+	Ok((stored as u64, steps))
+}
+
+fn ble_reading(
+	spool: &Spool,
+	saved: &Saved,
+	payload: &[u8],
+) -> Result<(u64, Option<u16>, Vec<String>), String> {
+	let batch = ble::NotificationBatch::decode(payload)
+		.map_err(|error| format!("The Bluetooth sensor batch could not be read: {error}"))?;
+	let mut devices = Vec::new();
+	for notif in &batch.notifications {
+		if !notif.device_id.is_empty() && !devices.contains(&notif.device_id) {
+			devices.push(notif.device_id.clone());
+		}
+	}
+	let report = spool
+		.ble_notifications(saved.device, &batch)
+		.map_err(|error| error.to_string())?;
+	Ok((report.stored as u64, report.latest_heart_rate_bpm, devices))
 }
 
 fn problem(error: &ClientError) -> String {

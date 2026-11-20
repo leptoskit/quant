@@ -10,6 +10,7 @@
 mod ambient;
 mod phone;
 mod resources;
+mod wearable;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,6 +21,12 @@ pub use ambient::AmbientAudio;
 pub use phone::LocationReport;
 pub use phone::PowerMonitor;
 pub use phone::PowerReport;
+pub use wearable::BleReport;
+pub use wearable::CompanionEnvelope;
+pub use wearable::HealthReport;
+pub use wearable::TOPIC_PAIR_LINK;
+pub use wearable::TOPIC_READING_FRAME;
+pub use wearable::WearableReport;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
 use quant_client::Client;

@@ -7,7 +7,7 @@ name = "quant"
 version = "0.1.0"
 default_target = "desktop"
 default_platform = "macos"
-platforms = ["web", "server", "macos", "android", "ios", "harmonyos"]
+platforms = ["web", "server", "macos", "android", "ios", "wearos", "watchos", "harmonyos"]
 icon = "assets/brand/icon.svg"
 
 [frontends.app]
@@ -125,6 +125,11 @@ plugins = [
 	"quant-phone",
 	"location",
 	"app-usage",
+	"health",
+	"pedometer",
+	"sensors",
+	"watch-sync",
+	"ble",
 	"battery",
 	"thermal",
 	"background",
@@ -137,7 +142,7 @@ plugins = [
 # iOS app refresh, which wakes the service to deliver while Quant is
 # suspended. iOS has no foreground service to announce, so `notifications`
 # is not selected. App usage is only lock and unlock there. See
-# docs/phone.md.
+# docs/phone.md and docs/wearables.md.
 [targets.ios]
 platform = "ios"
 frontend = "app"
@@ -148,16 +153,147 @@ plugins = [
 	"quant-phone",
 	"location",
 	"app-usage",
+	"health",
+	"pedometer",
+	"sensors",
+	"watch-sync",
+	"ble",
 	"battery",
 	"thermal",
 	"background",
 	"secure-store",
 ]
 
+# Wear OS smartwatch collector (Pixel Watch, Samsung Galaxy Watch / One UI
+# Watch, TicWatch, and all Wear OS 3+ devices). Runs standalone with direct
+# pinned-TLS uploads plus companion phone sync via `watch-sync`.
+[targets.wearos]
+platform = "wearos"
+frontend = "app"
+
+[targets.wearos.build]
+client_package = "quant_app"
+features = ["wearos"]
+
+[targets.wearos.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"wearable",
+	"health",
+	"pedometer",
+	"sensors",
+	"watch-sync",
+	"ble",
+	"location",
+	"battery",
+	"thermal",
+	"background",
+	"secure-store",
+	"notifications",
+]
+
+[targets.wearos.native.wearos]
+standalone = true
+tile = true
+complication = true
+samsung-health-sensor = true
+
+# Apple Watch (watchOS 10+) collector with HealthKit live/passive wrist sensors,
+# CoreMotion pedometer/motion, WatchConnectivity companion sync, and BLE GATT.
+[targets.watchos]
+platform = "watchos"
+frontend = "app"
+
+[targets.watchos.build]
+client_package = "quant_app"
+features = ["watchos"]
+
+[targets.watchos.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"wearable",
+	"health",
+	"pedometer",
+	"sensors",
+	"watch-sync",
+	"ble",
+	"location",
+	"battery",
+	"thermal",
+	"secure-store",
+]
+
+[targets.watchos.native.watchos]
+standalone = true
+companion-bundle-id = "dev.leptoskit.quant"
+deployment-target = "10.0"
+workout-background = true
+complications = true
+
+# Huawei HarmonyOS phone & tablet collector (experimental).
 [targets.harmonyos]
 platform = "harmonyos"
 frontend = "app"
-unavailable = "Leptoskit's HarmonyOS host is experimental; Quant has no collector integration yet."
+
+[targets.harmonyos.build]
+client_package = "quant_app"
+features = ["harmonyos"]
+
+[targets.harmonyos.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"health",
+	"pedometer",
+	"watch-sync",
+	"ble",
+	"battery",
+	"thermal",
+]
+
+[targets.harmonyos.native.harmonyos]
+device-types = ["phone", "tablet"]
+permissions = [
+	"ohos.permission.INTERNET",
+	"ohos.permission.READ_HEALTH_DATA",
+	"ohos.permission.ACTIVITY_MOTION",
+	"ohos.permission.ACCESS_BLUETOOTH",
+	"ohos.permission.KEEP_BACKGROUND_RUNNING",
+]
+
+# Huawei Watch (HarmonyOS Wearable) collector (experimental).
+[targets.harmonyos-watch]
+platform = "harmonyos"
+frontend = "app"
+
+[targets.harmonyos-watch.build]
+client_package = "quant_app"
+features = ["harmonyos-watch"]
+
+[targets.harmonyos-watch.native]
+package_id = "dev.leptoskit.quant"
+plugins = [
+	"quant-phone",
+	"wearable",
+	"health",
+	"pedometer",
+	"watch-sync",
+	"ble",
+	"battery",
+	"thermal",
+]
+
+[targets.harmonyos-watch.native.harmonyos]
+device-types = ["wearable"]
+permissions = [
+	"ohos.permission.INTERNET",
+	"ohos.permission.READ_HEALTH_DATA",
+	"ohos.permission.ACTIVITY_MOTION",
+	"ohos.permission.ACCESS_BLUETOOTH",
+	"ohos.permission.KEEP_BACKGROUND_RUNNING",
+]
 
 [bundle]
 optimize = "fast"
