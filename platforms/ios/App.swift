@@ -3,19 +3,29 @@ import LeptosKitBridge
 #if canImport(LeptosKitAppShortcuts)
 import LeptosKitAppShortcuts
 #endif
+#if canImport(LeptosKitBackground)
+import LeptosKitBackground
+#endif
 #if canImport(LeptosKitNotifications)
 import LeptosKitNotifications
 #endif
 
 // The host leptoskit generates for iOS apps (its native/templates/App.swift),
-// plus one thing of Quant's own: nothing the app stores is backed up. See
-// `application(_:didFinishLaunchingWithOptions:)`.
+// with the background plugin's launch registration in
+// `application(_:didFinishLaunchingWithOptions:)`, plus one thing of Quant's
+// own there: nothing the app stores is backed up.
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        #if canImport(LeptosKitBackground)
+        // iOS ends an app that registers a background task's handler after
+        // launch finishes, so the handlers go in before this returns; the
+        // screen's `start` only schedules the next app refresh.
+        BackgroundPlugin.registerLaunchHandlers()
+        #endif
         excludeAppDataFromBackup()
         return true
     }

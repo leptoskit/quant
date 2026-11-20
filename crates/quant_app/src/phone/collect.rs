@@ -10,9 +10,11 @@
 //! Android and iOS keep collecting in the background differently. Android
 //! needs the background plugin's location-typed foreground service running
 //! before it allows background location. iOS has no such service: location
-//! updates themselves keep the app running once the owner chose "Always",
-//! so the iOS app selects neither the background nor the notifications
-//! plugin, and those steps report themselves unavailable.
+//! updates themselves keep the app running once the owner chose "Always".
+//! There the background plugin only schedules app refresh, which wakes the
+//! service to deliver while Quant is suspended. The iOS app has no
+//! notification to announce, so it leaves out the notifications plugin, and
+//! that step and the battery step report themselves unavailable.
 //!
 //! The guest has no clock. Stretches of time come from the service
 //! ([`Command::UsagePlan`]), and the service stamps what arrives.
@@ -449,9 +451,12 @@ async fn sync_once(state: &State) {
 	let mut problem = None;
 	// The background service comes first: Android refuses background
 	// location updates unless a location-typed service is already running.
-	if !IOS && !RUN.with(|run| run.background.get()) {
+	// On iOS it schedules app refresh, which nothing else waits for, so a
+	// refusal there only means fewer wakes and is tried again next time.
+	if !RUN.with(|run| run.background.get()) {
 		match start_background().await {
 			Ok(()) => RUN.with(|run| run.background.set(true)),
+			Err(_) if IOS => {}
 			Err(error) => {
 				problem = Some(format!(
 					"Quant can't keep collecting in the background on this phone: {error}"
