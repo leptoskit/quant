@@ -500,8 +500,9 @@ async fn allow(state: &State, step: Step) {
 				Ok(plugin) => {
 					plugin.request_permission().await.map(|avail| {
 						Some(match avail {
-							ble::BleAvailability::PoweredOn
-							| ble::BleAvailability::PoweredOff => Grant::Granted,
+							ble::BleAvailability::PoweredOn | ble::BleAvailability::PoweredOff => {
+								Grant::Granted
+							}
 							ble::BleAvailability::Unsupported => Grant::Unavailable,
 							ble::BleAvailability::Unauthorized => Grant::Needed,
 						})
@@ -956,8 +957,7 @@ async fn hand_over(state: &State, reading: &Reading<'_>) {
 		&& matches!(
 			state.snapshot.get_untracked().link,
 			Link::Unreachable { .. } | Link::Unpaired
-		)
-	{
+		) {
 		ferry_reading_to_phone(&frame).await;
 	}
 }
@@ -1227,9 +1227,9 @@ async fn ferry_reading_to_phone(frame: &[u8]) {
 /// subscribe to their standard characteristics.
 async fn scan_and_subscribe_ble(state: &State) {
 	let Ok(plugin) = Ble::new() else {
-		state
-			.problem
-			.set(Some("Bluetooth sensors are not available on this device".to_owned()));
+		state.problem.set(Some(
+			"Bluetooth sensors are not available on this device".to_owned(),
+		));
 		return;
 	};
 	let options = ble::ScanOptions {
@@ -1265,7 +1265,10 @@ async fn scan_and_subscribe_ble(state: &State) {
 				gatt::CHAR_TEMPERATURE_MEASUREMENT,
 			),
 			(gatt::SERVICE_BATTERY, gatt::CHAR_BATTERY_LEVEL),
-			(gatt::SERVICE_RUNNING_SPEED_CADENCE, gatt::CHAR_RSC_MEASUREMENT),
+			(
+				gatt::SERVICE_RUNNING_SPEED_CADENCE,
+				gatt::CHAR_RSC_MEASUREMENT,
+			),
 			(
 				gatt::SERVICE_CYCLING_POWER,
 				gatt::CHAR_CYCLING_POWER_MEASUREMENT,

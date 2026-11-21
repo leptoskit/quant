@@ -427,11 +427,9 @@ impl Worker {
 				self.save()?;
 			}
 			Command::ExportPairLink => {
-				let link = self
-					.saved
-					.link
-					.clone()
-					.ok_or_else(|| "Connect to your vault first before pairing a watch".to_owned())?;
+				let link = self.saved.link.clone().ok_or_else(|| {
+					"Connect to your vault first before pairing a watch".to_owned()
+				})?;
 				return Ok(Some(ReplyData::PairLink { link }));
 			}
 		}
@@ -675,10 +673,12 @@ impl Worker {
 						)
 					}
 					Reading::Pedometer(payload) => {
-						pedometer_reading(spool, &self.saved, now, payload).map(|(stored, steps)| {
-							steps_delta = steps;
-							(stored, None, None)
-						})
+						pedometer_reading(spool, &self.saved, now, payload).map(
+							|(stored, steps)| {
+								steps_delta = steps;
+								(stored, None, None)
+							},
+						)
 					}
 					Reading::Motion { kind_code, batch } => {
 						spool
@@ -694,7 +694,8 @@ impl Worker {
 						})
 					}
 					Reading::WatchSync(_) => {
-						// Nested WatchSync frames are ignored to prevent recursion.
+						// Nested WatchSync frames are ignored to prevent
+						// recursion.
 						Ok((0, None, None))
 					}
 				}

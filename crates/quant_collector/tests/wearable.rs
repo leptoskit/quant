@@ -150,7 +150,8 @@ async fn watch_health_ble_and_pedometer_drain_and_enforce_health_denial() {
 	let t0 = (now - SignedDuration::from_mins(10)).as_millisecond();
 	let t1 = (now - SignedDuration::from_mins(5)).as_millisecond();
 
-	// 1. Direct watch batch (HR, HRV IBI, SpO2, skin temp, steps, wear state, stress, BIA).
+	// 1. Direct watch batch (HR, HRV IBI, SpO2, skin temp, steps, wear state,
+	//    stress, BIA).
 	let watch_batch = wearable::Batch {
 		dropped: 0,
 		readings: vec![
@@ -249,7 +250,8 @@ async fn watch_health_ble_and_pedometer_drain_and_enforce_health_denial() {
 	assert_eq!(h_report.stored, 3);
 	assert_eq!(h_report.skipped, 0);
 
-	// 3. BLE chest strap heart rate (0x2A37) with RR intervals + cycling power (0x2A63).
+	// 3. BLE chest strap heart rate (0x2A37) with RR intervals + cycling power
+	//    (0x2A63).
 	let ble_batch = ble::NotificationBatch {
 		dropped: 0,
 		notifications: vec![
@@ -304,7 +306,8 @@ async fn watch_health_ble_and_pedometer_drain_and_enforce_health_denial() {
 		.unwrap();
 	assert_eq!(wear_records.len(), 1);
 
-	// Agent with --deny health gets forbidden on health.heart_rate, while health_agent sees it!
+	// Agent with --deny health gets forbidden on health.heart_rate, while
+	// health_agent sees it!
 	let req = SeriesRequest {
 		stream: "health.heart_rate".into(),
 		from: Some(from),
@@ -332,7 +335,8 @@ async fn watch_health_ble_and_pedometer_drain_and_enforce_health_denial() {
 		.unwrap();
 	assert!(!hr_batches.is_empty());
 
-	// Non-health device.wear_state is still readable by denied_agent while health.sleep is withheld.
+	// Non-health device.wear_state is still readable by denied_agent while
+	// health.sleep is withheld.
 	let wear_resp = denied_agent
 		.records(
 			&RecordsRequest {

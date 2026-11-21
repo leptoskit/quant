@@ -376,7 +376,8 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		.sensitive(&[Class::Health]),
 		StreamSpec::event(
 			"health.body_composition",
-			"Body composition measurement (body fat, muscle mass, body water) from a watch or scale.",
+			"Body composition measurement (body fat, muscle mass, body water) from a watch or \
+			 scale.",
 		)
 		.summarise_by(&["source"])
 		.sensitive(&[Class::Health]),

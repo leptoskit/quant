@@ -186,7 +186,8 @@ async fn watch_and_companion_sync_pair_collect_and_deliver() {
 	);
 	assert_eq!(worker.snapshot().storage, Storage::Open);
 
-	// Pair via companion PairLink envelope (simulating phone pushing link to watch).
+	// Pair via companion PairLink envelope (simulating phone pushing link to
+	// watch).
 	let pair_env = serde_json::to_vec(&CompanionEnvelope::PairLink {
 		link: daemon.link.clone(),
 	})

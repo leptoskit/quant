@@ -21,12 +21,6 @@ pub use ambient::AmbientAudio;
 pub use phone::LocationReport;
 pub use phone::PowerMonitor;
 pub use phone::PowerReport;
-pub use wearable::BleReport;
-pub use wearable::CompanionEnvelope;
-pub use wearable::HealthReport;
-pub use wearable::TOPIC_PAIR_LINK;
-pub use wearable::TOPIC_READING_FRAME;
-pub use wearable::WearableReport;
 use quant_api::IngestRecords;
 use quant_api::IngestSeries;
 use quant_client::Client;
@@ -45,6 +39,12 @@ pub use resources::MAX_MEDIA_BYTES;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time::Instant;
+pub use wearable::BleReport;
+pub use wearable::CompanionEnvelope;
+pub use wearable::HealthReport;
+pub use wearable::TOPIC_PAIR_LINK;
+pub use wearable::TOPIC_READING_FRAME;
+pub use wearable::WearableReport;
 
 /// Undelivered captures, encrypted at rest.
 pub struct Spool {

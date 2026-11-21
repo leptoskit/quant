@@ -23,7 +23,8 @@ pub struct Saved {
 	/// Where the next app usage read starts, in Unix milliseconds.
 	#[serde(default)]
 	pub usage_until_ms: Option<i64>,
-	/// Latest opaque incremental changes token from `HealthKit` / Health Connect.
+	/// Latest opaque incremental changes token from `HealthKit` / Health
+	/// Connect.
 	#[serde(default)]
 	pub health_token: Option<String>,
 	/// Where the next windowed health-store read starts, in Unix milliseconds.

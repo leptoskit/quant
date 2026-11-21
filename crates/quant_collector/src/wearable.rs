@@ -427,11 +427,8 @@ impl Spool {
 						if let Some(water) = water_percent.filter(|v| v.is_finite()) {
 							record = record.with("water_percent", water);
 						}
-						record.id = record_id(
-							"health.body_composition",
-							device,
-							&[&time_ms.to_le_bytes()],
-						);
+						record.id =
+							record_id("health.body_composition", device, &[&time_ms.to_le_bytes()]);
 						self.record(record)?;
 						report.stored += 1;
 					}
@@ -638,7 +635,8 @@ impl Spool {
 		report.stored += self.queue_scalar_series(device, "health.spo2", "percent", spo2_points)?;
 		report.stored +=
 			self.queue_scalar_series(device, "health.skin_temperature", "celsius", temp_points)?;
-		report.stored += self.queue_scalar_series(device, "device.battery", "level", batt_points)?;
+		report.stored +=
+			self.queue_scalar_series(device, "device.battery", "level", batt_points)?;
 		report.stored +=
 			self.queue_scalar_series(device, "sensor.ble.cycling_power", "watts", power_points)?;
 
@@ -716,9 +714,9 @@ impl Spool {
 		let mut stored = 0;
 		let mut run: Vec<(i64, f64)> = Vec::new();
 		for (at, value) in points {
-			let breaks = run
-				.first()
-				.is_some_and(|(first, _)| at - first > MAX_BATCH_SPAN_MS || run.len() >= MAX_SERIES_ROWS);
+			let breaks = run.first().is_some_and(|(first, _)| {
+				at - first > MAX_BATCH_SPAN_MS || run.len() >= MAX_SERIES_ROWS
+			});
 			if breaks {
 				stored += self.flush_scalar_run(device, stream_name, channel, &run)?;
 				run.clear();
