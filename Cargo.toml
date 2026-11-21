@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "platforms/android", "platforms/ios", "platforms/macos"]
+members = [
+	"crates/*",
+	"platforms/android",
+	"platforms/harmonyos",
+	"platforms/ios",
+	"platforms/macos",
+	"platforms/watchos",
+	"platforms/wearos",
+]
 default-members = ["crates/quant_access", "crates/quant_api", "crates/quant_capture_macos", "crates/quant_cli", "crates/quant_client", "crates/quant_collector", "crates/quant_core", "crates/quant_crypto", "crates/quant_daemon", "crates/quant_derive", "crates/quant_import", "crates/quant_learn", "crates/quant_mcp", "crates/quant_relay", "crates/quant_store"]
 
 [workspace.package]
@@ -15,33 +23,41 @@ publish = false
 quant_model = { path = "crates/quant_model" }
 quant_phone = { path = "crates/quant_phone" }
 quant_service = { path = "crates/quant_service" }
-leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_plugin_app_usage = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_background = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_battery = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_location = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_notifications = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
-leptoskit_plugin_secure_store = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_plugin_thermal = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
+leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_plugin_app_usage = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_background = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_battery = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_ble = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_health = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_location = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_notifications = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_plugin_pedometer = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_secure_store = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_sensors = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_thermal = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_watch_sync = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_plugin_wearable = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_sensor = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
+leptoskit_watch = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
 dispatch2 = "0.3"
 png = "0.18"
 relay_db = { path = "crates/relay_db" }
-leptoskit_axum = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_db = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
+leptoskit_axum = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_db = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
 landing_shared = { path = "crates/landing_shared" }
 # Test harnesses own a reactive Owner; Leptoskit does not re-export it.
 reactive_graph = "0.3.0-rc1"
-leptoskit_router = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9", default-features = false }
+leptoskit_router = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580", default-features = false }
 skribble_leptoskit = { git = "https://github.com/openbudgetfun/skribble", rev = "46b8e635b1d983f92054d13fcc0bc513e7b9a43c" }
 quant_core = { path = "crates/quant_core" }
 quant_access = { path = "crates/quant_access" }
@@ -138,5 +154,5 @@ strip = "debuginfo"
 strip = "none"
 
 [patch.crates-io]
-leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "1c9b39d6edb307df0591ef530ac490b4576942e9" }
+leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }
+leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "73b6c7ec3c8dd3f823034658eb34f4342a2dd580" }

@@ -23,6 +23,10 @@ quant/
     quant_*/           capture, vault, authorization, CLI, MCP and collector
   platforms/macos/     app-owned Swift lifecycle and Rust runner
   platforms/android/   Gradle project, manifest and the Rust host's plugin list
+  platforms/ios/       iOS host, Info.plist, and plugin list
+  platforms/wearos/    Wear OS 3+ host (Pixel Watch, Galaxy Watch), Tile and Complication
+  platforms/watchos/   Apple Watch SwiftUI host, WidgetKit complication, Info.plist
+  platforms/harmonyos/ HarmonyOS phone and Huawei Watch Stage module and Rust host
   assets/app/          product assets
   assets/landing/      public assets
   web/landing/         public web entry files
@@ -30,6 +34,9 @@ quant/
   deploy/relay/        relay deployment container and Fly configuration
   tests/landing/       hydrated browser checks
   scripts/android-device.sh   build, install and drive the app on a USB phone
+  scripts/wearos-device.sh    build, install and open Quant on a Wear OS watch
+  scripts/watchos-device.sh   build and install Quant on an Apple Watch
+  scripts/harmonyos-device.sh build and install Quant on a Huawei Watch / HarmonyOS device
   .leptoskit/          generated host/plugin state (ignored)
   dist/<target>/       isolated web/server output (ignored)
 ```
@@ -42,22 +49,23 @@ each target. The relay has its own database and forwards end-to-end encrypted
 traffic; sharing a build workspace does not give it the vault's keys.
 
 Build and deploy commands run at the root with `--app-target desktop`,
-`--app-target landing`, `--app-target relay`, `--app-target android` or
-`--app-target ios`.
+`--app-target landing`, `--app-target relay`, `--app-target android`,
+`--app-target ios`, `--app-target wearos`, `--app-target watchos`,
+`--app-target harmonyos`, or `--app-target harmonyos-watch`.
 Deployment files use that same root context. No credentials are stored in the
 target definitions.
 
-The `android` target builds the phone collector: `quant_app` with its `android`
-feature is the screen, `quant_phone` is its native service, and
-`platforms/android` is the host. The `ios` target is the same collector with
-`quant_app`'s `ios` feature and `platforms/ios` as the host. Both are
-development builds, described in [Quant on a phone](phone.md).
+The `android` and `ios` targets build the phone collector (`quant_app` +
+`quant_phone`). The `wearos`, `watchos`, and `harmonyos-watch` targets build
+the sensor-first watch collector (`quant_app` with `watch` features using
+`leptoskit_watch::WearableApp` + `quant_phone`). All mobile and watch targets
+are development builds, described in [Quant on a phone](phone.md) and
+[Quant on watches and wearables](wearables.md).
 
-`web` and `harmonyos` reserve the intended destinations in the same system.
-Selection currently fails with an explanation because the product web
-frontend has no authenticated transport and HarmonyOS has no collector.
-Declaring a target does not enable background permissions or claim continuous
-capture support on a platform.
+`web` reserves the intended product browser destination in the same system and
+currently fails selection with an explanation until authenticated browser
+transport is implemented. Declaring a target does not enable background
+permissions or claim continuous capture support on a platform.
 
 Run `python3 scripts/check-project.py` for structural checks. Core tests use
 the workspace's default members; target CI selects explicit packages and

@@ -136,7 +136,7 @@ mod tests {
 		assert_eq!(
 			approve("K7QD-M2XA"),
 			"quant approve K7QD-M2XA --scope location:write --scope apps:write --scope \
-			 device:write"
+			 device:write --scope health:write --scope motion:write --scope sensor:write"
 		);
 	}
 

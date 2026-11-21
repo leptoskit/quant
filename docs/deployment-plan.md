@@ -17,9 +17,11 @@ resources and release artifacts remain destinations of this one application.
 | `desktop` | Signed macOS app plus the `quant` CLI/daemon | Local install, owner pilot, then signed public distribution after packaging gates pass. |
 | `desktop-preview` | Local UI with explicitly labelled, synthetic sample data | Design review and screenshots only; never distribute as the product. |
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
-| `android` | Debug APK of the phone collector | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
-| `ios` | Unsigned device build of the phone collector | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
-| `harmonyos` | Native application package | Blocked by its `unavailable` entry; the host and collector lifecycle are unfinished. |
+| `android` | Debug APK of the phone collector (incl. Health Connect, BLE, watch sync) | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
+| `ios` | Unsigned device build of the phone collector (incl. HealthKit, BLE, WatchConnectivity) | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
+| `wearos` | Wear OS 3+ watch APK (`platforms/wearos`, incl. Pixel Watch & Samsung Galaxy Watch) | Development builds only ([wearables guide](wearables.md)). No release until watch hardware, battery, thermal, and store gates in section 10 pass. |
+| `watchos` | Apple Watch app (`platforms/watchos`) | Development builds only ([wearables guide](wearables.md)). No release until watchOS hardware, HealthKit workout, battery, thermal, and store gates in section 10 pass. |
+| `harmonyos` / `harmonyos-watch` | Experimental HarmonyOS phone/tablet and Huawei Watch HAP (`platforms/harmonyos`) | Experimental development builds only ([wearables guide](wearables.md)). No release until HarmonyOS SDK/device gates in section 10 pass. |
 
 Deploy the landing site independently when ready. Prove the relay with a
 synthetic vault and existing CLI clients before connecting an owner's vault.
@@ -447,7 +449,9 @@ each platform requires:
 | Product web | Authenticated transport and owner sessions, scoped/rate-limited API access, route/asset isolation from landing, browser session security, and proof that the relay/public site cannot access vault keys. |
 | Android | Native host, collector and encrypted bounded spool; permission/foreground lifecycle; continuous-audio chunking with silent chunks suppressed; location, motion, steps, thermal/usage integrations as actually supported; app-usage access through the platform's explicit settings flow. Administrative privileges must never stand in for specific consent or unsupported capture capabilities. |
 | iOS | Native host and permitted background collection, explicit consent and visible capture state, encrypted bounded spool, interruption/restart handling, and evidence of what continues when backgrounded/locked. Document unsupported data sources instead of promising Android-equivalent capture. |
-| HarmonyOS | Qualified SDK/host/toolchain, supported collector capabilities, signing and device tests. Keep its experimental status explicit until those pass. |
+| Wear OS (`wearos`) | Wear OS 3+ device verification (Pixel Watch and Samsung Galaxy Watch), Health Services / optional Samsung Health Sensor SDK permission flows, Tile/Complication updates, companion sync fallback, and real-device battery/thermal measurements. |
+| watchOS (`watchos`) | Apple Watch hardware verification, `HealthKit` workout/passive delivery, `WatchConnectivity` companion sync, `WidgetKit` complication timelines, and real-device battery/thermal measurements. |
+| HarmonyOS (`harmonyos`, `harmonyos-watch`) | Qualified SDK/host/toolchain, Huawei Watch Sensor/Health/WearEngine hardware verification, signing and device tests. Keep its experimental status explicit until those pass. |
 
 For Android and iOS, require emulator/simulator regression tests and real-device
 permission, background, battery and thermal measurements. Emulators do not

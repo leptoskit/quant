@@ -22,8 +22,12 @@ leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
 leptoskit_native = { workspace = true }
 leptoskit_plugin_app_usage = { workspace = true }
 leptoskit_plugin_battery = { workspace = true }
+leptoskit_plugin_ble = { workspace = true }
+leptoskit_plugin_health = { workspace = true }
 leptoskit_plugin_location = { workspace = true }
+leptoskit_plugin_pedometer = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
+leptoskit_plugin_wearable = { workspace = true }
 leptoskit_wasm = { workspace = true }
 quant_api = { workspace = true }
 quant_client = { workspace = true }

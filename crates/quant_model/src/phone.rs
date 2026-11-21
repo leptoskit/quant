@@ -29,9 +29,26 @@ pub const COMMAND: u32 = 2;
 pub const READING: u32 = 3;
 
 /// The write scopes the phone pairs with: where it has been, which apps were
-/// in front, and its screen, battery and thermal state. None of them lets the
-/// phone read anything back.
-pub const PHONE_SCOPES: [&str; 3] = ["location:write", "apps:write", "device:write"];
+/// in front, its screen, battery and thermal state, plus health and motion
+/// readings from `HealthKit` / Health Connect and paired BLE sensors. None of
+/// them lets the phone read anything back.
+pub const PHONE_SCOPES: [&str; 6] = [
+	"location:write",
+	"apps:write",
+	"device:write",
+	"health:write",
+	"motion:write",
+	"sensor:write",
+];
+
+/// The write scopes a watch pairs with (Wear OS, watchOS, Huawei Watch).
+pub const WATCH_SCOPES: [&str; 5] = [
+	"health:write",
+	"motion:write",
+	"location:write",
+	"device:write",
+	"sensor:write",
+];
 
 /// How often the screen asks the service to look again and upload.
 pub const TICK_SECONDS: u64 = 60;
@@ -39,22 +56,25 @@ pub const TICK_SECONDS: u64 = 60;
 /// How often the screen reads app usage.
 pub const USAGE_SECONDS: u64 = 5 * 60;
 
-/// Everything the phone's screen shows that the service knows.
+/// How often the screen polls `HealthKit` / Health Connect incremental changes.
+pub const HEALTH_SECONDS: u64 = 5 * 60;
+
+/// Everything the phone's or watch's screen shows that the service knows.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
 	/// Bumped whenever anything below changes.
 	pub version: u64,
 	/// The status line, such as "Collecting · 3 waiting".
 	pub headline: String,
-	/// How this phone stands with the vault.
+	/// How this device stands with the vault.
 	pub link: Link,
 	/// The vault's address, once a pairing link was accepted.
 	pub vault: Option<String>,
-	/// The command that approves this phone, while it waits.
+	/// The command that approves this device, while it waits.
 	pub approve: Option<String>,
 	/// The encrypted spool.
 	pub storage: Storage,
-	/// Whether the owner wants this phone to collect.
+	/// Whether the owner wants this device to collect.
 	pub collecting: bool,
 	/// Readings waiting to be delivered.
 	pub waiting: u64,
@@ -66,6 +86,21 @@ pub struct Snapshot {
 	pub sources: Vec<SourceRow>,
 	/// The result of the last action.
 	pub notice: Option<Notice>,
+	/// Latest observed heart rate in BPM (for glanceable watch surfaces).
+	#[serde(default)]
+	pub latest_heart_rate_bpm: Option<u16>,
+	/// Cumulative steps observed in the current session/day.
+	#[serde(default)]
+	pub steps_today: Option<u64>,
+	/// Whether a companion watch/phone link is currently reachable.
+	#[serde(default)]
+	pub watch_connected: bool,
+	/// Display name of the paired watch/phone peer, when known.
+	#[serde(default)]
+	pub watch_name: Option<String>,
+	/// Connected BLE sensor names (e.g. "Polar H10").
+	#[serde(default)]
+	pub ble_devices: Vec<String>,
 }
 
 /// How this phone stands with the vault.
@@ -109,11 +144,11 @@ pub enum Storage {
 	},
 }
 
-/// What the phone collects.
+/// What the phone or watch collects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
-	/// Where the phone is: `location.fix`.
+	/// Where the device is: `location.fix`.
 	Location,
 	/// Which apps were in front, and screen and lock changes: `apps.focus`
 	/// and `device.state`.
@@ -121,11 +156,32 @@ pub enum Source {
 	/// Battery level, charging, low-power mode and thermal state:
 	/// `device.battery` and `device.power`.
 	Power,
+	/// `HealthKit` / Health Connect / `HarmonyOS` Health store records:
+	/// heart rate, HRV, `SpO2`, steps, sleep, workouts, skin temp, calories.
+	Health,
+	/// Direct on-watch wrist biometric sensors (Wear OS Health Services,
+	/// Samsung Galaxy Watch sensors, watchOS live workouts, Huawei Watch).
+	Wearable,
+	/// Pedometer, accelerometer, gyroscope, and barometer motion streams.
+	Motion,
+	/// Companion phone ↔ watch synced batches.
+	WatchSync,
+	/// Paired BLE GATT straps, rings, oximeters, and fitness sensors.
+	Ble,
 }
 
 impl Source {
 	/// Every source, in the order the screen lists them.
-	pub const ALL: [Source; 3] = [Source::Location, Source::Usage, Source::Power];
+	pub const ALL: [Source; 8] = [
+		Source::Location,
+		Source::Usage,
+		Source::Power,
+		Source::Health,
+		Source::Wearable,
+		Source::Motion,
+		Source::WatchSync,
+		Source::Ble,
+	];
 
 	/// The source's name on the screen.
 	pub fn label(self) -> &'static str {
@@ -133,6 +189,11 @@ impl Source {
 			Source::Location => "Location",
 			Source::Usage => "App usage",
 			Source::Power => "Battery and temperature",
+			Source::Health => "Health store",
+			Source::Wearable => "Watch sensors",
+			Source::Motion => "Steps and motion",
+			Source::WatchSync => "Watch companion sync",
+			Source::Ble => "Bluetooth sensors",
 		}
 	}
 }
@@ -187,6 +248,17 @@ pub enum Command {
 	/// [`ReplyData::UsageRange`], or no data when there is nothing to read
 	/// yet.
 	UsagePlan,
+	/// Ask for the next health-store window and saved changes token. Answers
+	/// [`ReplyData::HealthWindow`].
+	HealthPlan,
+	/// Persist the latest opaque health-store incremental sync token.
+	SetHealthToken {
+		/// Next token from `Health::changes_token` / `Health::changes`.
+		token: Option<String>,
+	},
+	/// Ask for the saved vault pairing link so the phone can forward it to a
+	/// paired watch over `watch-sync`. Answers [`ReplyData::PairLink`].
+	ExportPairLink,
 }
 
 /// Extra data a [`Command`]'s [`Reply`] can carry.
@@ -205,6 +277,20 @@ pub enum ReplyData {
 		since_ms: i64,
 		/// To, exclusive.
 		until_ms: i64,
+	},
+	/// The next health-store read window and incremental changes token.
+	HealthWindow {
+		/// From, inclusive.
+		since_ms: i64,
+		/// To, exclusive.
+		until_ms: i64,
+		/// Previously persisted incremental sync token, when available.
+		token: Option<String>,
+	},
+	/// The saved `quant://link?...` URI to push to a paired watch.
+	PairLink {
+		/// Pairing link URI.
+		link: String,
 	},
 }
 
@@ -255,6 +341,12 @@ pub const MAX_EVENT_PAGES: usize = 8;
 const KIND_LOCATION: u8 = 1;
 const KIND_USAGE: u8 = 2;
 const KIND_POWER: u8 = 3;
+const KIND_HEALTH: u8 = 4;
+const KIND_WEARABLE: u8 = 5;
+const KIND_PEDOMETER: u8 = 6;
+const KIND_MOTION: u8 = 7;
+const KIND_BLE: u8 = 8;
+const KIND_WATCH_SYNC: u8 = 9;
 
 /// One plugin reply, handed to the service exactly as the plugin answered.
 ///
@@ -284,6 +376,30 @@ pub enum Reading<'a> {
 		/// A thermal `snapshot` or `wait_for_change` reply.
 		thermal: Option<&'a [u8]>,
 	},
+	/// A `leptoskit_plugin_health` `Page` reply (or `Changes` reply when
+	/// `is_changes` is true).
+	Health {
+		/// True when `payload` is a `Changes` reply; false for a `Page` reply.
+		is_changes: bool,
+		/// Raw reply bytes from `health`.
+		payload: &'a [u8],
+	},
+	/// A `leptoskit_plugin_wearable` `Batch` reply from wrist sensors.
+	Wearable(&'a [u8]),
+	/// A `leptoskit_plugin_pedometer` `Reading` reply.
+	Pedometer(&'a [u8]),
+	/// A `leptoskit_sensor` batch reply tagged with sensor kind code
+	/// (0 = accel, 2 = gyro, 4 = barometer).
+	Motion {
+		/// Sensor kind wire code.
+		kind_code: u32,
+		/// Raw batch reply bytes.
+		batch: &'a [u8],
+	},
+	/// A `leptoskit_plugin_ble` `NotificationBatch` reply.
+	Ble(&'a [u8]),
+	/// A companion-synced inner `Reading` frame ferried from a paired watch.
+	WatchSync(&'a [u8]),
 }
 
 impl<'a> Reading<'a> {
@@ -293,6 +409,11 @@ impl<'a> Reading<'a> {
 			Reading::Location(_) => Source::Location,
 			Reading::Usage { .. } => Source::Usage,
 			Reading::Power { .. } => Source::Power,
+			Reading::Health { .. } => Source::Health,
+			Reading::Wearable(_) => Source::Wearable,
+			Reading::Pedometer(_) | Reading::Motion { .. } => Source::Motion,
+			Reading::Ble(_) => Source::Ble,
+			Reading::WatchSync(_) => Source::WatchSync,
 		}
 	}
 
@@ -325,6 +446,35 @@ impl<'a> Reading<'a> {
 				frame.push(KIND_POWER);
 				optional(&mut frame, *battery)?;
 				optional(&mut frame, *thermal)?;
+			}
+			Reading::Health {
+				is_changes,
+				payload,
+			} => {
+				frame.push(KIND_HEALTH);
+				frame.push(u8::from(*is_changes));
+				part(&mut frame, payload)?;
+			}
+			Reading::Wearable(batch) => {
+				frame.push(KIND_WEARABLE);
+				part(&mut frame, batch)?;
+			}
+			Reading::Pedometer(reading) => {
+				frame.push(KIND_PEDOMETER);
+				part(&mut frame, reading)?;
+			}
+			Reading::Motion { kind_code, batch } => {
+				frame.push(KIND_MOTION);
+				frame.extend_from_slice(&kind_code.to_le_bytes());
+				part(&mut frame, batch)?;
+			}
+			Reading::Ble(batch) => {
+				frame.push(KIND_BLE);
+				part(&mut frame, batch)?;
+			}
+			Reading::WatchSync(inner) => {
+				frame.push(KIND_WATCH_SYNC);
+				part(&mut frame, inner)?;
 			}
 		}
 		Some(frame)
@@ -361,6 +511,31 @@ impl<'a> Reading<'a> {
 					thermal: take_optional(&mut rest).ok()?,
 				}
 			}
+			KIND_HEALTH => {
+				let (flag, tail) = rest.split_first()?;
+				rest = tail;
+				let is_changes = match *flag {
+					0 => false,
+					1 => true,
+					_ => return None,
+				};
+				Reading::Health {
+					is_changes,
+					payload: take_part(&mut rest)?,
+				}
+			}
+			KIND_WEARABLE => Reading::Wearable(take_part(&mut rest)?),
+			KIND_PEDOMETER => Reading::Pedometer(take_part(&mut rest)?),
+			KIND_MOTION => {
+				let (code, tail) = rest.split_first_chunk::<4>()?;
+				rest = tail;
+				Reading::Motion {
+					kind_code: u32::from_le_bytes(*code),
+					batch: take_part(&mut rest)?,
+				}
+			}
+			KIND_BLE => Reading::Ble(take_part(&mut rest)?),
+			KIND_WATCH_SYNC => Reading::WatchSync(take_part(&mut rest)?),
 			_ => return None,
 		};
 		rest.is_empty().then_some(reading)
@@ -446,6 +621,22 @@ mod tests {
 			battery: None,
 			thermal: Some(&[]),
 		});
+		round_trip(&Reading::Health {
+			is_changes: false,
+			payload: &[4, 5, 6],
+		});
+		round_trip(&Reading::Health {
+			is_changes: true,
+			payload: &[7, 8],
+		});
+		round_trip(&Reading::Wearable(&[1, 2, 3, 4]));
+		round_trip(&Reading::Pedometer(&[0; 32]));
+		round_trip(&Reading::Motion {
+			kind_code: 0,
+			batch: &[9, 10, 11],
+		});
+		round_trip(&Reading::Ble(&[12, 13]));
+		round_trip(&Reading::WatchSync(&[1, 2, 0, 0, 0, 3, 4]));
 	}
 
 	#[test]
@@ -467,7 +658,7 @@ mod tests {
 	fn frames_that_are_not_exactly_one_reading_are_refused() {
 		assert_eq!(Reading::decode(&[]), None);
 		assert_eq!(Reading::decode(&[0]), None);
-		assert_eq!(Reading::decode(&[9, 0, 0, 0, 0]), None);
+		assert_eq!(Reading::decode(&[99, 0, 0, 0, 0]), None);
 
 		let frame = Reading::Location(&[1, 2, 3]).encode().unwrap();
 		for length in 0..frame.len() {

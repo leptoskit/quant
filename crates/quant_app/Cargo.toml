@@ -26,18 +26,30 @@ phone = [
 	"dep:leptoskit_plugin_app_usage",
 	"dep:leptoskit_plugin_background",
 	"dep:leptoskit_plugin_battery",
+	"dep:leptoskit_plugin_ble",
+	"dep:leptoskit_plugin_health",
 	"dep:leptoskit_plugin_location",
 	"dep:leptoskit_plugin_notifications",
+	"dep:leptoskit_plugin_pedometer",
 	"dep:leptoskit_plugin_secure_store",
+	"dep:leptoskit_plugin_sensors",
 	"dep:leptoskit_plugin_thermal",
+	"dep:leptoskit_plugin_watch_sync",
+	"dep:leptoskit_plugin_wearable",
 ]
 android = ["phone", "leptoskit/android"]
 ios = ["phone", "leptoskit/ios"]
+watch = ["phone", "leptoskit/watch"]
+wearos = ["watch", "leptoskit/wearos"]
+watchos = ["watch", "leptoskit/watchos"]
+harmonyos = ["phone"]
+harmonyos-watch = ["watch"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 
 [dependencies]
 leptoskit = { workspace = true }
+leptoskit_watch = { workspace = true }
 quant_model = { workspace = true }
 serde_json = { workspace = true }
 
@@ -46,11 +58,17 @@ leptoskit_bridge = { workspace = true }
 leptoskit_plugin_app_usage = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_background = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_battery = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_ble = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_device_keys = { workspace = true, features = ["guest"] }
+leptoskit_plugin_health = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_location = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_notifications = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_pedometer = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_secure_store = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_sensors = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_thermal = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_watch_sync = { workspace = true, features = ["guest"], optional = true }
+leptoskit_plugin_wearable = { workspace = true, features = ["guest"], optional = true }
 
 [dev-dependencies]
 leptoskit_testing = { workspace = true }

@@ -10,6 +10,7 @@
 mod ambient;
 mod phone;
 mod resources;
+mod wearable;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -38,6 +39,12 @@ pub use resources::MAX_MEDIA_BYTES;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time::Instant;
+pub use wearable::BleReport;
+pub use wearable::CompanionEnvelope;
+pub use wearable::HealthReport;
+pub use wearable::TOPIC_PAIR_LINK;
+pub use wearable::TOPIC_READING_FRAME;
+pub use wearable::WearableReport;
 
 /// Undelivered captures, encrypted at rest.
 pub struct Spool {

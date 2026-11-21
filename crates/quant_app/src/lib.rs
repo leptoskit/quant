@@ -14,6 +14,7 @@
 pub mod bridge;
 pub mod phone;
 pub mod ui;
+pub mod watch;
 
 #[cfg(all(feature = "ui-preview", target_arch = "wasm32"))]
 mod preview;
@@ -52,7 +53,7 @@ mod entry {
 		desktop();
 	}
 
-	/// The phone's screen and its collector.
+	/// The phone or watch screen and its collector.
 	#[cfg(feature = "phone")]
 	fn phone() {
 		use std::sync::OnceLock;
@@ -71,6 +72,9 @@ mod entry {
 		}));
 		let _ = slot.set(state.clone());
 		collect::start(&state);
+		#[cfg(feature = "watch")]
+		leptoskit::guest::mount(move || super::watch::WatchScreen(state.clone()));
+		#[cfg(not(feature = "watch"))]
 		leptoskit::guest::mount(move || super::phone::Screen(state.clone()));
 	}
 

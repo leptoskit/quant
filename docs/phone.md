@@ -24,15 +24,19 @@ the iOS simulator.
 | Location | `location.fix` | `location:write` | Location permission |
 | App usage | `apps.focus`, `device.state` | `apps:write`, `device:write` | Usage Access (Android) |
 | Battery and temperature | `device.battery`, `device.power` | `device:write` | Nothing |
+| Health store | `health.*` (HR, resting HR, HRV, SpO2, steps, sleep, workouts, skin temp, calories, distance, floors) | `health:write` | Health Connect / HealthKit / HarmonyOS Health permission |
+| Steps & motion | `health.steps`, `motion.*` | `health:write`, `motion:write` | Activity / Motion permission |
+| Watch companion sync | Ferried watch streams + vault link push | `health:write`, `device:write`, `location:write`, `motion:write`, `sensor:write` | Paired Wear OS, Apple Watch, or Huawei Watch |
+| Bluetooth sensors | `health.heart_rate`, `health.hrv`, `health.spo2`, `health.skin_temperature`, `sensor.ble.*` | `health:write`, `sensor:write` | Bluetooth permission |
 
-An iPhone records less. iOS gives apps no way to see which other apps were
-in front, so it sends no `apps.focus`, only the lock and unlock events in
-`device.state`, and only while Quant is running. Its thermal state has no
-raw value beside the four levels.
+An iPhone records less app usage: iOS gives apps no way to see which other apps
+were in front, so it sends no `apps.focus`, only the lock and unlock events in
+`device.state`, and only while Quant is running. Its thermal state has no raw
+value beside the four levels.
 
-What each stream holds is described in
-[the architecture notes](architecture.md#phone-location-app-usage-and-power).
-Audio, health and motion are not collected by this app yet.
+See [Quant on watches and wearables](wearables.md) for dedicated Apple Watch,
+Wear OS / Samsung Galaxy Watch, Huawei Watch, and BLE strap documentation.
+Ambient microphone audio is not collected by the phone app yet.
 
 ## Run it on an Android phone attached over USB
 
