@@ -228,6 +228,9 @@ pub enum Action {
 	/// Scan for nearby BLE GATT heart-rate, pulse-oximeter, thermometer, and
 	/// fitness sensors and subscribe automatically.
 	ScanBleSensors,
+	/// Start or stop a continuous live wrist-sensor / workout session on a
+	/// watch target.
+	ToggleLiveWorkout,
 }
 
 /// Carries out an [`Action`].
@@ -246,6 +249,9 @@ pub struct State {
 	pub problem: RwSignal<Option<String>>,
 	/// What stops the collector on this phone, when something does.
 	pub collector: RwSignal<Option<String>>,
+	/// Whether a high-frequency live workout sensor session is active on a
+	/// watch.
+	pub live_workout: RwSignal<bool>,
 	act: Act,
 }
 
@@ -258,6 +264,7 @@ impl State {
 			link: RwSignal::new(String::new()),
 			problem: RwSignal::new(None),
 			collector: RwSignal::new(None),
+			live_workout: RwSignal::new(false),
 			act,
 		}
 	}
@@ -604,7 +611,17 @@ fn collecting_card(state: &State) -> Element {
 						.clone()
 						.map(|problem| Text(problem).class(PROBLEM).test_id("collector")),
 				)
-				.children(part.sources.iter().map(source_row))
+				.children(
+					part.sources
+						.iter()
+						.filter(|row| {
+							cfg!(feature = "watch")
+								|| row.source != quant_model::phone::Source::Wearable
+								|| row.readings > 0
+								|| row.problem.is_some()
+						})
+						.map(source_row),
+				)
 		},
 	)
 }

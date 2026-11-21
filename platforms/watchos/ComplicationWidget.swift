@@ -26,8 +26,10 @@ struct QuantComplicationProvider: TimelineProvider {
         completion(Timeline(entries: [entry], policy: .after(next)))
     }
 
+    private static let appGroupSuite = "group.dev.leptoskit.quant"
+
     private func loadEntry() -> QuantComplicationEntry {
-        let defaults = UserDefaults.standard
+        let defaults = UserDefaults(suiteName: Self.appGroupSuite) ?? UserDefaults.standard
         let badge = defaults.string(forKey: "quant.watch.badge") ?? "REC"
         let headline = defaults.string(forKey: "quant.watch.headline") ?? "Quant"
         return QuantComplicationEntry(date: .now, badge: badge, headline: headline)

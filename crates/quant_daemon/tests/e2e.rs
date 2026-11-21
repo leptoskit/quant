@@ -487,13 +487,21 @@ async fn devices_write_only_where_granted() {
 	let stored = phone
 		.ingest_series(&IngestSeries {
 			batches: vec![batch.clone()],
+			device_name: None,
+			platform: Some("watchos".into()),
 		})
 		.await
 		.unwrap();
 	assert_eq!(stored.stored, 1);
+	assert_eq!(
+		h.state.vault.store.device_info(device).unwrap(),
+		Some(("Pixel".to_owned(), "watchos".to_owned()))
+	);
 	let again = phone
 		.ingest_series(&IngestSeries {
 			batches: vec![batch],
+			device_name: None,
+			platform: Some("watchos".into()),
 		})
 		.await
 		.unwrap();

@@ -20,6 +20,7 @@ use serde_json::json;
 
 use crate::DERIVED_DEVICE;
 use crate::daily::day_range;
+use crate::daily::is_asleep_stage;
 use crate::daily::night_range;
 use crate::daily::resting_heart_rate;
 use crate::stable_id;
@@ -114,17 +115,12 @@ fn sleep_nights(
 fn sleep_night(store: &Store, date: Date, tz: &TimeZone) -> Result<Option<f64>, StoreError> {
 	let night = night_range(day_range(date, tz)?);
 	let stages = grouped(store, "health.sleep", night, "stage")?;
-	if stages.is_empty() {
-		Ok(None)
-	} else {
-		Ok(Some(
-			stages
-				.iter()
-				.filter(|(stage, _)| stage.as_str() != "awake")
-				.map(|(_, seconds)| seconds)
-				.sum(),
-		))
-	}
+	let asleep: f64 = stages
+		.iter()
+		.filter(|(stage, _)| is_asleep_stage(stage))
+		.map(|(_, seconds)| seconds)
+		.sum();
+	Ok((asleep > 0.0).then_some(asleep))
 }
 
 /// The steps walked on `date`, or `None` where none were captured.

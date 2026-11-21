@@ -19,7 +19,7 @@ resources and release artifacts remain destinations of this one application.
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
 | `android` | Debug APK of the phone collector (incl. Health Connect, BLE, watch sync) | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
 | `ios` | Unsigned device build of the phone collector (incl. HealthKit, BLE, WatchConnectivity) | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
-| `wearos` | Wear OS 3+ watch APK (`platforms/wearos`, incl. Pixel Watch & Samsung Galaxy Watch) | Development builds only ([wearables guide](wearables.md)). No release until watch hardware, battery, thermal, and store gates in section 10 pass. |
+| `wearos` | Debug Wear OS 3+ watch APK (`platforms/wearos`, incl. Pixel Watch & Samsung Galaxy Watch; built in CI) | Development builds only ([wearables guide](wearables.md)). No release until watch hardware, battery, thermal, and store gates in section 10 pass. |
 | `watchos` | Apple Watch app (`platforms/watchos`) | Development builds only ([wearables guide](wearables.md)). No release until watchOS hardware, HealthKit workout, battery, thermal, and store gates in section 10 pass. |
 | `harmonyos` / `harmonyos-watch` | Experimental HarmonyOS phone/tablet and Huawei Watch HAP (`platforms/harmonyos`) | Experimental development builds only ([wearables guide](wearables.md)). No release until HarmonyOS SDK/device gates in section 10 pass. |
 

@@ -5,7 +5,6 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use quant_client::Endpoint;
 use quant_model::phone::Link;
-use quant_model::phone::PHONE_SCOPES;
 use quant_model::phone::Storage;
 
 /// The status line.
@@ -29,10 +28,11 @@ pub fn headline(link: &Link, storage: &Storage, collecting: bool, waiting: u64) 
 	}
 }
 
-/// The command the owner runs on their computer to approve this phone.
-pub fn approve(code: &str) -> String {
+/// The command the owner runs on their computer to approve a device with
+/// explicit `scopes`.
+pub fn approve_for(code: &str, scopes: &[&str]) -> String {
 	let mut command = format!("quant approve {code}");
-	for scope in PHONE_SCOPES {
+	for scope in scopes {
 		command.push_str(" --scope ");
 		command.push_str(scope);
 	}
@@ -80,6 +80,9 @@ pub fn when(at: Timestamp, now: Timestamp, tz: &TimeZone) -> String {
 
 #[cfg(test)]
 mod tests {
+	use quant_model::phone::PHONE_SCOPES;
+	use quant_model::phone::WATCH_SCOPES;
+
 	use super::*;
 
 	#[test]
@@ -132,11 +135,16 @@ mod tests {
 	}
 
 	#[test]
-	fn the_approval_command_names_every_scope_the_phone_asks_for() {
+	fn the_approval_command_names_every_scope_the_phone_and_watch_ask_for() {
 		assert_eq!(
-			approve("K7QD-M2XA"),
+			approve_for("K7QD-M2XA", &PHONE_SCOPES),
 			"quant approve K7QD-M2XA --scope location:write --scope apps:write --scope \
 			 device:write --scope health:write --scope motion:write --scope sensor:write"
+		);
+		assert_eq!(
+			approve_for("K7QD-M2XA", &WATCH_SCOPES),
+			"quant approve K7QD-M2XA --scope health:write --scope motion:write --scope \
+			 location:write --scope device:write --scope sensor:write"
 		);
 	}
 

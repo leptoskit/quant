@@ -5,6 +5,9 @@
 //! batches are stored by content hash, so overlapping queries, crash replays,
 //! or duplicate companion deliveries store each measurement once.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use jiff::SignedDuration;
 use jiff::Timestamp;
 use leptoskit_plugin_ble as ble;
 use leptoskit_plugin_ble::gatt;
@@ -33,6 +36,11 @@ pub const TOPIC_READING_FRAME: &str = "/quant/reading";
 
 /// Maximum rows per single-channel series batch.
 const MAX_SERIES_ROWS: usize = 2_048;
+/// Maximum rows per 3-channel vector motion batch (`4096 * 3 = 12288 <=
+/// 16384`).
+const MAX_VECTOR_ROWS: usize = 4_096;
+/// Maximum rows per 2-channel BLE pair batch (`2048 * 2 = 4096 <= 16384`).
+const MAX_PAIR_ROWS: usize = 2_048;
 /// Maximum time span of a single series batch (24 hours).
 const MAX_BATCH_SPAN_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -70,11 +78,55 @@ pub enum CompanionEnvelope {
 	/// Binary `quant_model::phone::Reading` frame ferried through the phone
 	/// when the watch has no direct Wi-Fi/LTE route to the vault.
 	ReadingFrame {
+		/// Stable device id of the originating watch, so ferried readings are
+		/// attributed to the watch rather than the phone.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		device_id: Option<DeviceId>,
 		/// Display name of the originating watch.
 		watch_name: String,
-		/// Raw encoded `Reading` frame.
+		/// Compact base64-encoded `Reading` frame.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		frame_b64: Option<String>,
+		/// Legacy JSON byte array encoding of the `Reading` frame, kept for
+		/// backwards compatibility with older watch builds.
+		#[serde(default, skip_serializing_if = "Vec::is_empty")]
 		frame: Vec<u8>,
 	},
+}
+
+impl CompanionEnvelope {
+	/// Build a compact base64-encoded [`CompanionEnvelope::ReadingFrame`].
+	pub fn reading_frame(
+		device_id: Option<DeviceId>,
+		watch_name: impl Into<String>,
+		frame: &[u8],
+	) -> Self {
+		Self::ReadingFrame {
+			device_id,
+			watch_name: watch_name.into(),
+			frame_b64: Some(STANDARD.encode(frame)),
+			frame: Vec::new(),
+		}
+	}
+
+	/// Decode the inner `Reading` bytes from either `frame_b64` or legacy
+	/// `frame`.
+	pub fn decoded_frame(&self) -> Option<Vec<u8>> {
+		match self {
+			Self::PairLink { .. } => None,
+			Self::ReadingFrame {
+				frame_b64, frame, ..
+			} => {
+				if let Some(encoded) = frame_b64 {
+					STANDARD.decode(encoded).ok()
+				} else if !frame.is_empty() {
+					Some(frame.clone())
+				} else {
+					None
+				}
+			}
+		}
+	}
 }
 
 /// What one batch of `HealthKit` / Health Connect / `HarmonyOS` Health samples
@@ -125,7 +177,8 @@ impl Spool {
 		let mut report = HealthReport::default();
 		let mut hr_points: Vec<(i64, f64)> = Vec::new();
 		let mut rhr_points: Vec<(i64, f64)> = Vec::new();
-		let mut hrv_points: Vec<(i64, f64)> = Vec::new();
+		let mut hrv_rmssd_points: Vec<(i64, f64)> = Vec::new();
+		let mut hrv_sdnn_points: Vec<(i64, f64)> = Vec::new();
 		let mut step_points: Vec<(i64, f64)> = Vec::new();
 		let mut spo2_points: Vec<(i64, f64)> = Vec::new();
 		let mut resp_points: Vec<(i64, f64)> = Vec::new();
@@ -156,10 +209,16 @@ impl Spool {
 						report.skipped += 1;
 					}
 				}
-				health::Value::HeartRateVariabilityRmssd { milliseconds }
-				| health::Value::HeartRateVariabilitySdnn { milliseconds } => {
+				health::Value::HeartRateVariabilityRmssd { milliseconds } => {
 					if milliseconds.is_finite() && *milliseconds >= 0.0 {
-						hrv_points.push((sample.start_ms, *milliseconds));
+						hrv_rmssd_points.push((sample.start_ms, *milliseconds));
+					} else {
+						report.skipped += 1;
+					}
+				}
+				health::Value::HeartRateVariabilitySdnn { milliseconds } => {
+					if milliseconds.is_finite() && *milliseconds >= 0.0 {
+						hrv_sdnn_points.push((sample.start_ms, *milliseconds));
 					} else {
 						report.skipped += 1;
 					}
@@ -271,7 +330,10 @@ impl Spool {
 		report.stored += self.queue_scalar_series(device, "health.heart_rate", "bpm", hr_points)?;
 		report.stored +=
 			self.queue_scalar_series(device, "health.resting_heart_rate", "bpm", rhr_points)?;
-		report.stored += self.queue_scalar_series(device, "health.hrv", "rmssd", hrv_points)?;
+		report.stored +=
+			self.queue_scalar_series(device, "health.hrv", "rmssd", hrv_rmssd_points)?;
+		report.stored +=
+			self.queue_scalar_series(device, "health.hrv_sdnn", "sdnn", hrv_sdnn_points)?;
 		report.stored += self.queue_scalar_series(device, "health.steps", "steps", step_points)?;
 		report.stored += self.queue_scalar_series(device, "health.spo2", "percent", spo2_points)?;
 		report.stored += self.queue_scalar_series(
@@ -414,21 +476,50 @@ impl Spool {
 					skeletal_muscle_kg,
 					water_percent,
 				} => {
-					if *time_ms > 0 {
+					let fat = body_fat_percent.filter(|v| v.is_finite());
+					let muscle = skeletal_muscle_kg.filter(|v| v.is_finite());
+					let water = water_percent.filter(|v| v.is_finite());
+					if *time_ms > 0 && (fat.is_some() || muscle.is_some() || water.is_some()) {
 						let mut record = Record::new(stream("health.body_composition"), device)
 							.starting(timestamp(*time_ms)?)
 							.with("source", "wearable");
-						if let Some(fat) = body_fat_percent.filter(|v| v.is_finite()) {
+						if let Some(fat) = fat {
 							record = record.with("body_fat_percent", fat);
 						}
-						if let Some(muscle) = skeletal_muscle_kg.filter(|v| v.is_finite()) {
+						if let Some(muscle) = muscle {
 							record = record.with("skeletal_muscle_kg", muscle);
 						}
-						if let Some(water) = water_percent.filter(|v| v.is_finite()) {
+						if let Some(water) = water {
 							record = record.with("water_percent", water);
 						}
 						record.id =
 							record_id("health.body_composition", device, &[&time_ms.to_le_bytes()]);
+						self.record(record)?;
+						report.stored += 1;
+					}
+				}
+				wearable::Reading::Ecg {
+					time_ms,
+					classification,
+					average_bpm,
+				} => {
+					if *time_ms > 0 {
+						let class_name = ecg_classification_str(*classification);
+						let mut record = Record::new(stream("health.ecg"), device)
+							.starting(timestamp(*time_ms)?)
+							.with("classification", class_name)
+							.with("source", "wearable");
+						if let Some(bpm) = average_bpm.filter(|v| v.is_finite() && *v > 0.0) {
+							record = record.with("avg_heart_rate_bpm", bpm);
+							#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+							let rounded = bpm.round().clamp(1.0, f64::from(u16::MAX)) as u16;
+							report.latest_heart_rate_bpm = Some(rounded);
+						}
+						record.id = record_id(
+							"health.ecg",
+							device,
+							&[class_name.as_bytes(), &time_ms.to_le_bytes()],
+						);
 						self.record(record)?;
 						report.stored += 1;
 					}
@@ -464,7 +555,13 @@ impl Spool {
 		Ok(report)
 	}
 
-	/// Queue one pedometer observation into `health.steps`.
+	/// Queue one pedometer interval or boot-counter observation into
+	/// `health.steps`.
+	///
+	/// For [`pedometer::Reading::BootCounter`], callers with persisted state
+	/// should compute the step delta since the last reading (handling reboots)
+	/// and call [`Self::pedometer_delta_steps`] so cumulative steps-since-boot
+	/// are not double-counted across intervals.
 	pub fn pedometer_reading(
 		&self,
 		device: DeviceId,
@@ -488,7 +585,28 @@ impl Spool {
 				(now.as_millisecond(), reported_steps)
 			}
 		};
+		if steps == 0 {
+			return Ok(0);
+		}
 		self.queue_scalar_series(device, "health.steps", "steps", vec![(at_ms, steps as f64)])
+	}
+
+	/// Queue an already-differenced step delta into `health.steps`.
+	pub fn pedometer_delta_steps(
+		&self,
+		device: DeviceId,
+		at: Timestamp,
+		steps: u64,
+	) -> Result<usize, SinkError> {
+		if steps == 0 {
+			return Ok(0);
+		}
+		self.queue_scalar_series(
+			device,
+			"health.steps",
+			"steps",
+			vec![(at.as_millisecond(), steps as f64)],
+		)
 	}
 
 	/// Queue one `leptoskit_sensor` motion or barometer batch into
@@ -516,27 +634,7 @@ impl Spool {
 			sensor::Kind::Barometer => {
 				let batch = sensor::Batch::<sensor::PressureReading>::decode(payload, 0)
 					.map_err(|_| SinkError::from_display("invalid barometer batch"))?;
-				let Some(first) = batch.samples.first() else {
-					return Ok(0);
-				};
-				let base = first.timestamp;
-				let mut offsets_ms = Vec::with_capacity(batch.samples.len());
-				let mut values = Vec::with_capacity(batch.samples.len());
-				for sample in &batch.samples {
-					#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-					let offset = ((sample.timestamp - base).max(0.0) * 1000.0).round() as u32;
-					offsets_ms.push(offset);
-					values.push(sample.hectopascals);
-				}
-				self.series(SeriesBatch {
-					stream: stream("motion.barometer"),
-					device,
-					start: at,
-					channels: vec!["hpa".into()],
-					offsets_ms,
-					values,
-				})?;
-				Ok(batch.samples.len())
+				self.queue_barometer_series(device, at, &batch.samples)
 			}
 			sensor::Kind::Magnetometer => Ok(0),
 		}
@@ -557,7 +655,8 @@ impl Spool {
 		let mut hrv_points: Vec<(i64, f64)> = Vec::new();
 		let mut spo2_points: Vec<(i64, f64)> = Vec::new();
 		let mut temp_points: Vec<(i64, f64)> = Vec::new();
-		let mut batt_points: Vec<(i64, f64)> = Vec::new();
+		let mut ble_batt_points: Vec<(i64, f64)> = Vec::new();
+		let mut rsc_points: Vec<(i64, [f64; 2])> = Vec::new();
 		let mut power_points: Vec<(i64, f64)> = Vec::new();
 
 		for notif in &batch.notifications {
@@ -602,23 +701,16 @@ impl Spool {
 				}
 			} else if matches_uuid(&uuid, gatt::CHAR_BATTERY_LEVEL, "2a19") {
 				match gatt::decode_battery_level(&notif.value) {
-					Ok(level) => batt_points.push((notif.time_ms, f64::from(level))),
+					Ok(level) => ble_batt_points.push((notif.time_ms, f64::from(level))),
 					Err(_) => report.skipped += 1,
 				}
 			} else if matches_uuid(&uuid, gatt::CHAR_RSC_MEASUREMENT, "2a53") {
 				match gatt::RunningSpeedCadence::decode(&notif.value) {
-					Ok(rsc) => {
-						self.series(SeriesBatch {
-							stream: stream("sensor.ble.running_cadence"),
-							device,
-							start: timestamp(notif.time_ms)?,
-							channels: vec!["speed_mps".into(), "cadence_spm".into()],
-							offsets_ms: vec![0],
-							values: vec![rsc.speed_mps, f64::from(rsc.cadence_spm)],
-						})?;
-						report.stored += 1;
+					Ok(rsc) if rsc.speed_mps.is_finite() => {
+						rsc_points
+							.push((notif.time_ms, [rsc.speed_mps, f64::from(rsc.cadence_spm)]));
 					}
-					Err(_) => report.skipped += 1,
+					_ => report.skipped += 1,
 				}
 			} else if matches_uuid(&uuid, gatt::CHAR_CYCLING_POWER_MEASUREMENT, "2a63") {
 				match gatt::CyclingPower::decode(&notif.value) {
@@ -636,7 +728,13 @@ impl Spool {
 		report.stored +=
 			self.queue_scalar_series(device, "health.skin_temperature", "celsius", temp_points)?;
 		report.stored +=
-			self.queue_scalar_series(device, "device.battery", "level", batt_points)?;
+			self.queue_scalar_series(device, "sensor.ble.battery", "level", ble_batt_points)?;
+		report.stored += self.queue_pair_series(
+			device,
+			"sensor.ble.running_cadence",
+			["speed_mps", "cadence_spm"],
+			rsc_points,
+		)?;
 		report.stored +=
 			self.queue_scalar_series(device, "sensor.ble.cycling_power", "watts", power_points)?;
 
@@ -677,27 +775,146 @@ impl Spool {
 		stream_name: &str,
 		samples: &[sensor::VectorReading],
 	) -> Result<usize, SinkError> {
-		let Some(first) = samples.first() else {
+		let valid: Vec<&sensor::VectorReading> = samples
+			.iter()
+			.filter(|s| {
+				s.timestamp.is_finite() && s.x.is_finite() && s.y.is_finite() && s.z.is_finite()
+			})
+			.collect();
+		let Some(first) = valid.first() else {
 			return Ok(0);
 		};
-		let base = first.timestamp;
-		let mut offsets_ms = Vec::with_capacity(samples.len());
-		let mut values = Vec::with_capacity(samples.len() * 3);
-		for sample in samples {
-			#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-			let offset = ((sample.timestamp - base).max(0.0) * 1000.0).round() as u32;
-			offsets_ms.push(offset);
-			values.extend([sample.x, sample.y, sample.z]);
+		let origin = first.timestamp;
+		let mut stored = 0;
+		for chunk in valid.chunks(MAX_VECTOR_ROWS) {
+			let chunk_base = chunk[0].timestamp;
+			#[allow(clippy::cast_possible_truncation)]
+			let chunk_delta_ms = ((chunk_base - origin).max(0.0) * 1000.0).round() as i64;
+			let chunk_start = at + SignedDuration::from_millis(chunk_delta_ms);
+			let mut offsets_ms = Vec::with_capacity(chunk.len());
+			let mut values = Vec::with_capacity(chunk.len() * 3);
+			let mut last_offset = 0u32;
+			for sample in chunk {
+				#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+				let raw = ((sample.timestamp - chunk_base).max(0.0) * 1000.0)
+					.round()
+					.min(f64::from(u32::MAX)) as u32;
+				let offset = raw.max(last_offset);
+				last_offset = offset;
+				offsets_ms.push(offset);
+				values.extend([sample.x, sample.y, sample.z]);
+			}
+			self.series(SeriesBatch {
+				stream: stream(stream_name),
+				device,
+				start: chunk_start,
+				channels: vec!["x".into(), "y".into(), "z".into()],
+				offsets_ms,
+				values,
+			})?;
+			stored += chunk.len();
+		}
+		Ok(stored)
+	}
+
+	fn queue_barometer_series(
+		&self,
+		device: DeviceId,
+		at: Timestamp,
+		samples: &[sensor::PressureReading],
+	) -> Result<usize, SinkError> {
+		let valid: Vec<&sensor::PressureReading> = samples
+			.iter()
+			.filter(|s| s.timestamp.is_finite() && s.hectopascals.is_finite())
+			.collect();
+		let Some(first) = valid.first() else {
+			return Ok(0);
+		};
+		let origin = first.timestamp;
+		let mut stored = 0;
+		for chunk in valid.chunks(MAX_VECTOR_ROWS) {
+			let chunk_base = chunk[0].timestamp;
+			#[allow(clippy::cast_possible_truncation)]
+			let chunk_delta_ms = ((chunk_base - origin).max(0.0) * 1000.0).round() as i64;
+			let chunk_start = at + SignedDuration::from_millis(chunk_delta_ms);
+			let mut offsets_ms = Vec::with_capacity(chunk.len());
+			let mut values = Vec::with_capacity(chunk.len());
+			let mut last_offset = 0u32;
+			for sample in chunk {
+				#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+				let raw = ((sample.timestamp - chunk_base).max(0.0) * 1000.0)
+					.round()
+					.min(f64::from(u32::MAX)) as u32;
+				let offset = raw.max(last_offset);
+				last_offset = offset;
+				offsets_ms.push(offset);
+				values.push(sample.hectopascals);
+			}
+			self.series(SeriesBatch {
+				stream: stream("motion.barometer"),
+				device,
+				start: chunk_start,
+				channels: vec!["hpa".into()],
+				offsets_ms,
+				values,
+			})?;
+			stored += chunk.len();
+		}
+		Ok(stored)
+	}
+
+	fn queue_pair_series(
+		&self,
+		device: DeviceId,
+		stream_name: &str,
+		channels: [&str; 2],
+		mut points: Vec<(i64, [f64; 2])>,
+	) -> Result<usize, SinkError> {
+		if points.is_empty() {
+			return Ok(0);
+		}
+		points.sort_by_key(|(at, _)| *at);
+		let mut stored = 0;
+		let mut run: Vec<(i64, [f64; 2])> = Vec::new();
+		for (at, pair) in points {
+			let breaks = run.first().is_some_and(|(first, _)| {
+				at - first > MAX_BATCH_SPAN_MS || run.len() >= MAX_PAIR_ROWS
+			});
+			if breaks {
+				stored += self.flush_pair_run(device, stream_name, channels, &run)?;
+				run.clear();
+			}
+			run.push((at, pair));
+		}
+		stored += self.flush_pair_run(device, stream_name, channels, &run)?;
+		Ok(stored)
+	}
+
+	fn flush_pair_run(
+		&self,
+		device: DeviceId,
+		stream_name: &str,
+		channels: [&str; 2],
+		run: &[(i64, [f64; 2])],
+	) -> Result<usize, SinkError> {
+		let Some((first, _)) = run.first() else {
+			return Ok(0);
+		};
+		let mut offsets_ms = Vec::with_capacity(run.len());
+		let mut values = Vec::with_capacity(run.len() * 2);
+		for (at, pair) in run {
+			offsets_ms.push(u32::try_from(at - first).map_err(SinkError::from_display)?);
+			values.extend_from_slice(pair);
 		}
 		self.series(SeriesBatch {
 			stream: stream(stream_name),
 			device,
-			start: at,
-			channels: vec!["x".into(), "y".into(), "z".into()],
+			start: timestamp(*first)?,
+			channels: vec![channels[0].to_owned(), channels[1].to_owned()],
 			offsets_ms,
 			values,
 		})?;
-		Ok(samples.len())
+		Ok(run.len())
 	}
 
 	fn queue_scalar_series(
@@ -794,6 +1011,17 @@ fn activity_str(activity: health::Activity) -> &'static str {
 		health::Activity::Dancing => "dancing",
 		health::Activity::Pilates => "pilates",
 		health::Activity::MartialArts => "martial_arts",
+	}
+}
+
+fn ecg_classification_str(classification: wearable::EcgClassification) -> &'static str {
+	match classification {
+		wearable::EcgClassification::Unknown => "unknown",
+		wearable::EcgClassification::SinusRhythm => "sinus_rhythm",
+		wearable::EcgClassification::AtrialFibrillation => "atrial_fibrillation",
+		wearable::EcgClassification::LowOrHighHeartRate => "low_or_high_heart_rate",
+		wearable::EcgClassification::Inconclusive => "inconclusive",
+		wearable::EcgClassification::PoorRecording => "poor_recording",
 	}
 }
 

@@ -149,6 +149,14 @@ pub async fn series(
 			.validate()
 			.map_err(|e| Error::Invalid(e.to_string()))?;
 	}
+	if let Some(device) = body.batches.first().map(|b| b.device) {
+		let name = body.device_name.as_deref().unwrap_or(&caller.client.name);
+		state.vault.store.touch_device(
+			device,
+			name,
+			body.platform.as_deref().unwrap_or("unknown"),
+		)?;
+	}
 	let mut answer = Ingested::default();
 	let mut rows = 0;
 	for batch in &body.batches {

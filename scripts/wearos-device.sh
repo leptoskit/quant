@@ -32,6 +32,12 @@ case "$cmd" in
 		;;
 	build)
 		rustup target add wasm32-unknown-unknown aarch64-linux-android >/dev/null 2>&1 || true
+		if [ -z "${RANLIB_aarch64_linux_android:-}" ]; then
+			ranlib_setting=$(scripts/android-device.sh ranlib 2>/dev/null || true)
+			if [ -n "$ranlib_setting" ]; then
+				export "$ranlib_setting"
+			fi
+		fi
 		leptoskit --app-target wearos build
 		;;
 	install)

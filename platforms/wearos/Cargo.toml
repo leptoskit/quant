@@ -23,7 +23,7 @@ leptoskit_plugin_sensors = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
 leptoskit_plugin_watch_sync = { workspace = true }
 leptoskit_plugin_wearable = { workspace = true }
-quant_phone = { workspace = true }
+quant_phone = { workspace = true, features = ["watch"] }
 
 [lints]
 

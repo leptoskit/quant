@@ -93,6 +93,13 @@ pub(crate) fn resting_heart_rate(
 	}))
 }
 
+/// Whether a `health.sleep` stage represents actual sleep time. Excludes
+/// `"awake"`, `"in_bed"` (which overlaps sleep stages in `HealthKit`), and
+/// `"unknown"`.
+pub(crate) fn is_asleep_stage(stage: &str) -> bool {
+	matches!(stage, "asleep" | "light" | "deep" | "rem")
+}
+
 /// Summarise `date` (in `tz`) into a `memory.daily` record.
 pub fn summarize(store: &Store, date: Date, tz: &TimeZone) -> Result<Record, StoreError> {
 	let range = day_range(date, tz)?;
@@ -109,7 +116,7 @@ pub fn summarize(store: &Store, date: Date, tz: &TimeZone) -> Result<Record, Sto
 	let sleep = grouped(store, "health.sleep", night, "stage")?;
 	let asleep: f64 = sleep
 		.iter()
-		.filter(|(stage, _)| stage.as_str() != "awake")
+		.filter(|(stage, _)| is_asleep_stage(stage))
 		.map(|(_, s)| s)
 		.sum();
 	let speech_seconds: f64 = store

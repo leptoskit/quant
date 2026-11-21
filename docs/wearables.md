@@ -17,11 +17,11 @@ class so agents approved with `--deny health` never see biometric data.
 
 | Device family | Quant target | Host directory | Sensors & APIs |
 | --- | --- | --- | --- |
-| Wear OS (Pixel Watch, Samsung Galaxy Watch / One UI Watch, TicWatch, Wear OS 3+) | `wearos` | `platforms/wearos` | Wear Health Services (`PassiveMonitoringClient` / `MeasureClient`), optional runtime-checked Samsung Health Sensor SDK (IBI, SpO2, skin temp, BIA), Health Connect, `SensorManager`, Wear Data & Message Layer, BLE GATT, Tiles, Complications |
+| Wear OS (Pixel Watch, Samsung Galaxy Watch / One UI Watch, TicWatch, Wear OS 3+) | `wearos` | `platforms/wearos` | Wear Health Services (`PassiveMonitoringClient` / `MeasureClient`), Health Connect, `SensorManager`, Wear Data & Message Layer, BLE GATT, Tiles, Complications |
 | Apple Watch (watchOS 10+) | `watchos` | `platforms/watchos` | `HealthKit` (`HKWorkoutSession`, `HKLiveWorkoutBuilder`, `HKObserverQuery`), `CoreMotion` pedometer & motion, `WatchConnectivity`, `CoreBluetooth` BLE GATT, `WidgetKit` Smart Stack glances & complications |
 | Huawei Watch (HarmonyOS Wearable) | `harmonyos-watch` | `platforms/harmonyos` | `@kit.SensorServiceKit`, `@kit.HealthServiceKit`, `@kit.WearEngine`, `@kit.ConnectivityKit` BLE GATT |
 | Phone Health stores (iPhone, Android, Huawei phones) | `ios`, `android`, `harmonyos` | `platforms/{ios,android,harmonyos}` | Incremental `HealthKit` / Health Connect / HarmonyOS Health reads + companion watch sync |
-| Generic BLE GATT wearables (Polar, Garmin, Wahoo, Oura/rings, oximeters, thermometers) | Any phone or watch target | `leptoskit_plugin_ble` | Standard SIG GATT decoders (`0x2A37` HR + RR/RMSSD, `0x2A5E`/`0x2A5F` SpO2, `0x2A1C` temperature, `0x2A19` battery, `0x2A53` running cadence, `0x2A63` cycling power) |
+| Generic BLE GATT wearables (Polar, Garmin, Wahoo, Oura/rings, oximeters, thermometers) | Any phone or watch target | `leptoskit_plugin_ble` | Standard SIG GATT decoders (`0x2A37` HR + RR/RMSSD, `0x2A5E`/`0x2A5F` SpO2, `0x2A1C` temperature, `0x2A19` peripheral battery, `0x2A53` running cadence, `0x2A63` cycling power) |
 
 ## Sensor-first watch architecture (`WearableApp`)
 
@@ -41,12 +41,12 @@ phone cards onto a circular face, Quant declares its watch app in
    - **Companion phone sync**: the phone app can push its vault pairing link to
      the watch (`watch-sync` topic `/quant/pair`), and when the watch has no
      direct network path it ferries readings through the paired phone
-     (`/quant/reading`).
+     (`/quant/reading`, attributed to the watch's own `DeviceId`).
 3. **Auto-generated glanceable surfaces**: `WearableApp::render_status_app`
    projects `quant_model::phone::Snapshot` into a budget-validated watch page,
    tile/glance, and circular face complication, while `WatchScreen` renders a
-   minimal high-contrast wrist view (live BPM, steps, queued count, Pause/Record,
-   Sync, Allow sensors).
+   scrollable high-contrast wrist view (live BPM, steps, queued count, battery
+   percentage, Pause/Record, Sync, Start/End live workout, Allow sensors).
 
 ## Vault streams and scopes
 
@@ -54,21 +54,23 @@ phone cards onto a circular face, Quant declares its watch app in
 | --- | --- | --- | --- |
 | `health.heart_rate` | series (`bpm`) | `health:write` | Watch optical sensor, Health store, BLE `0x2A37` / `0x2A5E` |
 | `health.resting_heart_rate` | series (`bpm`) | `health:write` | Health store |
-| `health.hrv` | series (`rmssd` ms) | `health:write` | Watch IBI/RMSSD, Health store, BLE `0x2A37` RR intervals |
+| `health.hrv` | series (`rmssd` ms) | `health:write` | Watch IBI/RMSSD, Health Connect RMSSD, BLE `0x2A37` RR intervals |
+| `health.hrv_sdnn` | series (`sdnn` ms) | `health:write` | Apple Watch / `HealthKit` HRV SDNN |
 | `health.spo2` | series (`percent`) | `health:write` | Watch SpO2, Health store, BLE `0x2A5E`/`0x2A5F` |
 | `health.skin_temperature` | series (`celsius`) | `health:write` | Watch wrist temp, Health store, BLE `0x2A1C` |
 | `health.respiratory_rate` | series (`breaths_per_min`) | `health:write` | Health store |
-| `health.steps` | series (`steps`) | `health:write` | Watch passive steps, Health store, pedometer |
+| `health.steps` | series (`steps`) | `health:write` | Watch passive steps, Health store, pedometer deltas |
 | `health.floors` | series (`floors`) | `health:write` | Watch / Health store |
 | `health.active_calories` | series (`kcal`) | `health:write` | Watch / Health store |
 | `health.distance` | series (`meters`) | `health:write` | Watch / Health store |
-| `health.sleep` | event (`stage`) | `health:write` | Health store sleep stages |
+| `health.sleep` | event (`stage`) | `health:write` | Health store sleep stages (`asleep`, `light`, `deep`, `rem`, `awake`, `in_bed`) |
 | `health.workout` | event (`activity`) | `health:write` | Health store exercise sessions |
 | `health.stress` | series (`score`) | `health:write` | Watch stress sensor |
-| `health.body_composition` | event | `health:write` | Galaxy Watch BIA / smart scales |
+| `health.body_composition` | event | `health:write` | BIA / smart scales |
+| `health.ecg` | event (`classification`) | `health:write` | Single-lead watch ECG summaries |
 | `motion.accelerometer`, `motion.gyroscope`, `motion.barometer` | series | `motion:write` | Phone & watch motion sensors |
 | `device.wear_state` | event (`on_wrist`/`off_wrist`) | `device:write` | Watch off-body detector |
-| `sensor.ble.running_cadence`, `sensor.ble.cycling_power` | series | `sensor:write` | BLE GATT fitness sensors |
+| `sensor.ble.running_cadence`, `sensor.ble.cycling_power`, `sensor.ble.battery` | series | `sensor:write` | BLE GATT fitness sensors and peripheral battery |
 
 ## Development builds
 

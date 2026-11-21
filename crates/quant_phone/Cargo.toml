@@ -14,8 +14,15 @@ publish.workspace = true
 name = "quant-phone"
 rust-service-factory = "from_app_dirs"
 
+[features]
+default = []
+# Enabled by watch hosts (Wear OS, watchOS, Huawei Watch) so the worker pairs
+# with WATCH_SCOPES and uses watch-specific naming.
+watch = []
+
 [dependencies]
 base64 = { workspace = true }
+blake3 = { workspace = true }
 jiff = { workspace = true }
 leptoskit_bridge = { workspace = true }
 leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
@@ -28,6 +35,7 @@ leptoskit_plugin_location = { workspace = true }
 leptoskit_plugin_pedometer = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
 leptoskit_plugin_wearable = { workspace = true }
+leptoskit_sensor = { workspace = true }
 leptoskit_wasm = { workspace = true }
 quant_api = { workspace = true }
 quant_client = { workspace = true }

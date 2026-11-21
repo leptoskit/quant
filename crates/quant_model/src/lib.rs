@@ -313,6 +313,10 @@ pub enum Command {
 		scopes: Vec<String>,
 		/// How far back it may see, in hours; `None` for no limit.
 		lookback_hours: Option<u32>,
+		/// Sensitivity classes withheld from this grant (e.g. `health`,
+		/// `location`, `others`).
+		#[serde(default, skip_serializing_if = "Vec::is_empty")]
+		deny_classes: Vec<String>,
 	},
 	/// Refuse a pending client.
 	Deny {
@@ -412,6 +416,13 @@ pub const LOOKBACKS: [(&str, Option<u32>); 4] = [
 /// The lookback offered first: the narrowest one.
 pub const DEFAULT_LOOKBACK: usize = 0;
 
+/// Sensitivity classes the owner can withhold when approving an agent.
+pub const SENSITIVE_CLASSES: [(&str, &str); 3] = [
+	("health", "Withhold health & biometrics"),
+	("location", "Withhold location"),
+	("others", "Withhold audio & notifications"),
+];
+
 /// Which of a pending client's requested scopes the owner ticked.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ScopeChoice {
@@ -460,11 +471,24 @@ impl ScopeChoice {
 /// The [`Command::Approve`] for a pending client, with the ticked scopes and
 /// the lookback at `lookback` in [`LOOKBACKS`].
 pub fn approve(client: &PendingClient, choice: &ScopeChoice, lookback: usize) -> Option<Command> {
+	approve_with_denied(client, choice, lookback, &[])
+}
+
+/// The [`Command::Approve`] for a pending client, with the ticked scopes, the
+/// lookback at `lookback` in [`LOOKBACKS`], and any withheld sensitivity
+/// classes.
+pub fn approve_with_denied(
+	client: &PendingClient,
+	choice: &ScopeChoice,
+	lookback: usize,
+	deny_classes: &[String],
+) -> Option<Command> {
 	let (_, hours) = LOOKBACKS.get(lookback)?;
 	Some(Command::Approve {
 		client: client.id.clone(),
 		scopes: choice.granted()?,
 		lookback_hours: *hours,
+		deny_classes: deny_classes.to_vec(),
 	})
 }
 
@@ -507,6 +531,16 @@ mod tests {
 				client: "c1".into(),
 				scopes: vec!["health:summary".into()],
 				lookback_hours: Some(720),
+				deny_classes: Vec::new(),
+			})
+		);
+		assert_eq!(
+			approve_with_denied(&client, &choice, 2, &["health".into()]),
+			Some(Command::Approve {
+				client: "c1".into(),
+				scopes: vec!["health:summary".into()],
+				lookback_hours: Some(720),
+				deny_classes: vec!["health".into()],
 			})
 		);
 	}

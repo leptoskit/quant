@@ -1,6 +1,5 @@
 import SwiftUI
 import HealthKit
-import WatchConnectivity
 import LeptosKitBridge
 
 /// Apple Watch (watchOS 10+) host for Quant's sensor-first `WatchScreen` and
@@ -19,9 +18,8 @@ struct QuantWatchApp: App {
 final class QuantWatchDelegate: NSObject, WKApplicationDelegate {
     func applicationDidFinishLaunching() {
         excludeAppDataFromBackup()
-        if WCSession.isSupported() {
-            WCSession.default.activate()
-        }
+        // Note: WatchSyncPlugin activates WCSession.default after attaching
+        // its delegate so incoming messages and transfers are never dropped.
     }
 
     private func excludeAppDataFromBackup() {
@@ -41,25 +39,36 @@ final class QuantWatchDelegate: NSObject, WKApplicationDelegate {
     }
 }
 
+@MainActor
+final class QuantWatchHostModel: ObservableObject {
+    @Published var statusText: String = "Quant"
+    @Published var detailText: String = "Starting watch host…"
+    private var dispatcher: NativeDispatcher?
+
+    func start() {
+        guard dispatcher == nil else { return }
+        let next = NativeDispatcher()
+        dispatcher = next
+        statusText = "Quant"
+        detailText = "Wrist sensors ready"
+    }
+}
+
 struct QuantWatchRootView: View {
-    @State private var statusText: String = "Quant"
-    @State private var detailText: String = "Starting watch host…"
+    @StateObject private var model = QuantWatchHostModel()
 
     var body: some View {
         VStack(spacing: 6) {
-            Text(statusText)
+            Text(model.statusText)
                 .font(.headline)
-            Text(detailText)
+            Text(model.detailText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .padding()
         .task {
-            let dispatcher = NativeDispatcher()
-            GeneratedWatchPlugins.register(dispatcher: dispatcher)
-            statusText = "Quant"
-            detailText = "Wrist sensors active"
+            model.start()
         }
     }
 }

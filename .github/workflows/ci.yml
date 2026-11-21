@@ -34,3 +34,17 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Test watch and phone app crates
+        run: |
+          cargo test --locked -p quant_app -p quant_model -p quant_phone
+          cargo test --locked -p quant_app -p quant_model -p quant_phone --features quant_phone/watch
+      - name: Check phone and wearable Wasm guest targets
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features android
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features ios
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features wearos
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features watchos
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features harmonyos
+          cargo check --locked --target wasm32-unknown-unknown -p quant_app --features harmonyos-watch

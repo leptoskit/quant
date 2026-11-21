@@ -154,6 +154,8 @@ pub enum Job {
 		scopes: Vec<String>,
 		/// Its lookback in hours, or no limit.
 		lookback_hours: Option<u32>,
+		/// Sensitivity classes withheld from this grant.
+		deny_classes: Vec<String>,
 	},
 	/// Refuse a pending client.
 	Deny(String),
@@ -532,8 +534,17 @@ impl Worker {
 				client,
 				scopes,
 				lookback_hours,
+				deny_classes,
 			} => {
 				let owner = self.owner.as_ref().ok_or("Unlock first")?;
+				let mut denied = Vec::with_capacity(deny_classes.len());
+				for name in &deny_classes {
+					let class = quant_core::Class::parse(name)
+						.ok_or_else(|| format!("Unknown sensitivity class: {name}"))?;
+					if !denied.contains(&class) {
+						denied.push(class);
+					}
+				}
 				let approved = owner
 					.approve(&ApproveRequest {
 						client,
@@ -543,7 +554,7 @@ impl Worker {
 						expires_in_hours: None,
 						limits: None,
 						unredacted: false,
-						deny_classes: None,
+						deny_classes: (!denied.is_empty()).then_some(denied),
 					})
 					.await
 					.map_err(|e| problem(&e))?;
