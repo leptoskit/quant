@@ -101,6 +101,12 @@ pub struct Snapshot {
 	/// Connected BLE sensor names (e.g. "Polar H10").
 	#[serde(default)]
 	pub ble_devices: Vec<String>,
+	/// Latest observed battery percentage of this device (`0..=100`).
+	#[serde(default)]
+	pub battery_percent: Option<u8>,
+	/// Stable device id string of this phone or watch.
+	#[serde(default)]
+	pub device_id: Option<String>,
 }
 
 /// How this phone stands with the vault.
@@ -255,6 +261,21 @@ pub enum Command {
 	SetHealthToken {
 		/// Next token from `Health::changes_token` / `Health::changes`.
 		token: Option<String>,
+	},
+	/// Advance the windowed health-store watermark to `until_ms` after a
+	/// windowed read completes.
+	AdvanceHealthUntil {
+		/// End of the window just read, in Unix milliseconds.
+		until_ms: i64,
+	},
+	/// Update the companion watch/phone peer connectivity state reported by
+	/// `watch-sync`.
+	WatchPeerStatus {
+		/// Whether the paired peer is currently reachable.
+		connected: bool,
+		/// Peer display name, when known.
+		#[serde(default)]
+		name: Option<String>,
 	},
 	/// Ask for the saved vault pairing link so the phone can forward it to a
 	/// paired watch over `watch-sync`. Answers [`ReplyData::PairLink`].
@@ -505,12 +526,10 @@ impl<'a> Reading<'a> {
 					events,
 				}
 			}
-			KIND_POWER => {
-				Reading::Power {
-					battery: take_optional(&mut rest).ok()?,
-					thermal: take_optional(&mut rest).ok()?,
-				}
-			}
+			KIND_POWER => Reading::Power {
+				battery: take_optional(&mut rest).ok()?,
+				thermal: take_optional(&mut rest).ok()?,
+			},
 			KIND_HEALTH => {
 				let (flag, tail) = rest.split_first()?;
 				rest = tail;
@@ -722,5 +741,6 @@ mod tests {
 	#[test]
 	fn the_phone_asks_only_for_write_scopes() {
 		assert!(PHONE_SCOPES.iter().all(|scope| scope.ends_with(":write")));
+		assert!(WATCH_SCOPES.iter().all(|scope| scope.ends_with(":write")));
 	}
 }

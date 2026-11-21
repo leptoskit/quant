@@ -20,8 +20,11 @@
 //! ([`Command::UsagePlan`]), and the service stamps what arrives.
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use leptoskit::guest::sleep;
 use leptoskit::guest::spawn;
 use leptoskit::prelude::GetUntracked;
@@ -49,6 +52,7 @@ use leptoskit_plugin_secure_store::Key;
 use leptoskit_plugin_secure_store::guest::SecureStore;
 use leptoskit_plugin_thermal as thermal;
 use leptoskit_plugin_thermal::guest::Thermal;
+use leptoskit_plugin_watch_sync::SyncStatus;
 use leptoskit_plugin_watch_sync::guest::WatchSync;
 use leptoskit_plugin_wearable as wearable;
 use leptoskit_plugin_wearable::guest::Wearable;
@@ -99,6 +103,8 @@ thread_local! {
 struct Running {
 	/// Whether the background service was started.
 	background: Cell<bool>,
+	/// Foreground service type bitmask currently active on Android / Wear OS.
+	background_types: Cell<u32>,
 	/// Whether location updates were started.
 	location: Cell<bool>,
 	/// Whether the running location updates continue in the background.
@@ -112,8 +118,17 @@ struct Running {
 	health: Cell<bool>,
 	/// Whether on-watch passive sensor monitoring is running.
 	wearable: Cell<bool>,
+	/// Whether a high-frequency live wrist-sensor / workout session is active.
+	live_workout: Cell<bool>,
+	/// Whether the wearable batch drainer task is running.
+	wearable_loop_running: Cell<bool>,
 	/// Whether BLE GATT notification draining is running.
 	ble: Cell<bool>,
+	/// BLE peripheral device IDs connected by this session, for clean
+	/// disconnection on pause/stop.
+	ble_connected: RefCell<Vec<String>>,
+	/// Monotonic counter for durable watch companion transfer IDs.
+	ferry_seq: Cell<u64>,
 	/// Whether plugins are being started or stopped, and whether that needs
 	/// doing again once it finishes.
 	syncing: Cell<bool>,
@@ -126,13 +141,18 @@ impl Running {
 	const fn new() -> Self {
 		Self {
 			background: Cell::new(false),
+			background_types: Cell::new(0),
 			location: Cell::new(false),
 			location_background: Cell::new(false),
 			generation: Cell::new(0),
 			usage: Cell::new(false),
 			health: Cell::new(false),
 			wearable: Cell::new(false),
+			live_workout: Cell::new(false),
+			wearable_loop_running: Cell::new(false),
 			ble: Cell::new(false),
+			ble_connected: RefCell::new(Vec::new()),
+			ferry_seq: Cell::new(0),
 			syncing: Cell::new(false),
 			again: Cell::new(false),
 			battery: Cell::new(None),
@@ -172,6 +192,9 @@ pub fn act(state: &State, action: Action) {
 			}
 			Action::ScanBleSensors => {
 				scan_and_subscribe_ble(&state).await;
+			}
+			Action::ToggleLiveWorkout => {
+				toggle_live_workout(&state).await;
 			}
 		}
 	});
@@ -289,14 +312,12 @@ async fn refresh(state: &State) {
 	let mut permissions = state.permissions.get_untracked();
 	permissions.location = match Location::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => {
-			match plugin.permission().await {
-				Ok(permission) if permission.status == location::Status::Granted => Grant::Granted,
-				Ok(_) => Grant::Needed,
-				Err(Error::Unavailable) => Grant::Unavailable,
-				Err(_) => permissions.location,
-			}
-		}
+		Ok(plugin) => match plugin.permission().await {
+			Ok(permission) if permission.status == location::Status::Granted => Grant::Granted,
+			Ok(_) => Grant::Needed,
+			Err(Error::Unavailable) => Grant::Unavailable,
+			Err(_) => permissions.location,
+		},
 	};
 	// The system offers no way to read the "all the time" grant without
 	// asking for it, so it stays as the last request left it.
@@ -308,38 +329,32 @@ async fn refresh(state: &State) {
 	}
 	permissions.notifications = match Notifications::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => {
-			match plugin.permission().await {
-				Ok(notifications::Permission::Granted | notifications::Permission::Provisional) => {
-					Grant::Granted
-				}
-				Ok(_) => Grant::Needed,
-				Err(Error::Unavailable) => Grant::Unavailable,
-				Err(_) => permissions.notifications,
+		Ok(plugin) => match plugin.permission().await {
+			Ok(notifications::Permission::Granted | notifications::Permission::Provisional) => {
+				Grant::Granted
 			}
-		}
+			Ok(_) => Grant::Needed,
+			Err(Error::Unavailable) => Grant::Unavailable,
+			Err(_) => permissions.notifications,
+		},
 	};
 	permissions.usage = match AppUsage::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => {
-			match plugin.usage_access_status().await {
-				Ok(app_usage::UsageAccessStatus::Granted) => Grant::Granted,
-				Ok(app_usage::UsageAccessStatus::Denied) => Grant::Needed,
-				Ok(app_usage::UsageAccessStatus::Unknown) => Grant::Unknown,
-				Err(Error::Unavailable) => Grant::Unavailable,
-				Err(_) => permissions.usage,
-			}
-		}
+		Ok(plugin) => match plugin.usage_access_status().await {
+			Ok(app_usage::UsageAccessStatus::Granted) => Grant::Granted,
+			Ok(app_usage::UsageAccessStatus::Denied) => Grant::Needed,
+			Ok(app_usage::UsageAccessStatus::Unknown) => Grant::Unknown,
+			Err(Error::Unavailable) => Grant::Unavailable,
+			Err(_) => permissions.usage,
+		},
 	};
 	permissions.battery = match Background::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => {
-			match plugin.status().await {
-				Ok(status) => battery_grant(status.battery_optimization()),
-				Err(Error::Unavailable) => Grant::Unavailable,
-				Err(_) => permissions.battery,
-			}
-		}
+		Ok(plugin) => match plugin.status().await {
+			Ok(status) => battery_grant(status.battery_optimization()),
+			Err(Error::Unavailable) => Grant::Unavailable,
+			Err(_) => permissions.battery,
+		},
 	};
 	permissions.health = match Health::new() {
 		Err(_) => Grant::Unavailable,
@@ -348,7 +363,17 @@ async fn refresh(state: &State) {
 				Ok(health::Availability::Available) => {
 					match plugin.granted_permissions().await {
 						Ok(grants) if !grants.read.is_empty() => Grant::Granted,
-						Ok(grants) if !grants.exact => permissions.health,
+						// HealthKit hides read authorization status for privacy
+						// (`exact == false`); keep Granted if already prompted
+						// this session, otherwise Unknown so the prompt button
+						// remains available while queries still run on restart.
+						Ok(grants) if !grants.exact => {
+							if permissions.health == Grant::Granted {
+								Grant::Granted
+							} else {
+								Grant::Unknown
+							}
+						}
 						Ok(_) => Grant::Needed,
 						Err(Error::Unavailable) => Grant::Unavailable,
 						Err(_) => permissions.health,
@@ -367,6 +392,14 @@ async fn refresh(state: &State) {
 					wearable::Permission::GrantedForeground
 					| wearable::Permission::GrantedBackground,
 				) => Grant::Granted,
+				// watchOS HealthKit hides read authorization status.
+				Ok(wearable::Permission::Unknown) => {
+					if permissions.wearable == Grant::Granted {
+						Grant::Granted
+					} else {
+						Grant::Unknown
+					}
+				}
 				Ok(wearable::Permission::Unsupported) | Err(Error::Unavailable) => {
 					Grant::Unavailable
 				}
@@ -379,9 +412,9 @@ async fn refresh(state: &State) {
 		Err(_) => Grant::Unavailable,
 		Ok(plugin) => {
 			match plugin.availability().await {
-				Ok(ble::BleAvailability::PoweredOn | ble::BleAvailability::PoweredOff) => {
-					Grant::Granted
-				}
+				Ok(ble::BleAvailability::PoweredOn) => Grant::Granted,
+				// PoweredOff means Bluetooth is off, not ready to scan.
+				Ok(ble::BleAvailability::PoweredOff) => Grant::Unknown,
 				Ok(ble::BleAvailability::Unauthorized) => Grant::Needed,
 				Ok(ble::BleAvailability::Unsupported) | Err(Error::Unavailable) => {
 					Grant::Unavailable
@@ -408,75 +441,57 @@ fn battery_grant(optimization: background::BatteryOptimization) -> Grant {
 /// prompt or settings screen.
 async fn allow(state: &State, step: Step) {
 	let outcome: Result<Option<Grant>, Error> = match step {
-		Step::Location => {
-			match Location::new() {
-				Ok(plugin) => plugin.request_permission(true).await.map(|_| None),
-				Err(error) => Err(error),
-			}
-		}
-		Step::Always => {
-			match Location::new() {
-				Ok(plugin) => {
-					plugin
-						.request_background_permission()
-						.await
-						.map(|permission| {
-							Some(if permission.status == location::Status::Granted {
-								Grant::Granted
-							} else {
-								Grant::Needed
-							})
-						})
-				}
-				Err(error) => Err(error),
-			}
-		}
-		Step::Notifications => {
-			match Notifications::new() {
-				Ok(plugin) => plugin.request_permission().await.map(|_| None),
-				Err(error) => Err(error),
-			}
-		}
-		Step::Usage => {
-			match AppUsage::new() {
-				Ok(plugin) => plugin.open_usage_access_settings().await.map(|()| None),
-				Err(error) => Err(error),
-			}
-		}
-		Step::Battery => {
-			match Background::new() {
-				Ok(plugin) => {
-					plugin
-						.request_ignore_battery_optimizations()
-						.await
-						.map(|optimization| Some(battery_grant(optimization)))
-				}
-				Err(error) => Err(error),
-			}
-		}
-		Step::Health => {
-			match Health::new() {
-				Ok(plugin) => {
-					plugin
-						.request_permissions(
-							&health::DataType::ALL,
-							health::Extra {
-								background: true,
-								history: true,
-							},
-						)
-						.await
-						.map(|grants| {
-							Some(if !grants.read.is_empty() || !grants.exact {
-								Grant::Granted
-							} else {
-								Grant::Needed
-							})
-						})
-				}
-				Err(error) => Err(error),
-			}
-		}
+		Step::Location => match Location::new() {
+			Ok(plugin) => plugin.request_permission(true).await.map(|_| None),
+			Err(error) => Err(error),
+		},
+		Step::Always => match Location::new() {
+			Ok(plugin) => plugin
+				.request_background_permission()
+				.await
+				.map(|permission| {
+					Some(if permission.status == location::Status::Granted {
+						Grant::Granted
+					} else {
+						Grant::Needed
+					})
+				}),
+			Err(error) => Err(error),
+		},
+		Step::Notifications => match Notifications::new() {
+			Ok(plugin) => plugin.request_permission().await.map(|_| None),
+			Err(error) => Err(error),
+		},
+		Step::Usage => match AppUsage::new() {
+			Ok(plugin) => plugin.open_usage_access_settings().await.map(|()| None),
+			Err(error) => Err(error),
+		},
+		Step::Battery => match Background::new() {
+			Ok(plugin) => plugin
+				.request_ignore_battery_optimizations()
+				.await
+				.map(|optimization| Some(battery_grant(optimization))),
+			Err(error) => Err(error),
+		},
+		Step::Health => match Health::new() {
+			Ok(plugin) => plugin
+				.request_permissions(
+					&health::DataType::ALL,
+					health::Extra {
+						background: true,
+						history: true,
+					},
+				)
+				.await
+				.map(|grants| {
+					Some(if !grants.read.is_empty() || !grants.exact {
+						Grant::Granted
+					} else {
+						Grant::Needed
+					})
+				}),
+			Err(error) => Err(error),
+		},
 		Step::Wearable => {
 			match Wearable::new() {
 				Ok(plugin) => {
@@ -487,6 +502,10 @@ async fn allow(state: &State, step: Step) {
 							Some(match perm {
 								wearable::Permission::GrantedForeground
 								| wearable::Permission::GrantedBackground => Grant::Granted,
+								// On watchOS HealthKit keeps read status
+								// Unknown after prompting; mark Granted for
+								// this session so sensors start immediately.
+								wearable::Permission::Unknown => Grant::Granted,
 								wearable::Permission::Unsupported => Grant::Unavailable,
 								_ => Grant::Needed,
 							})
@@ -495,22 +514,17 @@ async fn allow(state: &State, step: Step) {
 				Err(error) => Err(error),
 			}
 		}
-		Step::Bluetooth => {
-			match Ble::new() {
-				Ok(plugin) => {
-					plugin.request_permission().await.map(|avail| {
-						Some(match avail {
-							ble::BleAvailability::PoweredOn | ble::BleAvailability::PoweredOff => {
-								Grant::Granted
-							}
-							ble::BleAvailability::Unsupported => Grant::Unavailable,
-							ble::BleAvailability::Unauthorized => Grant::Needed,
-						})
-					})
-				}
-				Err(error) => Err(error),
-			}
-		}
+		Step::Bluetooth => match Ble::new() {
+			Ok(plugin) => plugin.request_permission().await.map(|avail| {
+				Some(match avail {
+					ble::BleAvailability::PoweredOn => Grant::Granted,
+					ble::BleAvailability::PoweredOff => Grant::Unknown,
+					ble::BleAvailability::Unsupported => Grant::Unavailable,
+					ble::BleAvailability::Unauthorized => Grant::Needed,
+				})
+			}),
+			Err(error) => Err(error),
+		},
 	};
 	match outcome {
 		Ok(Some(grant)) => {
@@ -572,7 +586,7 @@ fn sync(state: &State) {
 async fn sync_once(state: &State) {
 	let snapshot = state.snapshot.get_untracked();
 	if !snapshot.collecting {
-		stop().await;
+		stop(state).await;
 		state.collector.set(None);
 		return;
 	}
@@ -580,41 +594,58 @@ async fn sync_once(state: &State) {
 		// Nothing can be queued yet; the storage card says why.
 		return;
 	}
+	let perms = state.permissions.get_untracked();
+	let mut problem = None;
+
+	// Start the foreground / background service whenever collecting is active,
+	// decoupled from Location so watches (and health/BLE-only users) still keep
+	// collecting in the background using the appropriate service type.
+	let desired_types = desired_background_types(perms.location == Grant::Granted);
+	if let Some(types) = desired_types {
+		let needs_start =
+			RUN.with(|run| !run.background.get() || run.background_types.get() != types.bits());
+		if needs_start {
+			match start_background(types).await {
+				Ok(()) => {
+					RUN.with(|run| {
+						run.background.set(true);
+						run.background_types.set(types.bits());
+					});
+				}
+				Err(Error::Unavailable) => {}
+				Err(_) if IOS => {}
+				Err(error) => {
+					problem = Some(format!(
+						"Quant can't keep collecting in the background on this device: {error}"
+					));
+				}
+			}
+		}
+	}
+
 	start_wearable_if_ready(state).await;
-	match state.permissions.get_untracked().location {
+
+	match perms.location {
 		Grant::Granted => {}
 		Grant::Unavailable => {
-			state.collector.set(None);
+			state.collector.set(problem);
 			return;
 		}
 		// Not asked the system yet; the next pass knows.
 		Grant::Unknown => return,
 		Grant::Needed => {
 			stop_location().await;
-			state.collector.set(Some(
-				"Allow location below to collect in the background. Until then this device \
-				 collects only while Quant is open."
-					.to_owned(),
-			));
+			if !WATCH && problem.is_none() {
+				problem = Some(
+					"Allow location below to record where this phone goes in the background."
+						.to_owned(),
+				);
+			}
+			state.collector.set(problem);
 			return;
 		}
 	}
-	let mut problem = None;
-	// The background service comes first: Android refuses background
-	// location updates unless a location-typed service is already running.
-	// On iOS it schedules app refresh, which nothing else waits for, so a
-	// refusal there only means fewer wakes and is tried again next time.
-	if !RUN.with(|run| run.background.get()) {
-		match start_background().await {
-			Ok(()) => RUN.with(|run| run.background.set(true)),
-			Err(_) if IOS => {}
-			Err(error) => {
-				problem = Some(format!(
-					"Quant can't keep collecting in the background on this phone: {error}"
-				));
-			}
-		}
-	}
+
 	let background = background_wanted(state);
 	if RUN.with(|run| run.location.get() && run.location_background.get() != background) {
 		// Started before the background service or the "Always" grant;
@@ -646,6 +677,16 @@ async fn sync_once(state: &State) {
 	state.collector.set(problem);
 }
 
+fn desired_background_types(location_granted: bool) -> Option<background::ForegroundServiceTypes> {
+	if WATCH {
+		Some(background::ForegroundServiceTypes::HEALTH)
+	} else if location_granted {
+		Some(background::ForegroundServiceTypes::LOCATION)
+	} else {
+		Some(background::ForegroundServiceTypes::DATA_SYNC)
+	}
+}
+
 /// Whether location updates should continue in the background. Android
 /// needs the background service running. iOS needs the "Always" grant, which
 /// nothing can read without a prompt, so an unknown grant is tried and the
@@ -654,7 +695,10 @@ fn background_wanted(state: &State) -> bool {
 	if IOS {
 		state.permissions.get_untracked().always != Grant::Needed
 	} else {
-		RUN.with(|run| run.background.get())
+		RUN.with(|run| {
+			run.background.get()
+				&& run.background_types.get() == background::ForegroundServiceTypes::LOCATION.bits()
+		})
 	}
 }
 
@@ -689,11 +733,16 @@ fn note_always(state: &State, grant: Grant) {
 	}
 }
 
-async fn start_background() -> Result<(), Error> {
+async fn start_background(types: background::ForegroundServiceTypes) -> Result<(), Error> {
+	let body = if WATCH {
+		"Wrist sensors and health readings go to your vault."
+	} else {
+		"Health, location, app usage and battery readings go to your vault."
+	};
 	let options = background::Options::new(
 		"Quant is collecting",
-		"Location, app usage and battery readings go to your vault.",
-		background::ForegroundServiceTypes::LOCATION,
+		body,
+		types,
 		u32::try_from(TICK_SECONDS).unwrap_or(background::DEFAULT_WAKE_INTERVAL),
 	)?;
 	Background::new()?.start(&options).await
@@ -713,12 +762,32 @@ async fn start_location(background: bool) -> Result<(), Error> {
 	Location::new()?.start_updates(options).await
 }
 
-async fn stop() {
+async fn stop(state: &State) {
 	stop_location().await;
-	if RUN.with(|run| run.background.replace(false))
-		&& let Ok(plugin) = Background::new()
+	if RUN.with(|run| run.live_workout.replace(false)) {
+		state.live_workout.set(false);
+		if let Ok(plugin) = Wearable::new() {
+			let _ = plugin.stop_live().await;
+		}
+	}
+	if RUN.with(|run| run.wearable.replace(false))
+		&& let Ok(plugin) = Wearable::new()
 	{
-		let _ = plugin.stop().await;
+		let _ = plugin.stop_passive().await;
+	}
+	if RUN.with(|run| run.ble.replace(false)) {
+		let ids = RUN.with(|run| std::mem::take(&mut *run.ble_connected.borrow_mut()));
+		if let Ok(plugin) = Ble::new() {
+			for id in ids {
+				let _ = plugin.disconnect(&id).await;
+			}
+		}
+	}
+	if RUN.with(|run| run.background.replace(false)) {
+		RUN.with(|run| run.background_types.set(0));
+		if let Ok(plugin) = Background::new() {
+			let _ = plugin.stop().await;
+		}
 	}
 }
 
@@ -951,20 +1020,24 @@ async fn hand_over(state: &State, reading: &Reading<'_>) {
 		state.collector.set(reply.error);
 	}
 	// On a watch whose vault is currently out of reach, ferry readings to the
-	// paired phone over `watch-sync` as a companion fallback.
+	// paired phone over `watch-sync` as a companion fallback. Deterministic
+	// BLAKE3 record IDs and series content hashes deduplicate cleanly when the
+	// watch later reaches the vault directly.
 	if WATCH
 		&& !matches!(reading, Reading::WatchSync(_))
 		&& matches!(
 			state.snapshot.get_untracked().link,
 			Link::Unreachable { .. } | Link::Unpaired
 		) {
-		ferry_reading_to_phone(&frame).await;
+		ferry_reading_to_phone(state, &frame).await;
 	}
 }
 
-/// Start on-watch passive wrist biometric monitoring when permitted.
+/// Start on-watch passive wrist biometric monitoring when permitted (or when
+/// watchOS HealthKit keeps read authorization status `Unknown`).
 async fn start_wearable_if_ready(state: &State) {
-	if state.permissions.get_untracked().wearable != Grant::Granted {
+	let grant = state.permissions.get_untracked().wearable;
+	if !matches!(grant, Grant::Granted | Grant::Unknown) {
 		return;
 	}
 	if RUN.with(|run| run.wearable.get()) {
@@ -981,15 +1054,78 @@ async fn start_wearable_if_ready(state: &State) {
 	}
 	if plugin.start_passive(caps.sensors).await.is_ok() {
 		RUN.with(|run| run.wearable.set(true));
+		ensure_wearable_loop(state);
+	}
+}
+
+/// Start or stop a live continuous wrist-sensor / workout session on a watch.
+async fn toggle_live_workout(state: &State) {
+	let Ok(plugin) = Wearable::new() else {
+		state.problem.set(Some(
+			"Wrist sensors are not available on this device".to_owned(),
+		));
+		return;
+	};
+	if RUN.with(|run| run.live_workout.get()) {
+		match plugin.stop_live().await {
+			Ok(()) => {
+				RUN.with(|run| run.live_workout.set(false));
+				state.live_workout.set(false);
+			}
+			Err(error) => {
+				state.problem.set(Some(format!(
+					"Could not stop live workout session: {error}"
+				)));
+			}
+		}
+		return;
+	}
+	let caps = match plugin.capabilities().await {
+		Ok(caps) => caps,
+		Err(error) => {
+			state
+				.problem
+				.set(Some(format!("Could not inspect watch sensors: {error}")));
+			return;
+		}
+	};
+	if caps.sensors.is_empty() {
+		state.problem.set(Some(
+			"No live wrist sensors are supported on this watch".to_owned(),
+		));
+		return;
+	}
+	let options = wearable::LiveOptions {
+		sensors: caps.sensors,
+		interval_ms: 1_000,
+		workout_activity: 0,
+	};
+	match plugin.start_live(options).await {
+		Ok(()) => {
+			RUN.with(|run| run.live_workout.set(true));
+			state.live_workout.set(true);
+			ensure_wearable_loop(state);
+		}
+		Err(error) => {
+			state.problem.set(Some(format!(
+				"Could not start live workout session: {error}"
+			)));
+		}
+	}
+}
+
+fn ensure_wearable_loop(state: &State) {
+	if !RUN.with(|run| run.wearable_loop_running.replace(true)) {
 		spawn(wearable_loop(state.clone()));
 	}
 }
 
 async fn wearable_loop(state: State) {
 	let Ok(client) = Client::new(wearable::NAME) else {
+		RUN.with(|run| run.wearable_loop_running.set(false));
 		return;
 	};
-	while RUN.with(|run| run.wearable.get()) {
+	while RUN.with(|run| run.wearable.get() || run.live_workout.get()) {
 		let reply = match client.call(wearable::NEXT_BATCH, &[]) {
 			Ok(call) => call.await,
 			Err(error) => Err(error),
@@ -1001,29 +1137,42 @@ async fn wearable_loop(state: State) {
 				}
 			}
 			Err(Error::Unavailable) => {
-				RUN.with(|run| run.wearable.set(false));
-				return;
+				RUN.with(|run| {
+					run.wearable.set(false);
+					run.live_workout.set(false);
+				});
+				state.live_workout.set(false);
+				break;
 			}
 			Err(_) => {
 				if sleep(RETRY).await.is_err() {
-					return;
+					break;
 				}
 			}
 		}
 	}
+	RUN.with(|run| run.wearable_loop_running.set(false));
 }
 
 /// Poll `HealthKit` / Health Connect / `HarmonyOS` Health for incremental
 /// changes or windowed reads.
 fn read_health(state: &State) {
-	if state.permissions.get_untracked().health != Grant::Granted
-		|| RUN.with(|run| run.health.replace(true))
+	// Allow both Granted and Unknown (HealthKit hides read authorization
+	// across restarts; Health Connect explicitly returns Needed when denied).
+	let grant = state.permissions.get_untracked().health;
+	if !matches!(grant, Grant::Granted | Grant::Unknown) || RUN.with(|run| run.health.replace(true))
 	{
 		return;
 	}
 	let state = state.clone();
 	spawn(async move {
-		let _ = health_sync_once(&state).await;
+		if let Err(error) = health_sync_once(&state).await
+			&& !matches!(error, Error::Unavailable | Error::PermissionDenied)
+		{
+			state
+				.collector
+				.set(Some(format!("Health store sync paused: {error}")));
+		}
 		RUN.with(|run| run.health.set(false));
 	});
 }
@@ -1043,7 +1192,8 @@ async fn health_sync_once(state: &State) -> Result<(), Error> {
 
 	if let Some(saved_token) = token {
 		let mut current = health::ChangesToken::new(saved_token);
-		for _ in 0..8 {
+		let mut expired = false;
+		for _ in 0..16 {
 			let request = health::changes_request(&current)?;
 			let bytes = client.call(health::CHANGES, &request)?.await?;
 			let decoded = health::Changes::decode(&bytes)?;
@@ -1056,35 +1206,54 @@ async fn health_sync_once(state: &State) -> Result<(), Error> {
 			)
 			.await;
 			if decoded.token_expired {
-				if let Ok(fresh) = plugin.changes_token(&health::DataType::ALL).await {
-					let _ = bridge::send(&Command::SetHealthToken {
-						token: Some(fresh.as_str().to_owned()),
-					})
-					.await;
-				}
+				expired = true;
 				break;
 			}
 			if !decoded.has_more {
-				break;
+				return Ok(());
 			}
 			let Some(next) = decoded.next_token else {
-				break;
+				return Ok(());
 			};
 			current = next;
 		}
-		return Ok(());
+		if !expired {
+			return Ok(());
+		}
+		// Token expired: fall through to capture a fresh token and backfill
+		// the missed [since_ms, until_ms] window before saving it.
 	}
 
-	// First sync: capture a changes token, then pull the initial time window.
-	if let Ok(fresh) = plugin.changes_token(&health::DataType::ALL).await {
-		let _ = bridge::send(&Command::SetHealthToken {
-			token: Some(fresh.as_str().to_owned()),
-		})
-		.await;
+	// Capture a fresh changes token BEFORE reading the window so samples
+	// written during the windowed query are not lost; persist the token only
+	// after the windowed backfill succeeds.
+	let fresh_token = plugin
+		.changes_token(&health::DataType::ALL)
+		.await
+		.ok()
+		.map(|t| t.as_str().to_owned());
+
+	pull_health_window(state, &client, since_ms, until_ms).await?;
+
+	let _ = bridge::send(&Command::AdvanceHealthUntil { until_ms }).await;
+	if let Some(fresh) = fresh_token {
+		let _ = bridge::send(&Command::SetHealthToken { token: Some(fresh) }).await;
+	}
+	Ok(())
+}
+
+async fn pull_health_window(
+	state: &State,
+	client: &Client,
+	since_ms: i64,
+	until_ms: i64,
+) -> Result<(), Error> {
+	if since_ms >= until_ms {
+		return Ok(());
 	}
 	for &data_type in &health::DataType::ALL {
 		let mut page_token: Option<String> = None;
-		for _ in 0..4 {
+		for _ in 0..16 {
 			let request =
 				health::read_request(data_type, since_ms, until_ms, 200, page_token.as_deref())?;
 			let Ok(call) = client.call(health::READ, &request) else {
@@ -1125,6 +1294,12 @@ fn read_pedometer(state: &State) {
 		if !matches!(plugin.available().await, Ok(true)) {
 			return;
 		}
+		if matches!(
+			plugin.permission().await,
+			Ok(pedometer::Permission::Denied | pedometer::Permission::Restricted)
+		) {
+			return;
+		}
 		let Ok(client) = Client::new(pedometer::NAME) else {
 			return;
 		};
@@ -1137,7 +1312,8 @@ fn read_pedometer(state: &State) {
 	});
 }
 
-/// Listen for companion messages and durable transfers over `watch-sync`.
+/// Listen for companion messages, durable transfers, and peer reachability
+/// changes over `watch-sync`.
 async fn watch_sync_loop(state: State) {
 	let Ok(plugin) = WatchSync::new() else {
 		return;
@@ -1148,6 +1324,8 @@ async fn watch_sync_loop(state: State) {
 	if !status.supported {
 		return;
 	}
+	report_watch_status(&status).await;
+	spawn(watch_status_loop(plugin, status));
 	loop {
 		match plugin.next_incoming().await {
 			Ok(envelope) => {
@@ -1166,6 +1344,37 @@ async fn watch_sync_loop(state: State) {
 			}
 		}
 	}
+}
+
+async fn watch_status_loop(plugin: WatchSync, mut last: SyncStatus) {
+	loop {
+		match plugin.watch_status(&last).await {
+			Ok(next) => {
+				report_watch_status(&next).await;
+				last = next;
+			}
+			Err(Error::Unavailable) => return,
+			Err(_) => {
+				if sleep(RETRY).await.is_err() {
+					return;
+				}
+				if let Ok(next) = plugin.status().await
+					&& next != last
+				{
+					report_watch_status(&next).await;
+					last = next;
+				}
+			}
+		}
+	}
+}
+
+async fn report_watch_status(status: &SyncStatus) {
+	let _ = bridge::send(&Command::WatchPeerStatus {
+		connected: status.paired && status.reachable,
+		name: status.peer_name.clone(),
+	})
+	.await;
 }
 
 /// Push the phone's saved vault pairing link to the paired watch over
@@ -1201,25 +1410,40 @@ async fn push_pair_link_to_watch(state: &State) {
 	}
 }
 
-async fn ferry_reading_to_phone(frame: &[u8]) {
+async fn ferry_reading_to_phone(state: &State, frame: &[u8]) {
 	let Ok(plugin) = WatchSync::new() else {
 		return;
 	};
+	let device_id = state.snapshot.get_untracked().device_id;
+	let watch_name = if cfg!(feature = "watchos") {
+		"Apple Watch"
+	} else if cfg!(feature = "harmonyos-watch") {
+		"Huawei Watch"
+	} else {
+		"Wear OS watch"
+	};
 	let payload = serde_json::json!({
 		"kind": "reading_frame",
-		"watch_name": if cfg!(feature = "watchos") {
-			"Apple Watch"
-		} else if cfg!(feature = "harmonyos-watch") {
-			"Huawei Watch"
-		} else {
-			"Wear OS watch"
-		},
-		"frame": frame,
+		"device_id": device_id,
+		"watch_name": watch_name,
+		"frame_b64": STANDARD.encode(frame),
 	})
 	.to_string();
-	let _ = plugin
+	if plugin
 		.send_message(TOPIC_READING_FRAME, payload.as_bytes())
-		.await;
+		.await
+		.is_err()
+	{
+		let seq = RUN.with(|run| {
+			let next = run.ferry_seq.get().wrapping_add(1);
+			run.ferry_seq.set(next);
+			next
+		});
+		let transfer_id = format!("quant-reading-{seq}");
+		let _ = plugin
+			.queue_transfer(&transfer_id, TOPIC_READING_FRAME, payload.as_bytes())
+			.await;
+	}
 }
 
 /// Scan for nearby BLE GATT wearable sensors (heart-rate straps, pulse
@@ -1232,6 +1456,12 @@ async fn scan_and_subscribe_ble(state: &State) {
 		));
 		return;
 	};
+	if let Ok(ble::BleAvailability::PoweredOff) = plugin.availability().await {
+		state.problem.set(Some(
+			"Turn on Bluetooth to scan for straps and sensors".to_owned(),
+		));
+		return;
+	}
 	let options = ble::ScanOptions {
 		service_uuids: vec![
 			gatt::SERVICE_HEART_RATE.to_owned(),
@@ -1251,11 +1481,18 @@ async fn scan_and_subscribe_ble(state: &State) {
 			return;
 		}
 	};
-	let mut subscribed = false;
+	if devices.is_empty() {
+		state.problem.set(Some(
+			"No Bluetooth heart-rate straps or fitness sensors found nearby".to_owned(),
+		));
+		return;
+	}
+	let mut subscribed_devices = 0usize;
 	for dev in devices {
 		if plugin.connect(&dev.id).await.is_err() {
 			continue;
 		}
+		let mut dev_subscribed = false;
 		for (service, ch) in [
 			(gatt::SERVICE_HEART_RATE, gatt::CHAR_HEART_RATE_MEASUREMENT),
 			(gatt::SERVICE_PULSE_OXIMETER, gatt::CHAR_PLX_CONTINUOUS),
@@ -1283,17 +1520,35 @@ async fn scan_and_subscribe_ble(state: &State) {
 				.await
 				.is_ok()
 			{
-				subscribed = true;
+				dev_subscribed = true;
 			}
 		}
+		if dev_subscribed {
+			subscribed_devices += 1;
+			RUN.with(|run| {
+				let mut connected = run.ble_connected.borrow_mut();
+				if !connected.contains(&dev.id) {
+					connected.push(dev.id.clone());
+				}
+			});
+		} else {
+			let _ = plugin.disconnect(&dev.id).await;
+		}
 	}
-	if subscribed && !RUN.with(|run| run.ble.replace(true)) {
+	if subscribed_devices == 0 {
+		state.problem.set(Some(
+			"Found Bluetooth devices, but none offered supported health sensors".to_owned(),
+		));
+		return;
+	}
+	if !RUN.with(|run| run.ble.replace(true)) {
 		spawn(ble_loop(state.clone()));
 	}
 }
 
 async fn ble_loop(state: State) {
 	let Ok(client) = Client::new(ble::NAME) else {
+		RUN.with(|run| run.ble.set(false));
 		return;
 	};
 	while RUN.with(|run| run.ble.get()) {

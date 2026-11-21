@@ -189,7 +189,7 @@ The app shows a pairing code and the command that approves it. Check the code
 matches and run the command on your computer:
 
 ```sh
-quant approve <code> --scope location:write --scope apps:write --scope device:write
+quant approve <code> --scope location:write --scope apps:write --scope device:write --scope health:write --scope motion:write --scope sensor:write
 ```
 
 Tap "I approved it", or wait a minute for the app to notice.

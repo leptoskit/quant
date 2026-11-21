@@ -175,6 +175,9 @@ frontend = "app"
 client_package = "quant_app"
 features = ["wearos"]
 
+[targets.wearos.build.inputs]
+assets = "assets/app"
+
 [targets.wearos.native]
 package_id = "dev.leptoskit.quant"
 plugins = [
@@ -209,6 +212,9 @@ frontend = "app"
 client_package = "quant_app"
 features = ["watchos"]
 
+[targets.watchos.build.inputs]
+assets = "assets/app"
+
 [targets.watchos.native]
 package_id = "dev.leptoskit.quant"
 plugins = [
@@ -241,6 +247,9 @@ frontend = "app"
 client_package = "quant_app"
 features = ["harmonyos"]
 
+[targets.harmonyos.build.inputs]
+assets = "assets/app"
+
 [targets.harmonyos.native]
 package_id = "dev.leptoskit.quant"
 plugins = [
@@ -251,6 +260,7 @@ plugins = [
 	"ble",
 	"battery",
 	"thermal",
+	"secure-store",
 ]
 
 [targets.harmonyos.native.harmonyos]
@@ -272,6 +282,9 @@ frontend = "app"
 client_package = "quant_app"
 features = ["harmonyos-watch"]
 
+[targets.harmonyos-watch.build.inputs]
+assets = "assets/app"
+
 [targets.harmonyos-watch.native]
 package_id = "dev.leptoskit.quant"
 plugins = [
@@ -283,6 +296,7 @@ plugins = [
 	"ble",
 	"battery",
 	"thermal",
+	"secure-store",
 ]
 
 [targets.harmonyos-watch.native.harmonyos]

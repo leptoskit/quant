@@ -79,6 +79,7 @@ pub struct Approval {
 	client: String,
 	choice: ScopeChoice,
 	lookback: usize,
+	deny_classes: Vec<String>,
 }
 
 /// Sends a command to the service.
@@ -146,6 +147,7 @@ impl State {
 					client: client.id.clone(),
 					choice: ScopeChoice::new(&client.requested),
 					lookback: quant_model::DEFAULT_LOOKBACK,
+					deny_classes: Vec::new(),
 				}
 			})
 	}
@@ -697,7 +699,40 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 				})
 			}),
 	);
-	let command = quant_model::approve(client, &approval.choice, approval.lookback);
+	let deny_checks = (client.kind == "agent").then(|| {
+		let rows = quant_model::SENSITIVE_CLASSES.iter().map(|(class, label)| {
+			let state = state.clone();
+			let approval = approval.clone();
+			let class = (*class).to_owned();
+			let denied = approval.deny_classes.contains(&class);
+			View()
+				.class("flex-row items-center gap-2")
+				.child(
+					Checkbox(denied)
+						.accessibility_label(*label)
+						.test_id(format!("deny-{class}"))
+						.on_toggle(move |withhold| {
+							let mut approval = approval.clone();
+							approval.deny_classes.retain(|c| c != &class);
+							if withhold {
+								approval.deny_classes.push(class.clone());
+							}
+							state.set_approval(approval);
+						}),
+				)
+				.child(Text(*label).class(BODY))
+		});
+		View()
+			.class("gap-1")
+			.child(Text("Sensitive classes to withhold").class(MUTED))
+			.children(rows)
+	});
+	let command = quant_model::approve_with_denied(
+		client,
+		&approval.choice,
+		approval.lookback,
+		&approval.deny_classes,
+	);
 	let (approve, deny) = (state.clone(), state.clone());
 	let id = client.id.clone();
 	View()
@@ -723,6 +758,7 @@ fn pending_card(state: &State, client: &PendingClient) -> Element {
 				.is_empty()
 				.then(|| Text("It asked for no scopes.").class(MUTED)),
 		)
+		.children(deny_checks)
 		.child(Text("How far back it may see").class(MUTED))
 		.child(lookbacks)
 		.child(
@@ -1530,6 +1566,9 @@ mod tests {
 		tester
 			.toggle(&Finder::test_id("scope-screen:read"), false)
 			.unwrap();
+		tester
+			.toggle(&Finder::test_id("deny-health"), true)
+			.unwrap();
 		tester.tap(&Finder::text("30 days")).unwrap();
 		tester.tap(&Finder::test_id("approve-K7QD-M2XA")).unwrap();
 		tester.tap(&Finder::test_id("revoke-Phone")).unwrap();
@@ -1540,6 +1579,7 @@ mod tests {
 					client: "c1".into(),
 					scopes: vec!["health:summary".into()],
 					lookback_hours: Some(720),
+					deny_classes: vec!["health".into()],
 				},
 				Command::Revoke { grant: "g1".into() },
 			]

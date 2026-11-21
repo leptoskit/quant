@@ -125,3 +125,70 @@ fn a_week_becomes_a_weekly_review() {
 	assert_eq!(again.len(), 1);
 	assert_eq!(again[0].id, review.id);
 }
+
+#[test]
+fn weekly_sleep_ignores_in_bed_awake_and_unknown_spans() {
+	let store = Store::open_in_memory(&VaultKey::generate()).unwrap();
+	let tz = TimeZone::UTC;
+	let monday: Timestamp = "2026-11-02T00:00:00Z".parse().unwrap();
+	let now: Timestamp = "2026-11-08T12:00:00Z".parse().unwrap();
+	let at = |day: i64, h: i64, m: i64| {
+		monday + SignedDuration::from_hours(24 * day + h) + SignedDuration::from_mins(m)
+	};
+	let watch = DeviceId::new();
+
+	// 5 nights with overlapping `in_bed` + asleep stages (7h asleep each), plus
+	// 1 night containing only `in_bed` and `unknown` (which should not count as
+	// a slept night at all).
+	for day in 0..5 {
+		store
+			.insert_records(&[
+				Record::new("health.sleep".parse().unwrap(), watch)
+					.starting(at(day - 1, 23, 0))
+					.ending(at(day, 7, 0))
+					.with("stage", "in_bed"),
+				Record::new("health.sleep".parse().unwrap(), watch)
+					.starting(at(day - 1, 23, 0))
+					.ending(at(day, 3, 0))
+					.with("stage", "light"),
+				Record::new("health.sleep".parse().unwrap(), watch)
+					.starting(at(day, 3, 0))
+					.ending(at(day, 4, 0))
+					.with("stage", "awake"),
+				Record::new("health.sleep".parse().unwrap(), watch)
+					.starting(at(day, 4, 0))
+					.ending(at(day, 7, 0))
+					.with("stage", "rem"),
+			])
+			.unwrap();
+	}
+	store
+		.insert_records(&[
+			Record::new("health.sleep".parse().unwrap(), watch)
+				.starting(at(4, 23, 0))
+				.ending(at(5, 6, 0))
+				.with("stage", "in_bed"),
+			Record::new("health.sleep".parse().unwrap(), watch)
+				.starting(at(5, 0, 0))
+				.ending(at(5, 1, 0))
+				.with("stage", "unknown"),
+		])
+		.unwrap();
+
+	let config = Config {
+		posture_sources: Vec::new(),
+		first_run_days: 1,
+	};
+	quant_derive::run(&store, &config, now, &tz).unwrap();
+
+	let weekly = store
+		.records(&RecordQuery::new(
+			Selector::stream("memory.weekly".parse().unwrap()),
+			TimeRange::new(monday, now).unwrap(),
+		))
+		.unwrap();
+	assert_eq!(weekly.len(), 1);
+	let review = &weekly[0];
+	assert_eq!(review.data["sleep_seconds_avg"]["nights"], 5);
+	assert_eq!(review.data["sleep_seconds_avg"]["value"], 25_200.0);
+}

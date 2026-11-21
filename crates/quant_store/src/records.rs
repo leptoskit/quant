@@ -786,6 +786,17 @@ impl Store {
 		)?;
 		Ok(())
 	}
+
+	/// The last recorded `(name, platform)` for `device`, if any.
+	pub fn device_info(&self, device: DeviceId) -> Result<Option<(String, String)>> {
+		let conn = self.conn();
+		let mut stmt = conn.prepare_cached("SELECT name, platform FROM devices WHERE id = ?1")?;
+		let mut rows = stmt.query(params![device.0.as_bytes().as_slice()])?;
+		let Some(row) = rows.next()? else {
+			return Ok(None);
+		};
+		Ok(Some((row.get(0)?, row.get(1)?)))
+	}
 }
 
 #[cfg(test)]

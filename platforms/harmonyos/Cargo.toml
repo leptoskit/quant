@@ -7,7 +7,7 @@ publish.workspace = true
 
 [lib]
 name = "leptoskit_app"
-crate-type = ["cdylib"]
+crate-type = ["staticlib"]
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 leptoskit_bridge_ffi = { workspace = true, features = ["app"] }
@@ -15,6 +15,7 @@ leptoskit_plugin_battery = { workspace = true }
 leptoskit_plugin_ble = { workspace = true }
 leptoskit_plugin_health = { workspace = true }
 leptoskit_plugin_pedometer = { workspace = true }
+leptoskit_plugin_secure_store = { workspace = true }
 leptoskit_plugin_thermal = { workspace = true }
 leptoskit_plugin_watch_sync = { workspace = true }
 leptoskit_plugin_wearable = { workspace = true }

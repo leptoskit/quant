@@ -305,7 +305,11 @@ fn record_line(line: &str, stream: &StreamId, device: DeviceId, now: Timestamp) 
 
 /// Send batches, waiting and retrying while the grant is rate limited.
 async fn send_series(client: &Client, batches: Vec<SeriesBatch>) -> Result<quant_api::Ingested> {
-	let request = IngestSeries { batches };
+	let request = IngestSeries {
+		batches,
+		device_name: None,
+		platform: Some(std::env::consts::OS.into()),
+	};
 	let mut wait = std::time::Duration::from_secs(1);
 	loop {
 		match client.ingest_series(&request).await {

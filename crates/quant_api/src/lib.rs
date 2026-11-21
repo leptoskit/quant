@@ -572,6 +572,12 @@ pub struct IngestRecords {
 pub struct IngestSeries {
 	/// The batches.
 	pub batches: Vec<SeriesBatch>,
+	/// A name for the sending device, remembered with its id.
+	#[serde(default)]
+	pub device_name: Option<String>,
+	/// The sending device's platform, such as `android`.
+	#[serde(default)]
+	pub platform: Option<String>,
 }
 
 /// Answer to an ingest.
