@@ -297,3 +297,54 @@ fn walking_becomes_gait_bouts_and_a_slow_down() {
 		"{text}"
 	);
 }
+
+#[test]
+fn overlapping_in_bed_and_awake_spans_do_not_double_count_daily_sleep() {
+	let store = Store::open_in_memory(&VaultKey::generate()).unwrap();
+	let tz = TimeZone::UTC;
+	let day: Timestamp = "2026-11-06T00:00:00Z".parse().unwrap();
+	let at = |h: i64, m: i64| day + SignedDuration::from_hours(h) + SignedDuration::from_mins(m);
+	let watch = DeviceId::new();
+	let sleep = |from: Timestamp, to: Timestamp, stage: &str| {
+		Record::new("health.sleep".parse().unwrap(), watch)
+			.starting(from)
+			.ending(to)
+			.with("stage", stage)
+	};
+
+	// HealthKit emits an overlapping `in_bed` envelope alongside asleep stages
+	// and brief `awake` / `unknown` spans. Only asleep stages
+	// (`asleep`/`light`/`deep`/`rem`) should count toward sleep duration.
+	store
+		.insert_records(&[
+			sleep(day - SignedDuration::from_hours(1), at(7, 0), "in_bed"),
+			sleep(day - SignedDuration::from_hours(1), at(2, 0), "light"),
+			sleep(at(2, 0), at(3, 30), "deep"),
+			sleep(at(3, 30), at(4, 0), "awake"),
+			sleep(at(4, 0), at(6, 0), "rem"),
+			sleep(at(6, 0), at(7, 0), "unknown"),
+		])
+		.unwrap();
+
+	let config = Config {
+		posture_sources: Vec::new(),
+		first_run_days: 1,
+	};
+	quant_derive::run(&store, &config, at(15, 0), &tz).unwrap();
+
+	let daily = store
+		.records(&RecordQuery::new(
+			Selector::stream("memory.daily".parse().unwrap()),
+			TimeRange::new(day, at(23, 0)).unwrap(),
+		))
+		.unwrap();
+	let today = daily
+		.iter()
+		.find(|r| r.data["date"] == "2026-11-06")
+		.unwrap();
+	// 3h light + 1h30m deep + 2h rem = 6h 30m (23_400 s). Neither in_bed (8h)
+	// nor awake (30m) nor unknown (1h) is added.
+	assert_eq!(today.data["asleep_seconds"], 23_400.0);
+	let text = today.text.as_deref().unwrap();
+	assert!(text.contains("Slept 6h 30m (deep 1h 30m)."), "{text}");
+}

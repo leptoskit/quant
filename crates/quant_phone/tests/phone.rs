@@ -130,6 +130,7 @@ impl Phone {
 			data: data.to_path_buf(),
 			name: "Seeker".into(),
 			tz: TimeZone::UTC,
+			is_watch: false,
 		};
 		let (jobs, thread) = quant_phone::spawn(config, Arc::clone(&shared)).unwrap();
 		Self {

@@ -265,7 +265,11 @@ impl<'a> Uploader<'a> {
 			let (rows, batches): (Vec<i64>, Vec<SeriesBatch>) = batches.into_iter().unzip();
 			let result = tokio::time::timeout_at(
 				deadline,
-				self.client.ingest_series(&IngestSeries { batches }),
+				self.client.ingest_series(&IngestSeries {
+					batches,
+					device_name: None,
+					platform: Some(std::env::consts::OS.into()),
+				}),
 			)
 			.await;
 			let Ok(result) = result else {

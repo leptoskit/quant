@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 blake3 = { workspace = true }
 jiff = { workspace = true }
 leptoskit_plugin_app_usage = { workspace = true }

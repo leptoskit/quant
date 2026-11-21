@@ -143,11 +143,13 @@ impl Service {
 				client,
 				scopes,
 				lookback_hours,
+				deny_classes,
 			} => {
 				Job::Approve {
 					client,
 					scopes,
 					lookback_hours,
+					deny_classes,
 				}
 			}
 			Command::Deny { client } => Job::Deny(client),

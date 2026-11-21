@@ -385,6 +385,15 @@ impl PowerMonitor {
 		Ok(report)
 	}
 
+	/// Latest observed battery percentage (0..=100), when known.
+	pub fn battery_percent(&self) -> Option<u8> {
+		self.level.map(|thousandths| {
+			#[allow(clippy::cast_possible_truncation)]
+			let pct = ((thousandths + 5) / 10).min(100) as u8;
+			pct
+		})
+	}
+
 	/// How much upload work the phone can afford in its latest state.
 	pub fn budget(&self) -> UploadBudget {
 		UploadBudget::for_power(self.battery, self.thermal)

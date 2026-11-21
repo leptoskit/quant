@@ -23,6 +23,7 @@ macos = ["native", "leptoskit/macos"]
 # thermal state, and hands what they report to the `quant-phone` service.
 phone = [
 	"native",
+	"dep:base64",
 	"dep:leptoskit_plugin_app_usage",
 	"dep:leptoskit_plugin_background",
 	"dep:leptoskit_plugin_battery",
@@ -54,6 +55,7 @@ quant_model = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+base64 = { workspace = true, optional = true }
 leptoskit_bridge = { workspace = true }
 leptoskit_plugin_app_usage = { workspace = true, features = ["guest"], optional = true }
 leptoskit_plugin_background = { workspace = true, features = ["guest"], optional = true }

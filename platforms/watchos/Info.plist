@@ -20,6 +20,8 @@
 <string>Quant reads step counts and wrist motion into your private vault.</string>
 <key>NSLocationWhenInUseUsageDescription</key>
 <string>Quant records watch location fixes into your private vault.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>Quant records watch location fixes in the background into your private vault.</string>
 <key>NSBluetoothAlwaysUsageDescription</key>
 <string>Quant connects to Bluetooth heart-rate straps and fitness sensors from your Apple Watch.</string>
 </dict></plist>

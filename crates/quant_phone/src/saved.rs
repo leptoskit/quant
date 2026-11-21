@@ -30,6 +30,10 @@ pub struct Saved {
 	/// Where the next windowed health-store read starts, in Unix milliseconds.
 	#[serde(default)]
 	pub health_until_ms: Option<i64>,
+	/// Last cumulative step count seen from a boot-scoped pedometer counter
+	/// (Android / `HarmonyOS`), used to compute incremental deltas.
+	#[serde(default)]
+	pub pedometer_last_boot_steps: Option<u64>,
 }
 
 fn yes() -> bool {
@@ -45,6 +49,7 @@ impl Default for Saved {
 			usage_until_ms: None,
 			health_token: None,
 			health_until_ms: None,
+			pedometer_last_boot_steps: None,
 		}
 	}
 }

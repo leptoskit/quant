@@ -36,6 +36,13 @@ jobs:
             runner: ubuntu-latest
             packages: -p quant_app -p quant_model -p quant_phone
             build: build
+          # The Wear OS smartwatch collector (Pixel Watch, Samsung Galaxy Watch,
+          # Wear OS 3+). Builds the debug APK with watch plugins, TileService,
+          # and ComplicationDataSource.
+          - target: wearos
+            runner: ubuntu-latest
+            packages: -p quant_app -p quant_model -p quant_phone
+            build: build
           # The same collector on an iPhone. This builds the Rust host, the
           # guest and the generated Xcode project for a device, unsigned:
           # signing needs an Apple team, which CI does not have.
@@ -101,13 +108,13 @@ jobs:
         # Release builds minify the Wasm glue with esbuild.
         run: npm install --global esbuild@0.28.2
       - name: Add the Android Rust target
-        if: matrix.target == 'android'
+        if: matrix.target == 'android' || matrix.target == 'wearos'
         run: rustup target add aarch64-linux-android
       - name: Add the iOS Rust target
         if: matrix.target == 'ios'
         run: rustup target add aarch64-apple-ios
       - name: Point cc at the NDK's ranlib
-        if: matrix.target == 'android'
+        if: matrix.target == 'android' || matrix.target == 'wearos'
         # The pinned CLI gives cc the NDK's llvm-ar but not llvm-ranlib, so
         # the vendored OpenSSL looks for aarch64-linux-android-ranlib, which
         # no NDK ships. Drop this once the pin includes leptoskit's fix.
@@ -115,10 +122,10 @@ jobs:
       - name: Build
         run: leptoskit --app-target ${{ matrix.target }} ${{ matrix.build }}
       - uses: actions/upload-artifact@v4
-        if: matrix.target == 'android'
+        if: matrix.target == 'android' || matrix.target == 'wearos'
         with:
-          name: quant-android-debug
-          path: platforms/android/app/build/outputs/apk/debug/*.apk
+          name: quant-${{ matrix.target }}-debug
+          path: platforms/${{ matrix.target }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - uses: actions/setup-node@v4
         if: matrix.target == 'landing'

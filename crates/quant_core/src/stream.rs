@@ -312,6 +312,12 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		)
 		.sensitive(&[Class::Health]),
 		StreamSpec::series(
+			"health.hrv_sdnn",
+			&[("sdnn", "ms")],
+			"Heart rate variability (SDNN, as reported by Apple Watch / HealthKit).",
+		)
+		.sensitive(&[Class::Health]),
+		StreamSpec::series(
 			"health.spo2",
 			&[("percent", "%")],
 			"Blood oxygen saturation.",
@@ -325,7 +331,7 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		.sensitive(&[Class::Health]),
 		StreamSpec::event(
 			"health.sleep",
-			"A sleep stage span: awake, light, deep, or rem.",
+			"A sleep stage span: awake, light, deep, rem, asleep, or in_bed.",
 		)
 		.summarise_by(&["stage"])
 		.sensitive(&[Class::Health]),
@@ -380,6 +386,12 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 			 scale.",
 		)
 		.summarise_by(&["source"])
+		.sensitive(&[Class::Health]),
+		StreamSpec::event(
+			"health.ecg",
+			"Single-lead electrocardiogram classification and average heart rate from a watch.",
+		)
+		.summarise_by(&["classification"])
 		.sensitive(&[Class::Health]),
 		StreamSpec::series(
 			"motion.accelerometer",
@@ -452,6 +464,21 @@ pub fn builtin_streams() -> Vec<StreamSpec> {
 		)
 		.summarise_by(&["app"])
 		.sensitive(&[Class::Others]),
+		StreamSpec::series(
+			"sensor.ble.running_cadence",
+			&[("speed_mps", "m/s"), ("cadence_spm", "spm")],
+			"Running speed and cadence from a Bluetooth GATT sensor.",
+		),
+		StreamSpec::series(
+			"sensor.ble.cycling_power",
+			&[("watts", "W")],
+			"Instantaneous cycling power from a Bluetooth GATT power meter.",
+		),
+		StreamSpec::series(
+			"sensor.ble.battery",
+			&[("level", "%")],
+			"Battery level reported by a connected Bluetooth wearable peripheral.",
+		),
 		StreamSpec::event(
 			"memory.episode",
 			"A derived span of activity: what was happening, where, and how the body was doing.",
@@ -535,13 +562,21 @@ mod tests {
 				.classes
 				.clone()
 		};
+		for spec in &specs {
+			if spec.id.family() == Family::Health {
+				assert_eq!(spec.classes, vec![Class::Health], "{}", spec.id);
+			}
+		}
 		for health in [
 			"health.heart_rate",
 			"health.hrv",
+			"health.hrv_sdnn",
 			"health.spo2",
 			"health.steps",
 			"health.sleep",
 			"health.workout",
+			"health.ecg",
+			"health.body_composition",
 		] {
 			assert_eq!(classes(health), vec![Class::Health], "{health}");
 		}
