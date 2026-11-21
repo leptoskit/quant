@@ -15,7 +15,7 @@
 # such as 1.96, to build the same way every time.
 ARG RUST_VERSION=1
 # The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
-ARG LEPTOSKIT_REV=69d0cb211dfc8d7ae4ee2be28cc8f476d491555b
+ARG LEPTOSKIT_REV=8646768a82ccb661a821aa3d32a2973a77a30508
 # binaryen's wasm-opt shrinks the release client, and esbuild minifies its
 # JavaScript glue.
 ARG BINARYEN_VERSION=132
