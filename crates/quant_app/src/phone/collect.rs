@@ -312,12 +312,14 @@ async fn refresh(state: &State) {
 	let mut permissions = state.permissions.get_untracked();
 	permissions.location = match Location::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => match plugin.permission().await {
-			Ok(permission) if permission.status == location::Status::Granted => Grant::Granted,
-			Ok(_) => Grant::Needed,
-			Err(Error::Unavailable) => Grant::Unavailable,
-			Err(_) => permissions.location,
-		},
+		Ok(plugin) => {
+			match plugin.permission().await {
+				Ok(permission) if permission.status == location::Status::Granted => Grant::Granted,
+				Ok(_) => Grant::Needed,
+				Err(Error::Unavailable) => Grant::Unavailable,
+				Err(_) => permissions.location,
+			}
+		}
 	};
 	// The system offers no way to read the "all the time" grant without
 	// asking for it, so it stays as the last request left it.
@@ -329,32 +331,38 @@ async fn refresh(state: &State) {
 	}
 	permissions.notifications = match Notifications::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => match plugin.permission().await {
-			Ok(notifications::Permission::Granted | notifications::Permission::Provisional) => {
-				Grant::Granted
+		Ok(plugin) => {
+			match plugin.permission().await {
+				Ok(notifications::Permission::Granted | notifications::Permission::Provisional) => {
+					Grant::Granted
+				}
+				Ok(_) => Grant::Needed,
+				Err(Error::Unavailable) => Grant::Unavailable,
+				Err(_) => permissions.notifications,
 			}
-			Ok(_) => Grant::Needed,
-			Err(Error::Unavailable) => Grant::Unavailable,
-			Err(_) => permissions.notifications,
-		},
+		}
 	};
 	permissions.usage = match AppUsage::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => match plugin.usage_access_status().await {
-			Ok(app_usage::UsageAccessStatus::Granted) => Grant::Granted,
-			Ok(app_usage::UsageAccessStatus::Denied) => Grant::Needed,
-			Ok(app_usage::UsageAccessStatus::Unknown) => Grant::Unknown,
-			Err(Error::Unavailable) => Grant::Unavailable,
-			Err(_) => permissions.usage,
-		},
+		Ok(plugin) => {
+			match plugin.usage_access_status().await {
+				Ok(app_usage::UsageAccessStatus::Granted) => Grant::Granted,
+				Ok(app_usage::UsageAccessStatus::Denied) => Grant::Needed,
+				Ok(app_usage::UsageAccessStatus::Unknown) => Grant::Unknown,
+				Err(Error::Unavailable) => Grant::Unavailable,
+				Err(_) => permissions.usage,
+			}
+		}
 	};
 	permissions.battery = match Background::new() {
 		Err(_) => Grant::Unavailable,
-		Ok(plugin) => match plugin.status().await {
-			Ok(status) => battery_grant(status.battery_optimization()),
-			Err(Error::Unavailable) => Grant::Unavailable,
-			Err(_) => permissions.battery,
-		},
+		Ok(plugin) => {
+			match plugin.status().await {
+				Ok(status) => battery_grant(status.battery_optimization()),
+				Err(Error::Unavailable) => Grant::Unavailable,
+				Err(_) => permissions.battery,
+			}
+		}
 	};
 	permissions.health = match Health::new() {
 		Err(_) => Grant::Unavailable,
@@ -441,57 +449,75 @@ fn battery_grant(optimization: background::BatteryOptimization) -> Grant {
 /// prompt or settings screen.
 async fn allow(state: &State, step: Step) {
 	let outcome: Result<Option<Grant>, Error> = match step {
-		Step::Location => match Location::new() {
-			Ok(plugin) => plugin.request_permission(true).await.map(|_| None),
-			Err(error) => Err(error),
-		},
-		Step::Always => match Location::new() {
-			Ok(plugin) => plugin
-				.request_background_permission()
-				.await
-				.map(|permission| {
-					Some(if permission.status == location::Status::Granted {
-						Grant::Granted
-					} else {
-						Grant::Needed
-					})
-				}),
-			Err(error) => Err(error),
-		},
-		Step::Notifications => match Notifications::new() {
-			Ok(plugin) => plugin.request_permission().await.map(|_| None),
-			Err(error) => Err(error),
-		},
-		Step::Usage => match AppUsage::new() {
-			Ok(plugin) => plugin.open_usage_access_settings().await.map(|()| None),
-			Err(error) => Err(error),
-		},
-		Step::Battery => match Background::new() {
-			Ok(plugin) => plugin
-				.request_ignore_battery_optimizations()
-				.await
-				.map(|optimization| Some(battery_grant(optimization))),
-			Err(error) => Err(error),
-		},
-		Step::Health => match Health::new() {
-			Ok(plugin) => plugin
-				.request_permissions(
-					&health::DataType::ALL,
-					health::Extra {
-						background: true,
-						history: true,
-					},
-				)
-				.await
-				.map(|grants| {
-					Some(if !grants.read.is_empty() || !grants.exact {
-						Grant::Granted
-					} else {
-						Grant::Needed
-					})
-				}),
-			Err(error) => Err(error),
-		},
+		Step::Location => {
+			match Location::new() {
+				Ok(plugin) => plugin.request_permission(true).await.map(|_| None),
+				Err(error) => Err(error),
+			}
+		}
+		Step::Always => {
+			match Location::new() {
+				Ok(plugin) => {
+					plugin
+						.request_background_permission()
+						.await
+						.map(|permission| {
+							Some(if permission.status == location::Status::Granted {
+								Grant::Granted
+							} else {
+								Grant::Needed
+							})
+						})
+				}
+				Err(error) => Err(error),
+			}
+		}
+		Step::Notifications => {
+			match Notifications::new() {
+				Ok(plugin) => plugin.request_permission().await.map(|_| None),
+				Err(error) => Err(error),
+			}
+		}
+		Step::Usage => {
+			match AppUsage::new() {
+				Ok(plugin) => plugin.open_usage_access_settings().await.map(|()| None),
+				Err(error) => Err(error),
+			}
+		}
+		Step::Battery => {
+			match Background::new() {
+				Ok(plugin) => {
+					plugin
+						.request_ignore_battery_optimizations()
+						.await
+						.map(|optimization| Some(battery_grant(optimization)))
+				}
+				Err(error) => Err(error),
+			}
+		}
+		Step::Health => {
+			match Health::new() {
+				Ok(plugin) => {
+					plugin
+						.request_permissions(
+							&health::DataType::ALL,
+							health::Extra {
+								background: true,
+								history: true,
+							},
+						)
+						.await
+						.map(|grants| {
+							Some(if !grants.read.is_empty() || !grants.exact {
+								Grant::Granted
+							} else {
+								Grant::Needed
+							})
+						})
+				}
+				Err(error) => Err(error),
+			}
+		}
 		Step::Wearable => {
 			match Wearable::new() {
 				Ok(plugin) => {
@@ -514,17 +540,21 @@ async fn allow(state: &State, step: Step) {
 				Err(error) => Err(error),
 			}
 		}
-		Step::Bluetooth => match Ble::new() {
-			Ok(plugin) => plugin.request_permission().await.map(|avail| {
-				Some(match avail {
-					ble::BleAvailability::PoweredOn => Grant::Granted,
-					ble::BleAvailability::PoweredOff => Grant::Unknown,
-					ble::BleAvailability::Unsupported => Grant::Unavailable,
-					ble::BleAvailability::Unauthorized => Grant::Needed,
-				})
-			}),
-			Err(error) => Err(error),
-		},
+		Step::Bluetooth => {
+			match Ble::new() {
+				Ok(plugin) => {
+					plugin.request_permission().await.map(|avail| {
+						Some(match avail {
+							ble::BleAvailability::PoweredOn => Grant::Granted,
+							ble::BleAvailability::PoweredOff => Grant::Unknown,
+							ble::BleAvailability::Unsupported => Grant::Unavailable,
+							ble::BleAvailability::Unauthorized => Grant::Needed,
+						})
+					})
+				}
+				Err(error) => Err(error),
+			}
+		}
 	};
 	match outcome {
 		Ok(Some(grant)) => {

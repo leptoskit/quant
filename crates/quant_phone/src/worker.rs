@@ -355,10 +355,12 @@ impl Worker {
 	fn new(config: Config, shared: Arc<Shared>) -> Self {
 		let (saved, problem) = match Saved::load(&config.saved()) {
 			Ok(saved) => (saved, None),
-			Err(error) => (
-				Saved::default(),
-				Some(format!("This phone's settings could not be read: {error}")),
-			),
+			Err(error) => {
+				(
+					Saved::default(),
+					Some(format!("This phone's settings could not be read: {error}")),
+				)
+			}
 		};
 		let mut worker = Self {
 			link: if saved.link.is_some() {
@@ -404,14 +406,16 @@ impl Worker {
 				self.tick(false).await;
 				Reply::ok()
 			}
-			Job::Command(command) => match self.command(command).await {
-				Ok(Some(data)) => Reply::data(data),
-				Ok(None) => Reply::ok(),
-				Err(problem) => {
-					self.say(problem.clone(), true);
-					Reply::failed(problem)
+			Job::Command(command) => {
+				match self.command(command).await {
+					Ok(Some(data)) => Reply::data(data),
+					Ok(None) => Reply::ok(),
+					Err(problem) => {
+						self.say(problem.clone(), true);
+						Reply::failed(problem)
+					}
 				}
-			},
+			}
 		};
 		self.publish();
 		self.shared.finish(ticket, reply);
@@ -514,9 +518,11 @@ impl Worker {
 		match std::fs::remove_file(self.config.identity()) {
 			Ok(()) => Ok(()),
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-			Err(error) => Err(format!(
-				"This phone's identity could not be removed: {error}"
-			)),
+			Err(error) => {
+				Err(format!(
+					"This phone's identity could not be removed: {error}"
+				))
+			}
 		}
 	}
 
@@ -578,9 +584,11 @@ impl Worker {
 			.filter(|since| *since <= now)
 			.map_or(earliest, |since| since.max(now - FIRST_USAGE * 7));
 		let until = now.min(since + USAGE_SPAN);
-		(until.duration_since(since) >= USAGE_MINIMUM).then(|| ReplyData::UsageRange {
-			since_ms: since.as_millisecond(),
-			until_ms: until.as_millisecond(),
+		(until.duration_since(since) >= USAGE_MINIMUM).then(|| {
+			ReplyData::UsageRange {
+				since_ms: since.as_millisecond(),
+				until_ms: until.as_millisecond(),
+			}
 		})
 	}
 
@@ -678,12 +686,16 @@ impl Worker {
 			None => Err("This device's storage is not open yet".to_owned()),
 			Some(spool) => {
 				match reading {
-					Reading::Location(updates) => location_reading(spool, watch_device, updates)
-						.map(|(stored, problem, _)| (stored, problem)),
+					Reading::Location(updates) => {
+						location_reading(spool, watch_device, updates)
+							.map(|(stored, problem, _)| (stored, problem))
+					}
 					Reading::Usage {
 						sessions, events, ..
-					} => usage_reading(spool, watch_device, sessions, &events)
-						.map(|stored| (stored, None)),
+					} => {
+						usage_reading(spool, watch_device, sessions, &events)
+							.map(|stored| (stored, None))
+					}
 					Reading::Power { battery, thermal } => {
 						// Use a local monitor so watch battery/thermal state
 						// never alters the phone's upload thermal budget.
@@ -694,14 +706,18 @@ impl Worker {
 					Reading::Health {
 						is_changes,
 						payload,
-					} => health_reading(spool, watch_device, is_changes, payload)
-						.map(|(stored, _)| (stored, None)),
-					Reading::Wearable(batch) => wearable_reading(spool, watch_device, batch).map(
-						|(stored, problem, bpm, _)| {
-							new_bpm = bpm;
-							(stored, problem)
-						},
-					),
+					} => {
+						health_reading(spool, watch_device, is_changes, payload)
+							.map(|(stored, _)| (stored, None))
+					}
+					Reading::Wearable(batch) => {
+						wearable_reading(spool, watch_device, batch).map(
+							|(stored, problem, bpm, _)| {
+								new_bpm = bpm;
+								(stored, problem)
+							},
+						)
+					}
 					Reading::Pedometer(payload) => {
 						let mut ignored_boot = None;
 						pedometer_reading(
@@ -714,10 +730,12 @@ impl Worker {
 						)
 						.map(|(stored, _)| (stored, None))
 					}
-					Reading::Motion { kind_code, batch } => spool
-						.motion_batch(watch_device, now, kind_code, batch)
-						.map(|stored| (stored as u64, None))
-						.map_err(|error| error.to_string()),
+					Reading::Motion { kind_code, batch } => {
+						spool
+							.motion_batch(watch_device, now, kind_code, batch)
+							.map(|stored| (stored as u64, None))
+							.map_err(|error| error.to_string())
+					}
 					Reading::Ble(batch) => {
 						ble_reading(spool, watch_device, batch).map(|(stored, bpm, _)| {
 							new_bpm = bpm;
@@ -770,32 +788,41 @@ impl Worker {
 						until_ms,
 						sessions,
 						events,
-					} => usage_reading(spool, self.saved.device, sessions, &events)
-						.map(|stored| (stored, None, Some(until_ms))),
-					Reading::Power { battery, thermal } => power_reading(
-						spool,
-						&mut self.power,
-						self.saved.device,
-						now,
-						battery,
-						thermal,
-					)
-					.map(|stored| (stored, None, None)),
+					} => {
+						usage_reading(spool, self.saved.device, sessions, &events)
+							.map(|stored| (stored, None, Some(until_ms)))
+					}
+					Reading::Power { battery, thermal } => {
+						power_reading(
+							spool,
+							&mut self.power,
+							self.saved.device,
+							now,
+							battery,
+							thermal,
+						)
+						.map(|stored| (stored, None, None))
+					}
 					Reading::Health {
 						is_changes,
 						payload,
-					} => health_reading(spool, self.saved.device, is_changes, payload).map(
-						|(stored, update)| {
-							health_token_update = update;
-							(stored, None, None)
-						},
-					),
-					Reading::Wearable(batch) => wearable_reading(spool, self.saved.device, batch)
-						.map(|(stored, problem, bpm, steps)| {
-							new_bpm = bpm;
-							steps_delta = steps;
-							(stored, problem, None)
-						}),
+					} => {
+						health_reading(spool, self.saved.device, is_changes, payload).map(
+							|(stored, update)| {
+								health_token_update = update;
+								(stored, None, None)
+							},
+						)
+					}
+					Reading::Wearable(batch) => {
+						wearable_reading(spool, self.saved.device, batch).map(
+							|(stored, problem, bpm, steps)| {
+								new_bpm = bpm;
+								steps_delta = steps;
+								(stored, problem, None)
+							},
+						)
+					}
 					Reading::Pedometer(payload) => {
 						let before = self.saved.pedometer_last_boot_steps;
 						let res = pedometer_reading(
@@ -815,17 +842,21 @@ impl Worker {
 						}
 						res
 					}
-					Reading::Motion { kind_code, batch } => spool
-						.motion_batch(self.saved.device, now, kind_code, batch)
-						.map(|stored| (stored as u64, None, None))
-						.map_err(|error| error.to_string()),
-					Reading::Ble(batch) => ble_reading(spool, self.saved.device, batch).map(
-						|(stored, bpm, devices)| {
-							new_bpm = bpm;
-							seen_ble = devices;
-							(stored, None, None)
-						},
-					),
+					Reading::Motion { kind_code, batch } => {
+						spool
+							.motion_batch(self.saved.device, now, kind_code, batch)
+							.map(|stored| (stored as u64, None, None))
+							.map_err(|error| error.to_string())
+					}
+					Reading::Ble(batch) => {
+						ble_reading(spool, self.saved.device, batch).map(
+							|(stored, bpm, devices)| {
+								new_bpm = bpm;
+								seen_ble = devices;
+								(stored, None, None)
+							},
+						)
+					}
 					Reading::WatchSync(_) => {
 						// Nested WatchSync frames are ignored to prevent
 						// recursion.
@@ -1045,9 +1076,11 @@ impl Worker {
 			};
 		}
 		match pairing.status {
-			ClientStatus::Pending => Link::Pending {
-				code: pairing.pairing_code,
-			},
+			ClientStatus::Pending => {
+				Link::Pending {
+					code: pairing.pairing_code,
+				}
+			}
 			ClientStatus::Revoked => Link::Revoked,
 			ClientStatus::Active => {
 				match client.me().await {

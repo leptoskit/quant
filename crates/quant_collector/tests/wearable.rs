@@ -76,13 +76,15 @@ impl Daemon {
 		deny: &[Class],
 	) -> Client {
 		let mut client = Client::new(self.endpoint.clone(), Identity::generate(name));
-		let agent = (kind == ClientKind::Agent).then(|| AgentIdentity {
-			product: name.to_owned(),
-			vendor: "Quant tests".into(),
-			model: "test-model".into(),
-			version: env!("CARGO_PKG_VERSION").into(),
-			host: "test-host".into(),
-			operator: None,
+		let agent = (kind == ClientKind::Agent).then(|| {
+			AgentIdentity {
+				product: name.to_owned(),
+				vendor: "Quant tests".into(),
+				model: "test-model".into(),
+				version: env!("CARGO_PKG_VERSION").into(),
+				host: "test-host".into(),
+				operator: None,
+			}
 		});
 		let pairing = client.pair(kind, &[], agent.as_ref()).await.unwrap();
 		OwnerSession::open(self.endpoint.clone(), PASS)
@@ -339,11 +341,13 @@ async fn watch_health_ble_and_pedometer_drain_and_enforce_health_denial() {
 		cursor: 64,
 		dropped: 0,
 		samples: (0..64)
-			.map(|i| leptoskit_sensor::VectorReading {
-				timestamp: 10.0 + f64::from(i) * 0.02,
-				x: 0.1,
-				y: 9.8,
-				z: 0.2,
+			.map(|i| {
+				leptoskit_sensor::VectorReading {
+					timestamp: 10.0 + f64::from(i) * 0.02,
+					x: 0.1,
+					y: 9.8,
+					z: 0.2,
+				}
 			})
 			.collect(),
 	}

@@ -526,10 +526,12 @@ impl<'a> Reading<'a> {
 					events,
 				}
 			}
-			KIND_POWER => Reading::Power {
-				battery: take_optional(&mut rest).ok()?,
-				thermal: take_optional(&mut rest).ok()?,
-			},
+			KIND_POWER => {
+				Reading::Power {
+					battery: take_optional(&mut rest).ok()?,
+					thermal: take_optional(&mut rest).ok()?,
+				}
+			}
 			KIND_HEALTH => {
 				let (flag, tail) = rest.split_first()?;
 				rest = tail;

@@ -240,7 +240,7 @@ pub fn WatchScreen(state: State) -> Element {
 							Button(if collecting { "Pause" } else { "Record" })
 								.class(
 									"px-3 py-2 rounded-full bg-amber-400 text-black text-xs \
-										 font-semibold",
+									 font-semibold",
 								)
 								.test_id("watch-toggle")
 								.on_press(move || {
@@ -271,7 +271,7 @@ pub fn WatchScreen(state: State) -> Element {
 					})
 					.class(if active {
 						"px-3 py-1.5 rounded-full bg-emerald-500 text-black text-[11px] \
-							 font-semibold"
+						 font-semibold"
 					} else {
 						"px-3 py-1.5 rounded-full bg-stone-800 text-stone-200 text-[11px]"
 					})
@@ -282,20 +282,24 @@ pub fn WatchScreen(state: State) -> Element {
 			.child(For(
 				move || vec![permissions.get().wearable],
 				|grant| *grant,
-				move |grant| match grant {
-					Grant::Unavailable => View(),
-					Grant::Granted => Text("Sensors OK")
-						.class("text-[11px] text-emerald-400")
-						.test_id("watch-sensors-ok"),
-					Grant::Needed | Grant::Unknown => {
-						let sensor = sensor_state.clone();
-						Button("Allow sensors")
-							.class(
-								"px-3 py-1.5 rounded-full bg-stone-900 text-stone-300 \
-										 text-[11px]",
-							)
-							.test_id("watch-sensors")
-							.on_press(move || sensor.act(Action::Allow(Step::Wearable)))
+				move |grant| {
+					match grant {
+						Grant::Unavailable => View(),
+						Grant::Granted => {
+							Text("Sensors OK")
+								.class("text-[11px] text-emerald-400")
+								.test_id("watch-sensors-ok")
+						}
+						Grant::Needed | Grant::Unknown => {
+							let sensor = sensor_state.clone();
+							Button("Allow sensors")
+								.class(
+									"px-3 py-1.5 rounded-full bg-stone-900 text-stone-300 \
+									 text-[11px]",
+								)
+								.test_id("watch-sensors")
+								.on_press(move || sensor.act(Action::Allow(Step::Wearable)))
+						}
 					}
 				},
 			)),
