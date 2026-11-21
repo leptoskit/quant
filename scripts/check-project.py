@@ -4,6 +4,7 @@
 import re
 import subprocess
 import tomllib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -16,6 +17,9 @@ def main():
     assert {p for p in paths if Path(p).name == "leptoskit.toml"} == {"leptoskit.toml"}
     assert {p for p in paths if Path(p).name == "Cargo.lock"} == {"Cargo.lock"}
     assert "leptoskit.workspace.toml" not in paths
+    for path in sorted(paths):
+        if path.startswith("platforms/") and Path(path).suffix in {".xml", ".plist"}:
+            ET.fromstring((root / path).read_text())
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
     packages = {}
     for path in paths:

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  App-owned Wear OS manifest. `leptoskit --app-target wearos build` merges
+  App-owned Wear OS manifest. `leptoskit native prepare wearos` merges
   selected plugins and applies the Wear OS watch feature, standalone flag,
   Tile service, and Complication data source metadata.
 -->
