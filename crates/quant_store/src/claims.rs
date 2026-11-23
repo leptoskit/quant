@@ -117,51 +117,75 @@ pub(crate) const COLUMNS: &str = "c.id, c.subject, c.kind, c.statement, c.topic,
                                   c.superseded_by";
 
 pub(crate) fn claim_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Claim>> {
-	let id: Vec<u8> = row.get(0)?;
+	let id = row.get_ref(0)?.as_blob()?;
+	let id = match Uuid::from_slice(id) {
+		Ok(uuid) => ClaimId(uuid),
+		Err(_) => return Ok(Err(StoreError::Corrupt("claim id"))),
+	};
 	let subject: String = row.get(1)?;
-	let kind: String = row.get(2)?;
+	let kind = row.get_ref(2)?.as_str()?;
+	let Some(kind) = ClaimKind::parse(kind) else {
+		return Ok(Err(StoreError::Corrupt("claim kind")));
+	};
 	let statement: String = row.get(3)?;
 	let topic: Option<String> = row.get(4)?;
-	let authority: String = row.get(5)?;
+	let authority = row.get_ref(5)?.as_str()?;
+	let Some(authority) = Authority::parse(authority) else {
+		return Ok(Err(StoreError::Corrupt("claim authority")));
+	};
 	let confidence: f32 = row.get(6)?;
-	let classes: String = row.get(7)?;
-	let status: String = row.get(8)?;
+	let classes_str = row.get_ref(7)?.as_str()?;
+	let classes = if classes_str == "[]" {
+		Vec::new()
+	} else {
+		match serde_json::from_str(classes_str) {
+			Ok(classes) => classes,
+			Err(err) => return Ok(Err(err.into())),
+		}
+	};
+	let status = row.get_ref(8)?.as_str()?;
+	let Some(status) = ClaimStatus::parse(status) else {
+		return Ok(Err(StoreError::Corrupt("claim status")));
+	};
 	let valid_from: Option<i64> = row.get(9)?;
 	let valid_to: Option<i64> = row.get(10)?;
-	let proposed_by: Option<Vec<u8>> = row.get(11)?;
+	let proposed_by = match row.get_ref(11)?.as_blob_or_null()? {
+		Some(bytes) => {
+			match Uuid::from_slice(bytes) {
+				Ok(uuid) => Some(ClientId(uuid)),
+				Err(_) => return Ok(Err(StoreError::Corrupt("claim proposer"))),
+			}
+		}
+		None => None,
+	};
 	let created: i64 = row.get(12)?;
 	let updated: i64 = row.get(13)?;
-	let superseded_by: Option<Vec<u8>> = row.get(14)?;
+	let superseded_by = match row.get_ref(14)?.as_blob_or_null()? {
+		Some(bytes) => {
+			match Uuid::from_slice(bytes) {
+				Ok(uuid) => Some(ClaimId(uuid)),
+				Err(_) => return Ok(Err(StoreError::Corrupt("claim superseder"))),
+			}
+		}
+		None => None,
+	};
 	Ok((|| {
 		Ok(Claim {
-			id: ClaimId(Uuid::from_slice(&id).map_err(|_| StoreError::Corrupt("claim id"))?),
+			id,
 			subject,
-			kind: ClaimKind::parse(&kind).ok_or(StoreError::Corrupt("claim kind"))?,
+			kind,
 			statement,
 			topic,
-			authority: Authority::parse(&authority)
-				.ok_or(StoreError::Corrupt("claim authority"))?,
+			authority,
 			confidence,
-			classes: serde_json::from_str(&classes)?,
-			status: ClaimStatus::parse(&status).ok_or(StoreError::Corrupt("claim status"))?,
+			classes,
+			status,
 			valid_from: valid_from.map(from_micros).transpose()?,
 			valid_to: valid_to.map(from_micros).transpose()?,
-			proposed_by: proposed_by
-				.map(|bytes| {
-					Uuid::from_slice(&bytes)
-						.map(ClientId)
-						.map_err(|_| StoreError::Corrupt("claim proposer"))
-				})
-				.transpose()?,
+			proposed_by,
 			created_at: from_micros(created)?,
 			updated_at: from_micros(updated)?,
-			superseded_by: superseded_by
-				.map(|bytes| {
-					Uuid::from_slice(&bytes)
-						.map(ClaimId)
-						.map_err(|_| StoreError::Corrupt("claim superseder"))
-				})
-				.transpose()?,
+			superseded_by,
 			evidence: Vec::new(),
 		})
 	})())
@@ -201,19 +225,75 @@ pub(crate) fn filter_sql(filter: &ClaimFilter, params: &mut Vec<Value>) -> Strin
 }
 
 pub(crate) fn attach_evidence(conn: &rusqlite::Connection, claims: &mut [Claim]) -> Result<()> {
-	let mut statement = conn.prepare_cached(
-		"SELECT r.id FROM claim_evidence ce JOIN records r ON r.rowid = ce.record
-		 WHERE ce.claim IN (SELECT rowid FROM claims WHERE id = ?1)",
-	)?;
-	for claim in claims {
-		let rows = statement.query_map([claim.id.0.as_bytes().as_slice()], |row| {
-			row.get::<_, Vec<u8>>(0)
-		})?;
-		for record in rows {
-			let record = record?;
-			claim.evidence.push(RecordId(
-				Uuid::from_slice(&record).map_err(|_| StoreError::Corrupt("evidence record"))?,
+	const CHUNK: usize = 400;
+	if claims.is_empty() {
+		return Ok(());
+	}
+	if claims.len() == 1 {
+		let mut statement = conn.prepare_cached(
+			"SELECT r.id FROM claim_evidence ce JOIN records r ON r.rowid = ce.record
+			 WHERE ce.claim IN (SELECT rowid FROM claims WHERE id = ?1)",
+		)?;
+		let mut rows = statement.query([claims[0].id.0.as_bytes().as_slice()])?;
+		while let Some(row) = rows.next()? {
+			let bytes = row.get_ref(0)?.as_blob().map_err(rusqlite::Error::from)?;
+			claims[0].evidence.push(RecordId(
+				Uuid::from_slice(bytes).map_err(|_| StoreError::Corrupt("evidence record"))?,
 			));
+		}
+		return Ok(());
+	}
+
+	let mut by_id: std::collections::HashMap<[u8; 16], usize> =
+		std::collections::HashMap::with_capacity(claims.len());
+	for (index, claim) in claims.iter().enumerate() {
+		by_id.insert(*claim.id.0.as_bytes(), index);
+	}
+
+	let mut chunk_ids: Vec<[u8; 16]> = Vec::with_capacity(claims.len().min(CHUNK));
+	for start in (0..claims.len()).step_by(CHUNK) {
+		let end = (start + CHUNK).min(claims.len());
+		chunk_ids.clear();
+		chunk_ids.extend(
+			claims[start..end]
+				.iter()
+				.map(|claim| *claim.id.0.as_bytes()),
+		);
+
+		let mut sql = String::with_capacity(140 + chunk_ids.len() * 2);
+		sql.push_str(
+			"SELECT c.id, r.id FROM claims c
+			 JOIN claim_evidence ce ON ce.claim = c.rowid
+			 JOIN records r ON r.rowid = ce.record
+			 WHERE c.id IN (",
+		);
+		for i in 0..chunk_ids.len() {
+			if i > 0 {
+				sql.push(',');
+			}
+			sql.push('?');
+		}
+		sql.push(')');
+
+		let mut statement = conn.prepare_cached(&sql)?;
+		let mut rows = statement.query(rusqlite::params_from_iter(
+			chunk_ids.iter().map(<[u8; 16]>::as_slice),
+		))?;
+		while let Some(row) = rows.next()? {
+			let claim_bytes: [u8; 16] = row
+				.get_ref(0)?
+				.as_blob()
+				.map_err(rusqlite::Error::from)?
+				.try_into()
+				.map_err(|_| StoreError::Corrupt("claim id"))?;
+			let record_bytes = row.get_ref(1)?.as_blob().map_err(rusqlite::Error::from)?;
+			let record_id = RecordId(
+				Uuid::from_slice(record_bytes)
+					.map_err(|_| StoreError::Corrupt("evidence record"))?,
+			);
+			if let Some(&index) = by_id.get(&claim_bytes) {
+				claims[index].evidence.push(record_id);
+			}
 		}
 	}
 	Ok(())
