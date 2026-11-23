@@ -97,7 +97,12 @@ For every candidate, keep a private release record containing:
 
 ### Update before freezing
 
-During candidate preparation, update to the latest Leptoskit main revision:
+During candidate preparation, update to the latest Leptoskit main revision
+(also automated every 30 minutes by
+[sync-leptoskit.yml](../.github/workflows/sync-leptoskit.yml), which opens a PR,
+runs [ci.yml](../.github/workflows/ci.yml) and
+[apps.yml](../.github/workflows/apps.yml), and squash-merges only when every
+check passes):
 
 ```sh
 python3 scripts/update-leptoskit.py --no-check

@@ -4,12 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Optional git ref or commit SHA to check out
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: application-targets-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -62,6 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install

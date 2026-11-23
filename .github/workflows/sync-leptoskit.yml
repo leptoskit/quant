@@ -1,0 +1,263 @@
+name: sync-leptoskit
+
+on:
+  schedule:
+    # Check every 30 minutes for newer commits on leptoskit/leptoskit main.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Re-run verification even if an open sync PR already targets this Leptoskit revision
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-leptoskit
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.push.outputs.changed || 'false' }}
+      head_sha: ${{ steps.push.outputs.head_sha }}
+      pr_number: ${{ steps.push.outputs.pr_number }}
+      leptoskit_rev: ${{ steps.check.outputs.latest_rev }}
+      short_rev: ${{ steps.check.outputs.short_rev }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Check whether Leptoskit main has advanced
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          git fetch --quiet origin chore/sync-leptoskit || true
+
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          repo_url = "https://github.com/leptoskit/leptoskit"
+          branch = "chore/sync-leptoskit"
+          force = os.environ.get("FORCE", "false").lower() == "true"
+
+          def write_output(values: dict[str, str]) -> None:
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  for key, value in values.items():
+                      out.write(f"{key}={value}\n")
+
+          def pinned_rev_from_toml(text: str) -> str:
+              manifest = tomllib.loads(text)
+              rev = manifest["workspace"]["dependencies"]["leptoskit"]["rev"]
+              assert re.fullmatch(r"[0-9a-f]{40}", rev), f"Unexpected pinned rev: {rev!r}"
+              return rev
+
+          current_rev = pinned_rev_from_toml(Path("Cargo.toml").read_text())
+          latest_rev = subprocess.check_output(
+              ["git", "ls-remote", "--exit-code", repo_url, "refs/heads/main"],
+              text=True,
+          ).split()[0]
+          assert re.fullmatch(r"[0-9a-f]{40}", latest_rev), f"Unexpected upstream rev: {latest_rev!r}"
+          short_rev = latest_rev[:12]
+
+          print(f"Pinned Leptoskit rev: {current_rev}")
+          print(f"Latest Leptoskit rev: {latest_rev}")
+
+          open_pr = subprocess.check_output(
+              [
+                  "gh", "pr", "list",
+                  "--head", branch,
+                  "--base", "main",
+                  "--state", "open",
+                  "--json", "number",
+                  "--jq", ".[0].number // empty",
+              ],
+              text=True,
+          ).strip()
+
+          if current_rev == latest_rev:
+              print("Quant is already pinned to the latest Leptoskit main.")
+              if open_pr:
+                  print(f"Closing obsolete sync PR #{open_pr}.")
+                  subprocess.run(
+                      ["gh", "pr", "close", open_pr, "--delete-branch", "--comment",
+                       f"Closed automatically: `main` is already at `leptoskit/leptoskit@{latest_rev}`."],
+                      check=False,
+                  )
+              write_output({
+                  "needs_update": "false",
+                  "current_rev": current_rev,
+                  "latest_rev": latest_rev,
+                  "short_rev": short_rev,
+              })
+              raise SystemExit(0)
+
+          # Avoid burning CI minutes every 30 minutes if an open sync PR already
+          # targets this exact (main, latest_rev) pair and is waiting on a fix.
+          if open_pr and not force:
+              branch_cargo = subprocess.run(
+                  ["git", "show", f"origin/{branch}:Cargo.toml"],
+                  capture_output=True,
+                  text=True,
+              )
+              is_based_on_main = (
+                  subprocess.run(
+                      ["git", "merge-base", "--is-ancestor", "origin/main", f"origin/{branch}"],
+                      capture_output=True,
+                  ).returncode == 0
+              )
+              if branch_cargo.returncode == 0 and is_based_on_main:
+                  pr_rev = pinned_rev_from_toml(branch_cargo.stdout)
+                  if pr_rev == latest_rev:
+                      print(
+                          f"Open sync PR #{open_pr} already targets leptoskit@{latest_rev} "
+                          "on current main; skipping duplicate CI run (dispatch with force=true to retry)."
+                      )
+                      write_output({
+                          "needs_update": "false",
+                          "current_rev": current_rev,
+                          "latest_rev": latest_rev,
+                          "short_rev": short_rev,
+                      })
+                      raise SystemExit(0)
+
+          write_output({
+              "needs_update": "true",
+              "current_rev": current_rev,
+              "latest_rev": latest_rev,
+              "short_rev": short_rev,
+          })
+          PY
+      - name: Install the pinned toolchain
+        if: steps.check.outputs.needs_update == 'true'
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Update Leptoskit pin and Cargo.lock
+        if: steps.check.outputs.needs_update == 'true'
+        env:
+          LATEST_REV: ${{ steps.check.outputs.latest_rev }}
+        run: |
+          set -euo pipefail
+          git checkout -B chore/sync-leptoskit origin/main
+          python3 scripts/update-leptoskit.py --no-check --rev "$LATEST_REV"
+          python3 scripts/check-project.py
+      - name: Push sync branch and open or update PR
+        id: push
+        if: steps.check.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_REV: ${{ steps.check.outputs.current_rev }}
+          LATEST_REV: ${{ steps.check.outputs.latest_rev }}
+          SHORT_REV: ${{ steps.check.outputs.short_rev }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock deploy/landing/Dockerfile deploy/relay/Dockerfile
+          git commit -m "chore(sdk): bump leptoskit to ${SHORT_REV}"
+          HEAD_SHA=$(git rev-parse HEAD)
+          git push --force origin HEAD:refs/heads/chore/sync-leptoskit
+
+          TITLE="chore(sdk): bump leptoskit to ${SHORT_REV}"
+          BODY=$(cat <<EOF
+          Automated sync of Quant's pinned Leptoskit SDK revision.
+
+          - Previous: \`${CURRENT_REV}\`
+          - Latest: \`${LATEST_REV}\`
+          - Upstream diff: https://github.com/leptoskit/leptoskit/compare/${CURRENT_REV}...${LATEST_REV}
+
+          Verification (\`ci\` + \`application-targets\`) runs in [sync-leptoskit](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). This PR squash-merges automatically once every check passes.
+          EOF
+          )
+
+          PR_NUMBER=$(gh pr list --head chore/sync-leptoskit --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --title "$TITLE" --body "$BODY"
+          else
+            PR_URL=$(gh pr create --base main --head chore/sync-leptoskit --title "$TITLE" --body "$BODY")
+            PR_NUMBER=$(gh pr view "$PR_URL" --json number --jq '.number')
+          fi
+
+          {
+            echo "changed=true"
+            echo "head_sha=${HEAD_SHA}"
+            echo "pr_number=${PR_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
+
+  verify-ci:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.sync.outputs.head_sha }}
+
+  verify-apps:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/apps.yml
+    with:
+      ref: ${{ needs.sync.outputs.head_sha }}
+
+  merge:
+    needs: [sync, verify-ci, verify-apps]
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Squash-merge verified Leptoskit sync PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.sync.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.sync.outputs.head_sha }}
+        run: |
+          gh pr merge "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --squash \
+            --delete-branch \
+            --match-head-commit "$HEAD_SHA"
+
+  report-failure:
+    needs: [sync, verify-ci, verify-apps]
+    if: |
+      always() &&
+      needs.sync.outputs.changed == 'true' &&
+      (needs.verify-ci.result != 'success' || needs.verify-apps.result != 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment on sync PR with failed verification run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.sync.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.sync.outputs.head_sha }}
+          LEPTOSKIT_REV: ${{ needs.sync.outputs.leptoskit_rev }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --body "Automated sync to \`leptoskit/leptoskit@${LEPTOSKIT_REV}\` (commit \`${HEAD_SHA}\`) failed verification and was not merged. Inspect the run: ${RUN_URL}"
