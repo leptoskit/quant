@@ -12,14 +12,22 @@ REPOSITORY = "https://github.com/leptoskit/leptoskit"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-check", action="store_true", help="Resolve the lockfile; leave compilation to CI.")
+    parser.add_argument(
+        "--rev",
+        help="Pin an explicit 40-character Leptoskit commit SHA instead of querying refs/heads/main.",
+    )
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     config = root / ".cargo/config.toml"
     if config.exists() and REPOSITORY in config.read_text():
         raise SystemExit(f"Disable the local SDK override in {config} first")
-    revision = subprocess.check_output(
-        ["git", "ls-remote", "--exit-code", REPOSITORY, "refs/heads/main"], text=True
-    ).split()[0]
+    revision = (
+        arguments.rev
+        if arguments.rev
+        else subprocess.check_output(
+            ["git", "ls-remote", "--exit-code", REPOSITORY, "refs/heads/main"], text=True
+        ).split()[0]
+    )
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise SystemExit(f"Unexpected main revision: {revision!r}")
     manifest = root / "Cargo.toml"
@@ -44,7 +52,7 @@ def main():
         # Platform features remain separate, including in a single workspace.
         for packages in (
             (),  # Core default members.
-            ("quant_app", "quant_model", "quant_service"),
+            ("quant_app", "quant_model", "quant_phone", "quant_service"),
             ("relay", "relay_db"),
             ("landing", "landing_app", "landing_backend", "landing_shared"),
         ):
