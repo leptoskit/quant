@@ -199,6 +199,8 @@ impl Store {
 			 PRAGMA synchronous = NORMAL;
 			 PRAGMA foreign_keys = ON;
 			 PRAGMA secure_delete = ON;
+			 PRAGMA temp_store = MEMORY;
+			 PRAGMA cache_size = -16000;
 			 PRAGMA busy_timeout = 5000;",
 		)?;
 		schema::migrate(&conn)?;

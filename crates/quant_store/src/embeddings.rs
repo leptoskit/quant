@@ -66,7 +66,22 @@ pub fn space_hash(model: &str, dims: usize, chunking: u32) -> String {
 
 /// The L2 norm of `vector`.
 pub fn l2_norm(vector: &[f32]) -> f32 {
-	vector.iter().map(|x| x * x).sum::<f32>().sqrt()
+	let mut s0 = 0.0_f32;
+	let mut s1 = 0.0_f32;
+	let mut s2 = 0.0_f32;
+	let mut s3 = 0.0_f32;
+	let (chunks, rem) = vector.as_chunks::<4>();
+	for chunk in chunks {
+		s0 += chunk[0] * chunk[0];
+		s1 += chunk[1] * chunk[1];
+		s2 += chunk[2] * chunk[2];
+		s3 += chunk[3] * chunk[3];
+	}
+	let mut sum = (s0 + s1) + (s2 + s3);
+	for &x in rem {
+		sum += x * x;
+	}
+	sum.sqrt()
 }
 
 /// Scale `vector` in place to unit L2 length. A zero-length vector stays as
@@ -74,8 +89,9 @@ pub fn l2_norm(vector: &[f32]) -> f32 {
 pub fn l2_normalize(vector: &mut [f32]) {
 	let norm = l2_norm(vector);
 	if norm > 0.0 && norm.is_finite() {
+		let inv = 1.0 / norm;
 		for value in vector {
-			*value /= norm;
+			*value *= inv;
 		}
 	}
 }
@@ -83,14 +99,51 @@ pub fn l2_normalize(vector: &mut [f32]) {
 /// The cosine similarity of two vectors, in `-1..=1`. Vectors of different
 /// lengths compare only their shared prefix; a zero-length side scores 0.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-	let mut dot = 0.0;
-	let mut aa = 0.0;
-	let mut bb = 0.0;
-	for (x, y) in a.iter().zip(b.iter()) {
+	let len = a.len().min(b.len());
+	let a = &a[..len];
+	let b = &b[..len];
+
+	let mut dot0 = 0.0_f32;
+	let mut dot1 = 0.0_f32;
+	let mut dot2 = 0.0_f32;
+	let mut dot3 = 0.0_f32;
+	let mut aa0 = 0.0_f32;
+	let mut aa1 = 0.0_f32;
+	let mut aa2 = 0.0_f32;
+	let mut aa3 = 0.0_f32;
+	let mut bb0 = 0.0_f32;
+	let mut bb1 = 0.0_f32;
+	let mut bb2 = 0.0_f32;
+	let mut bb3 = 0.0_f32;
+
+	let (a_chunks, a_rem) = a.as_chunks::<4>();
+	let (b_chunks, b_rem) = b.as_chunks::<4>();
+
+	for (ac, bc) in a_chunks.iter().zip(b_chunks.iter()) {
+		dot0 += ac[0] * bc[0];
+		dot1 += ac[1] * bc[1];
+		dot2 += ac[2] * bc[2];
+		dot3 += ac[3] * bc[3];
+		aa0 += ac[0] * ac[0];
+		aa1 += ac[1] * ac[1];
+		aa2 += ac[2] * ac[2];
+		aa3 += ac[3] * ac[3];
+		bb0 += bc[0] * bc[0];
+		bb1 += bc[1] * bc[1];
+		bb2 += bc[2] * bc[2];
+		bb3 += bc[3] * bc[3];
+	}
+
+	let mut dot = (dot0 + dot1) + (dot2 + dot3);
+	let mut aa = (aa0 + aa1) + (aa2 + aa3);
+	let mut bb = (bb0 + bb1) + (bb2 + bb3);
+
+	for (&x, &y) in a_rem.iter().zip(b_rem.iter()) {
 		dot += x * y;
 		aa += x * x;
 		bb += y * y;
 	}
+
 	if aa == 0.0 || bb == 0.0 {
 		0.0
 	} else {
@@ -98,12 +151,78 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 	}
 }
 
+/// Cosine similarity between a query slice (with precomputed `query_norm` when
+/// the blob length matches `query.len()`) and a little-endian f32 SQLite blob,
+/// without allocating intermediate `Vec<u8>` or `Vec<f32>` buffers.
+#[inline]
+fn cosine_le_bytes(query: &[f32], query_norm: f32, blob: &[u8]) -> f32 {
+	if blob.len() % 4 != 0 || query.is_empty() || blob.is_empty() {
+		return 0.0;
+	}
+	let blob_dims = blob.len() / 4;
+	let len = query.len().min(blob_dims);
+	let q = &query[..len];
+	let bytes = &blob[..len * 4];
+
+	let mut dot0 = 0.0_f32;
+	let mut dot1 = 0.0_f32;
+	let mut dot2 = 0.0_f32;
+	let mut dot3 = 0.0_f32;
+	let mut bb0 = 0.0_f32;
+	let mut bb1 = 0.0_f32;
+	let mut bb2 = 0.0_f32;
+	let mut bb3 = 0.0_f32;
+
+	let (q_chunks, q_rem) = q.as_chunks::<4>();
+	let (b_chunks, b_rem) = bytes.as_chunks::<16>();
+
+	for (qc, bc) in q_chunks.iter().zip(b_chunks.iter()) {
+		let y0 = f32::from_le_bytes([bc[0], bc[1], bc[2], bc[3]]);
+		let y1 = f32::from_le_bytes([bc[4], bc[5], bc[6], bc[7]]);
+		let y2 = f32::from_le_bytes([bc[8], bc[9], bc[10], bc[11]]);
+		let y3 = f32::from_le_bytes([bc[12], bc[13], bc[14], bc[15]]);
+		dot0 += qc[0] * y0;
+		dot1 += qc[1] * y1;
+		dot2 += qc[2] * y2;
+		dot3 += qc[3] * y3;
+		bb0 += y0 * y0;
+		bb1 += y1 * y1;
+		bb2 += y2 * y2;
+		bb3 += y3 * y3;
+	}
+
+	let mut dot = (dot0 + dot1) + (dot2 + dot3);
+	let mut bb = (bb0 + bb1) + (bb2 + bb3);
+
+	for (&x, bc) in q_rem.iter().zip(b_rem.as_chunks::<4>().0) {
+		let y = f32::from_le_bytes(*bc);
+		dot += x * y;
+		bb += y * y;
+	}
+
+	if bb == 0.0 {
+		return 0.0;
+	}
+
+	let q_norm = if len == query.len() {
+		query_norm
+	} else {
+		l2_norm(q)
+	};
+	if q_norm == 0.0 {
+		0.0
+	} else {
+		dot / (q_norm * bb.sqrt())
+	}
+}
+
 /// Encode `vector` as little-endian f32 bytes, the on-disk form.
 pub fn vector_to_bytes(vector: &[f32]) -> Vec<u8> {
-	vector
-		.iter()
-		.flat_map(|value| value.to_le_bytes())
-		.collect()
+	let mut out = Vec::with_capacity(vector.len() * 4);
+	for value in vector {
+		out.extend_from_slice(&value.to_le_bytes());
+	}
+	out
 }
 
 /// Decode little-endian f32 bytes back into a vector. A byte length that is
@@ -112,18 +231,11 @@ pub fn vector_from_bytes(bytes: &[u8]) -> Vec<f32> {
 	if bytes.len() % 4 != 0 {
 		return Vec::new();
 	}
-	bytes
-		.chunks(4)
-		.map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-		.collect()
-}
-
-/// One candidate row for a vector search: the record's row number, start
-/// time, and stored vector.
-struct RowVector {
-	rowid: i64,
-	start_us: i64,
-	vector: Vec<f32>,
+	let mut out = Vec::with_capacity(bytes.len() / 4);
+	for chunk in bytes.as_chunks::<4>().0 {
+		out.push(f32::from_le_bytes(*chunk));
+	}
+	out
 }
 
 impl Store {
@@ -207,9 +319,16 @@ impl Store {
 		Ok(count > 0)
 	}
 
-	/// Candidate rows with their vectors for a vector search over `query`'s
-	/// selector and range in `space`, newest first, at most `pool`.
-	fn candidates(&self, query: &RecordQuery, space: &str, pool: usize) -> Result<Vec<RowVector>> {
+	/// Records most similar to `vector` in `space`, within `query`'s
+	/// selector and range, best first. Vectors never leave the store; the
+	/// caller passes the query's embedding in.
+	pub fn similar(
+		&self,
+		query: &RecordQuery,
+		space: &str,
+		vector: &[f32],
+	) -> Result<Vec<SearchHit>> {
+		const POOL: usize = 2_000;
 		if query.selector.is_empty() || query.limit == 0 {
 			return Ok(Vec::new());
 		}
@@ -220,58 +339,50 @@ impl Store {
 			crate::micros(query.range.start).into(),
 		];
 		let selector = query.selector.sql("r.", &mut params);
-		params.push(i64::try_from(pool).unwrap_or(i64::MAX).into());
+		params.push(i64::try_from(POOL).unwrap_or(i64::MAX).into());
 		let limit_index = params.len();
 		let sql = format!(
-			"SELECT r.rowid, r.start_us, e.vector FROM embeddings e JOIN records r ON r.rowid = \
-			 e.record
-			 WHERE e.space = ?1 AND r.start_us < ?2 AND (r.start_us >= ?3 OR coalesce(r.end_us, r.start_us) \
-			 > ?4)
+			"SELECT r.rowid, r.start_us, e.vector
+			 FROM records r CROSS JOIN embeddings e ON e.record = r.rowid AND e.space = ?1
+			 WHERE r.start_us < ?2 AND (r.start_us >= ?3 OR coalesce(r.end_us, r.start_us) > ?4)
 			 AND {selector}
 			 ORDER BY r.start_us DESC LIMIT ?{limit_index}"
 		);
+		let query_norm = l2_norm(vector);
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&sql)?;
-		let rows = statement.query_map(params_from_iter(params), |row| {
-			Ok(RowVector {
-				rowid: row.get(0)?,
-				start_us: row.get(1)?,
-				vector: vector_from_bytes(&row.get::<_, Vec<u8>>(2)?),
-			})
-		})?;
-		rows.map(|row| row.map_err(Into::into)).collect()
-	}
+		let mut scored: Vec<(f32, i64, i64)> = Vec::new();
+		let mut rows = statement.query(params_from_iter(params))?;
+		while let Some(row) = rows.next()? {
+			let rowid: i64 = row.get(0)?;
+			let start_us: i64 = row.get(1)?;
+			let blob = row.get_ref(2)?.as_blob().map_err(rusqlite::Error::from)?;
+			let score = cosine_le_bytes(vector, query_norm, blob);
+			scored.push((score, rowid, start_us));
+		}
+		drop(rows);
+		drop(statement);
 
-	/// The record for `rowid`.
-	fn record_row(&self, rowid: i64) -> Result<Option<Record>> {
-		let conn = self.conn();
-		conn.query_row(
-			&format!("SELECT {COLUMNS} FROM records r WHERE r.rowid = ?1"),
-			[rowid],
-			record_from_row,
-		)
-		.optional()?
-		.transpose()
-	}
+		let cmp = |a: &(f32, i64, i64), b: &(f32, i64, i64)| {
+			b.0.total_cmp(&a.0).then_with(|| b.2.cmp(&a.2))
+		};
+		let top = query.limit.min(scored.len());
+		if top < scored.len() {
+			scored.select_nth_unstable_by(top, cmp);
+			scored.truncate(top);
+		}
+		scored.sort_by(cmp);
 
-	/// Records most similar to `vector` in `space`, within `query`'s
-	/// selector and range, best first. Vectors never leave the store; the
-	/// caller passes the query's embedding in.
-	pub fn similar(
-		&self,
-		query: &RecordQuery,
-		space: &str,
-		vector: &[f32],
-	) -> Result<Vec<SearchHit>> {
-		let mut scored: Vec<(f32, RowVector)> = self
-			.candidates(query, space, 2_000)?
-			.into_iter()
-			.map(|row| (cosine(vector, &row.vector), row))
-			.collect();
-		scored.sort_by(|(a, x), (b, y)| b.total_cmp(a).then_with(|| y.start_us.cmp(&x.start_us)));
-		let mut hits = Vec::with_capacity(query.limit.min(scored.len()));
-		for (_, row) in scored.into_iter().take(query.limit) {
-			let Some(record) = self.record_row(row.rowid)? else {
+		let mut fetch = conn.prepare_cached(&format!(
+			"SELECT {COLUMNS} FROM records r WHERE r.rowid = ?1"
+		))?;
+		let mut hits = Vec::with_capacity(top);
+		for &(_, rowid, _) in &scored {
+			let record: Option<Record> = fetch
+				.query_row([rowid], record_from_row)
+				.optional()?
+				.transpose()?;
+			let Some(record) = record else {
 				continue;
 			};
 			hits.push(SearchHit {
@@ -335,34 +446,68 @@ impl Store {
 		vector: &[f32],
 		limit: usize,
 	) -> Result<Vec<Claim>> {
+		if limit == 0 {
+			return Ok(Vec::new());
+		}
 		let mut params: Vec<Value> = vec![space.to_owned().into()];
 		let condition = filter_sql(filter, &mut params);
 		params.push(2_000_i64.into());
 		let limit_index = params.len();
+		// Sort and limit lightweight `(rowid, updated_at_us)` pairs before
+		// looking up the embedding blobs so SQLite never spills multi-kilobyte
+		// vectors into a temporary B-tree sorter.
 		let sql = format!(
-			"SELECT {CLAIM_COLUMNS}, c.rowid, ce.vector FROM claim_embeddings ce
-			 JOIN claims c ON c.rowid = ce.claim
-			 WHERE ce.space = ?1 AND {condition}
-			 ORDER BY c.updated_at_us DESC LIMIT ?{limit_index}"
+			"WITH candidates AS MATERIALIZED (
+				SELECT c.rowid AS claim_rowid
+				FROM claim_embeddings ce
+				JOIN claims c ON c.rowid = ce.claim
+				WHERE ce.space = ?1 AND {condition}
+				ORDER BY c.updated_at_us DESC
+				LIMIT ?{limit_index}
+			 )
+			 SELECT candidates.claim_rowid, ce.vector
+			 FROM candidates
+			 JOIN claim_embeddings ce ON ce.claim = candidates.claim_rowid AND ce.space = ?1"
 		);
+		let query_norm = l2_norm(vector);
 		let conn = self.conn();
 		let mut statement = conn.prepare_cached(&sql)?;
-		let rows = statement.query_map(params_from_iter(params), |row| {
-			let claim = claim_from_row(row)?;
-			let vector = vector_from_bytes(&row.get::<_, Vec<u8>>(16)?);
-			Ok(claim.map(|claim| (claim, vector)))
-		})?;
-		let mut scored: Vec<(f32, Claim)> = Vec::new();
-		for row in rows {
-			let (claim, candidate) = row??;
-			scored.push((cosine(vector, &candidate), claim));
+		let mut scored: Vec<(f32, usize, i64)> = Vec::new();
+		let mut rows = statement.query(params_from_iter(params))?;
+		while let Some(row) = rows.next()? {
+			let rowid: i64 = row.get(0)?;
+			let blob = row.get_ref(1)?.as_blob().map_err(rusqlite::Error::from)?;
+			let score = cosine_le_bytes(vector, query_norm, blob);
+			let ord = scored.len();
+			scored.push((score, ord, rowid));
 		}
-		scored.sort_by(|(a, _), (b, _)| b.total_cmp(a));
-		let mut claims: Vec<Claim> = scored
-			.into_iter()
-			.take(limit)
-			.map(|(_, claim)| claim)
-			.collect();
+		drop(rows);
+		drop(statement);
+
+		let cmp = |a: &(f32, usize, i64), b: &(f32, usize, i64)| {
+			b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1))
+		};
+		let top = limit.min(scored.len());
+		if top < scored.len() {
+			scored.select_nth_unstable_by(top, cmp);
+			scored.truncate(top);
+		}
+		scored.sort_by(cmp);
+
+		let mut fetch = conn.prepare_cached(&format!(
+			"SELECT {CLAIM_COLUMNS} FROM claims c WHERE c.rowid = ?1"
+		))?;
+		let mut claims: Vec<Claim> = Vec::with_capacity(top);
+		for &(_, _, rowid) in &scored {
+			if let Some(claim) = fetch
+				.query_row([rowid], claim_from_row)
+				.optional()?
+				.transpose()?
+			{
+				claims.push(claim);
+			}
+		}
+		drop(fetch);
 		attach_evidence(&conn, &mut claims)?;
 		Ok(claims)
 	}
