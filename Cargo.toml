@@ -23,41 +23,41 @@ publish = false
 quant_model = { path = "crates/quant_model" }
 quant_phone = { path = "crates/quant_phone" }
 quant_service = { path = "crates/quant_service" }
-leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_plugin_app_usage = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_background = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_battery = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_ble = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_health = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_location = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_notifications = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_plugin_pedometer = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_secure_store = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_sensors = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_thermal = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_watch_sync = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_plugin_wearable = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_sensor = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
-leptoskit_watch = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
+leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_bridge = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_bridge_ffi = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_build = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_plugin_app_usage = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_autostart = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_background = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_battery = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_ble = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_device_keys = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_health = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_location = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_menu = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_notifications = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_plugin_pedometer = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_secure_store = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_sensors = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_thermal = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_tray = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_watch_sync = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_plugin_wearable = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_sensor = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_testing = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_wasm = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
+leptoskit_watch = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
 dispatch2 = "0.3"
 png = "0.18"
 relay_db = { path = "crates/relay_db" }
-leptoskit_axum = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_db = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
+leptoskit_axum = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_db = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
 landing_shared = { path = "crates/landing_shared" }
 # Test harnesses own a reactive Owner; Leptoskit does not re-export it.
 reactive_graph = "0.3.0-rc1"
-leptoskit_router = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765", default-features = false }
+leptoskit_router = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4", default-features = false }
 skribble_leptoskit = { git = "https://github.com/openbudgetfun/skribble", rev = "46b8e635b1d983f92054d13fcc0bc513e7b9a43c" }
 quant_core = { path = "crates/quant_core" }
 quant_access = { path = "crates/quant_access" }
@@ -154,5 +154,5 @@ strip = "debuginfo"
 strip = "none"
 
 [patch.crates-io]
-leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "5d323bfc6b15ae70a243fbe3d0d21bd6836d1765" }
+leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
+leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "4f52896af397cc38834ac9d937a04b02bc5c5bf4" }
