@@ -9,7 +9,7 @@ file("../../../.leptoskit/android/gradle-plugins.txt")
     .takeIf { it.exists() }
     ?.readLines()
     ?.filter { it.isNotBlank() }
-    ?.forEach { plugin -> apply(plugin) }
+    ?.forEach { plugin -> apply(plugin = plugin) }
 
 // The app's version, from app.version in leptoskit.toml, which every build
 // writes here. `leptoskit publish play` numbers each upload with the
