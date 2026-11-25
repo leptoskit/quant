@@ -102,14 +102,15 @@ For every candidate, keep a private release record containing:
 During candidate preparation, update to the latest Leptoskit main revision
 (also automated every 30 minutes by
 [sync-leptoskit.yml](../.github/workflows/sync-leptoskit.yml), which opens a PR,
-runs [ci.yml](../.github/workflows/ci.yml) and
-[apps.yml](../.github/workflows/apps.yml), and squash-merges only when every
-check passes). Two caveats apply to that bot: its merge uses the repository
+runs [ci.yml](../.github/workflows/ci.yml),
+[apps.yml](../.github/workflows/apps.yml) and
+[containers.yml](../.github/workflows/containers.yml), and squash-merges only
+when every check passes). Two caveats apply to that bot: its merge uses the repository
 token and starts no `push` run on `main` (see section 2 for running workflows by
 hand), and the `pull_request` runs GitHub creates for the bot's pull request
 wait for approval and are marked failed when the bot merges, with no jobs having
-run. The verification that counts is the `verify-ci` and `verify-apps` jobs
-inside the sync run.
+run. The verification that counts is the `verify-ci`, `verify-apps` and
+`verify-containers` jobs inside the sync run.
 
 To update by hand:
 

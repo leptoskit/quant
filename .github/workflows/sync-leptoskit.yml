@@ -184,7 +184,7 @@ jobs:
           - Latest: \`${LATEST_REV}\`
           - Upstream diff: https://github.com/leptoskit/leptoskit/compare/${CURRENT_REV}...${LATEST_REV}
 
-          Verification (\`ci\` + \`application-targets\`) runs in [sync-leptoskit](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). This PR squash-merges automatically once every check passes.
+          Verification (\`ci\`, \`application-targets\` and \`containers\`) runs in [sync-leptoskit](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). This PR squash-merges automatically once every check passes.
           EOF
           )
 
