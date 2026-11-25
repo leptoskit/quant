@@ -7,8 +7,8 @@ The Quant mark is a disc that is smooth on its left half and sampled into bars o
 | `mark.svg`        | The mark in color, on light or dark backgrounds.                                                                             |
 | `lockup.svg`      | The mark with the wordmark; the wordmark follows the reader's light or dark appearance.                                      |
 | `mono.svg`        | One color (`currentColor`), for template images such as the menu-bar icon (`assets/app/tray/icon.png`).               |
-| `icon.svg`        | The macOS app icon: the mark on the 824-pixel rounded square of Apple's 1024-pixel grid. `platforms/macos` uses it as `app.icon`. |
-| `icon-square.svg` | Full bleed, for platforms that mask the icon themselves (iOS, Android adaptive icons) and social previews.                   |
+| `icon.svg`        | The macOS app icon: the mark on the 824-pixel rounded square of Apple's 1024-pixel grid; set as `[app.icons.macos].image` in `leptoskit.toml`. |
+| `icon-square.svg` | Full bleed, for platforms that mask the icon themselves (iOS, Android adaptive icons) and social previews; set as `[app.icons].image` in `leptoskit.toml`. |
 
 Colors: violet `#5B4CF5` (lighter `#8F85FF` on the dark icon), coral `#FF7A59` (`#FF8A6B` on the dark icon), and night `#221D5C` to `#110E30`.
 
