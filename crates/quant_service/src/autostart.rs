@@ -8,7 +8,7 @@ use leptoskit_plugin_autostart::Autostart;
 
 /// The app's identity for the login entry: its bundle identifier.
 ///
-/// The capture daemon deliberately uses a different LaunchAgent label
+/// The capture daemon deliberately uses a different `LaunchAgent` label
 /// (`dev.leptoskit.quant.daemon` in `quant_cli`) so toggling this switch never
 /// overwrites or removes the daemon's entry.
 const IDENTITY: &str = "dev.leptoskit.quant";
