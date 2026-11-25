@@ -1,8 +1,6 @@
 //! The relay app over the real database: invite gating, limits, and byte
 //! accounting, end to end over sockets.
 
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,32 +65,20 @@ async fn serve_at(database: &str, limits: Limits) -> Served {
 	Served { url, store, server }
 }
 
-/// A database file of its own for `test`, under the system temporary
-/// directory: the process id and a timestamp keep parallel and repeated runs
-/// apart.
-fn database_file(test: &str) -> PathBuf {
-	let stamp = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.unwrap()
-		.as_nanos();
-	std::env::temp_dir().join(format!(
-		"quant-relay-{test}-{}-{stamp}.sqlite3",
-		std::process::id()
-	))
+/// A scratch directory of its own for one test, under the system temporary
+/// directory. Dropping it removes the database and the write-ahead log and
+/// shared-memory files `SQLite` keeps beside it, including when an assertion
+/// fails and the test unwinds.
+fn database_dir() -> tempfile::TempDir {
+	tempfile::Builder::new()
+		.prefix("quant-relay-")
+		.tempdir()
+		.expect("a scratch directory for the relay database")
 }
 
-/// The `sqlite://` URL for a database file.
-fn database_url(path: &Path) -> String {
-	format!("sqlite://{}", path.display())
-}
-
-/// Remove `path`, along with SQLite's write-ahead log and shared-memory files.
-fn remove_database(path: &Path) {
-	for suffix in ["", "-wal", "-shm"] {
-		let mut name = path.as_os_str().to_owned();
-		name.push(suffix);
-		let _ = std::fs::remove_file(PathBuf::from(name));
-	}
+/// The `sqlite://` URL of `name` inside `dir`.
+fn database_url(dir: &tempfile::TempDir, name: &str) -> String {
+	format!("sqlite://{}", dir.path().join(name).display())
 }
 
 fn limits() -> Limits {
@@ -448,10 +434,11 @@ async fn the_connection_limit_holds_per_rid() {
 
 #[tokio::test]
 async fn a_registration_and_its_spent_invite_survive_a_restart() {
-	let path = database_file("registration");
-	let url = database_url(&path);
+	let dir = database_dir();
+	let url = database_url(&dir, "registration.sqlite3");
 	let code = "restart-invite";
-	let key = RelayKey::generate();
+	let key = Arc::new(RelayKey::generate());
+	let rid = key.rid();
 
 	let before = serve_at(&url, limits()).await;
 	relay_db::NewInvite {
@@ -463,16 +450,23 @@ async fn a_registration_and_its_spent_invite_survive_a_restart() {
 	.await
 	.unwrap();
 	assert_eq!(try_listen(&before.url, &key, Some(code)).await, None);
-	wait_for_registration(&before.store, &key.rid()).await;
+	wait_for_registration(&before.store, &rid).await;
 	before.stop().await;
 
-	// A new relay over the same file knows the daemon and the invite it spent.
+	// A new relay over the same file knows the daemon and the invite it spent,
+	// so the daemon re-registers with no invite and traffic reaches it.
 	let after = serve_at(&url, limits()).await;
+	let daemon = start_daemon(&after.url, &key).await;
+	let mut client = dial_client(&after.url, &rid).await;
+	let payload = vec![7_u8; 1024];
 	assert_eq!(
-		try_listen(&after.url, &key, None).await,
-		None,
-		"a registered daemon re-listens without an invite"
+		echo_round_trip(&mut client, &payload).await,
+		payload,
+		"a registered daemon re-listens without an invite and carries traffic"
 	);
+	client.close(None).await.unwrap();
+	stop_daemon(daemon).await;
+
 	let stranger = RelayKey::generate();
 	assert_eq!(
 		try_listen(&after.url, &stranger, Some(code))
@@ -488,14 +482,12 @@ async fn a_registration_and_its_spent_invite_survive_a_restart() {
 		"invite gating stays on across a restart"
 	);
 	after.stop().await;
-
-	remove_database(&path);
 }
 
 #[tokio::test]
 async fn usage_counters_survive_a_restart() {
-	let path = database_file("usage");
-	let url = database_url(&path);
+	let dir = database_dir();
+	let url = database_url(&dir, "usage.sqlite3");
 	let key = Arc::new(RelayKey::generate());
 	let rid = key.rid();
 	let today = day(jiff::Timestamp::now());
@@ -526,8 +518,6 @@ async fn usage_counters_survive_a_restart() {
 	wait_for_usage(&after.store, &rid, &today, counted + 2048).await;
 	stop_daemon(daemon).await;
 	after.stop().await;
-
-	remove_database(&path);
 }
 
 #[tokio::test]
@@ -536,8 +526,8 @@ async fn the_daily_byte_limit_holds_across_a_restart() {
 		bytes_per_day: 1024,
 		..limits()
 	};
-	let path = database_file("daily-limit");
-	let url = database_url(&path);
+	let dir = database_dir();
+	let url = database_url(&dir, "daily-limit.sqlite3");
 	let key = Arc::new(RelayKey::generate());
 	let rid = key.rid();
 	let today = day(jiff::Timestamp::now());
@@ -581,6 +571,4 @@ async fn the_daily_byte_limit_holds_across_a_restart() {
 	);
 	stop_daemon(daemon).await;
 	after.stop().await;
-
-	remove_database(&path);
 }

@@ -7099,6 +7099,7 @@ dependencies = [
  "leptoskit_db",
  "quant_relay",
  "relay_db",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",
 ]

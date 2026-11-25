@@ -31,6 +31,7 @@ tokio = { workspace = true }
 [dev-dependencies]
 futures-util = "0.3"
 jiff = { version = "0.2", features = ["serde"] }
+tempfile = { workspace = true }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 
 
