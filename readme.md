@@ -10,7 +10,7 @@ Quant records what you do — what is on your screens, what you hear and say, wh
 
 Questions like "how did I sleep after late coffee?", "when do I focus best?", or "what did we agree on in Tuesday's call?" are answerable from data you already produce. The data is also the most sensitive you have. Quant treats both facts as requirements:
 
-- **Everything is captured, quietly.** Capture runs in a background daemon at low priority, skips frames that did not change, pauses when you are idle or the screen is locked, and leaves out the password managers it knows and the private browsing windows it detects.
+- **Everything is captured, quietly.** Capture runs in a background daemon at low priority, skips frames that did not change, pauses when you are idle or the screen is locked, and keeps the password managers it knows and the private browsing windows it detects out of screenshots.
 - **Nothing is readable by default.** A new agent sees one tool that tells it how to ask you for access.
 - **Access is specific.** `health:summary` lets an agent see your average heart rate per hour, never a raw sample, a screenshot, or a window title. `screen:read` gives on-screen text with secrets redacted, but no images. `audio:raw` is a deliberate choice.
 - **Extraction is bounded.** Each grant has a lookback window, an expiry, and limits on requests per minute, records per hour, and bytes per day.
@@ -75,7 +75,7 @@ quant capture set --exclude-app com.apple.Notes --ocr accurate
 quant capture pause --minutes 30   # or `quant capture resume`
 ```
 
-Known password managers and detected private or incognito browser windows are left out; review the exclusions with `quant capture set` before relying on them. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
+Screenshots leave out known password managers and detected private or incognito browser windows, and their window titles are not recorded; which app was in front, and for how long, still is. Review the exclusions with `quant capture show` before relying on them. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
 
 The menu-bar app in [desktop app](docs/desktop.md) shows the same status, pauses and resumes, saves the last minutes of audio, and approves agents, without a terminal.
 

@@ -26,9 +26,9 @@ const STEPS: [Step; 3] = [
 		title: "Capture",
 		body: "A quiet daemon on your Mac records what is on screen, which apps you use, and what \
 		       you hear and say. It pauses when you are idle, skips frames that did not change, \
-		       and leaves out the password managers it knows and any private browsing window it \
-		       detects. Phones and any sensor that can print numbers feed in through write-only \
-		       grants.",
+		       and keeps the password managers it knows and any private browsing window it \
+		       detects out of screenshots. Phones and any sensor that can print numbers feed in \
+		       through write-only grants.",
 	},
 	Step {
 		number: "2",
