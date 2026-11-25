@@ -62,7 +62,8 @@ ENV LEPTOS_ENV=PROD \
 # The SQLite database lives on a volume, the one place the server writes.
 ENV DATABASE_URL=sqlite:///data/relay.sqlite3
 VOLUME /data
-USER app
+# Numeric, so hosts that require a non-root user by id (Kubernetes runAsNonRoot) accept it.
+USER 10001:10001
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
   CMD ["curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:3000/healthz"]
