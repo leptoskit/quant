@@ -27,6 +27,7 @@ vault.json
 **/quant.db
 **/quant.db-*
 media/
+**/media/
 *.db
 **/*.db
 *.db-*
