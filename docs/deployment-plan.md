@@ -40,16 +40,18 @@ claims are already present. Each affects only the destinations listed.
 
 | Destination | Prerequisite | Evidence required before distribution |
 | --- | --- | --- |
-| All | Record an immutable candidate and test results. Current CI checks builds/tests; it does not publish a complete release. | Exact Quant SHA, SDK SHA, tool versions, checks, artifact hashes and rollback references. |
-| Containers | Verify both actual Docker builds. The Dockerfiles install the SDK CLI before copying the project's toolchain file, and use a floating Rust bootstrap image. | A successful build with the intended CLI compiler; pin the bootstrap image/toolchain and base image digests for the release. Adjust installation order if the SDK needs the project's nightly compiler. |
-| Containers | Set owned app names, region, domains, registry access and machine capacity. The checked-in relay name `relay` is a template value. | Reviewed environment inventory and successful staging deployment. |
+| All | Record an immutable candidate and test results. Current CI checks builds/tests; it does not publish a complete release. `ci`, `application-targets` and `containers` can be started by hand (`gh workflow run ci.yml --ref <ref>`, likewise `apps.yml` and `containers.yml`; `ci.yml` and `apps.yml` also accept `-f ref=<sha>` for an exact commit). That matters because merges made by `sync-leptoskit.yml` use the repository token, which starts no `push` run, so the newest `main` commit can have no recorded run of its own. | Exact Quant SHA, SDK SHA, tool versions, checks, artifact hashes and rollback references. |
+| Containers | Verify both actual Docker builds. Both Dockerfiles copy `rust-toolchain.toml` and install that toolchain before installing the SDK CLI, pin the Rust and Debian base images by multi-architecture digest, verify the binaryen and esbuild downloads by SHA-256 (landing), and run as the numeric user `10001:10001`. `containers.yml` builds each image for `linux/amd64` and smoke-tests it read-only as that user, including a restart of the relay on the same volume. | A green `containers` run on the candidate commit, with pinned digests refreshed deliberately as their own change. |
+| Containers | Set owned app names, region, domains, registry access and machine capacity. Both checked-in Fly app names are template values (`quant-landing` in `deploy/landing/fly.toml` and `relay` in `deploy/relay/fly.toml`), and neither file sets a primary region; the commands in sections 6 and 7 pass it explicitly. | Reviewed environment inventory and successful staging deployment. |
+| Landing | Keep public claims aligned with what is released. The site states that the Mac app and the CLI are built from source, and that capture leaves out known password managers and detected private windows rather than promising "never". | Reviewed landing copy and `/privacy` against released platforms and behavior before promotion (section 6). |
 | Relay | Prove persistent migrations, consistent backups, restore and client reconnection. | Restore drill, previous image digest and schema compatibility result. |
-| Desktop | Resolve the daemon/UI login-entry collision. `quant_cli/src/service.rs` and `quant_service/src/autostart.rs` currently both use `dev.leptoskit.quant` for a LaunchAgent. | Distinct service identities or a coordinated startup design; toggling UI login must not replace or remove the daemon's entry. |
-| Desktop | Package and update the daemon as well as the menu-bar app. The app is currently a client of a separately installed daemon. | Fresh-machine installation, stable executable paths, daemon discovery and upgrade/uninstall tests. |
+| Desktop | Verify the separated daemon/UI login entries (resolved in code). The daemon's LaunchAgent label is `dev.leptoskit.quant.daemon`; the menu-bar app's login entry keeps the bundle identifier `dev.leptoskit.quant`. `quant service install` and `uninstall` move or remove an entry the old installer wrote under the old label, recognised by its `daemon` argument, and never touch the app's own entry. | On an installed build, toggling "Open Quant at login" leaves the daemon's entry alone (section 8). |
+| Desktop | Package and update the daemon as well as the menu-bar app. The app is currently a client of a separately installed daemon. The `desktop` job of `application-targets` now uploads a development artifact named `quant-desktop-macos` (a tarball of `App.app` and the release `quant` binary, ad-hoc signed, not notarized); it is for the owner's own pilot, not a distribution package. | Fresh-machine installation, stable executable paths, daemon discovery and upgrade/uninstall tests. |
 | Desktop | Produce a distribution signature. The SDK build currently applies an ad-hoc signature; `--release` alone is insufficient. | Developer ID signature, required entitlements, notarization and Gatekeeper checks. |
 | Desktop | Verify capture consent for the executable that actually requests access. | Required purpose strings, permission denial/revocation tests, and approved capture from an installed build. The menu-bar host's current plist alone does not prove this. |
 | Desktop | Synchronize package/app versions and architecture support. | Workspace/config version, plist version/build number, CLI version and native architecture recorded together. |
-| Web/mobile | Complete the implementation described by each unavailable target, and measure the Android development build. | A working target plus the acceptance evidence in section 10; removing `unavailable` alone does not qualify, and the `android` target building does not either. |
+| Web/mobile | Complete the product web target (the only target marked `unavailable` in `leptoskit.toml`) and measure the mobile and watch development builds. `android`, `ios`, `wearos`, `watchos`, `harmonyos` and `harmonyos-watch` are selectable so that development builds can be made; none of them is released. | A working target plus the acceptance evidence in section 10; removing `unavailable` alone does not qualify, and a selectable target building does not either. |
+| Android and Wear OS | Advance the SDK pin past the foreground-service crash fixed in https://github.com/leptoskit/leptoskit/pull/1027. With the SDK pinned before that fix, the Android app crashes about a second after launch on Android 14 and later because the SDK's background plugin restarts its foreground service without a service type (`InvalidForegroundServiceTypeException`), reproduced on Android 14 and Android 16 phones. | Before any Android or Wear OS build is handed to anyone, the SDK pin includes that fix and the app is seen to stay running on an Android 14 or later device with its collecting notification showing. |
 
 Do not label a target production-ready while its prerequisites remain open.
 A website release does not imply the desktop or mobile collectors are ready.
@@ -102,7 +104,14 @@ During candidate preparation, update to the latest Leptoskit main revision
 [sync-leptoskit.yml](../.github/workflows/sync-leptoskit.yml), which opens a PR,
 runs [ci.yml](../.github/workflows/ci.yml) and
 [apps.yml](../.github/workflows/apps.yml), and squash-merges only when every
-check passes):
+check passes). Two caveats apply to that bot: its merge uses the repository
+token and starts no `push` run on `main` (see section 2 for running workflows by
+hand), and the `pull_request` runs GitHub creates for the bot's pull request
+wait for approval and are marked failed when the bot merges, with no jobs having
+run. The verification that counts is the `verify-ci` and `verify-apps` jobs
+inside the sync run.
+
+To update by hand:
 
 ```sh
 python3 scripts/update-leptoskit.py --no-check
@@ -140,9 +149,12 @@ leptoskit targets
 For shared core changes, require the core Clippy/tests on macOS and Linux as
 defined in [ci.yml](../.github/workflows/ci.yml). For each shipping target,
 require its package checks, tests, Leptoskit lint and production build from
-[apps.yml](../.github/workflows/apps.yml). Run the landing's hydrated browser
-regression checks against the production bundle, not just an SSR response.
-Test SQLCipher and migrations when the SDK or SQLite dependencies change.
+[apps.yml](../.github/workflows/apps.yml), and for container targets require the
+image build and read-only smoke test from
+[containers.yml](../.github/workflows/containers.yml). Run the landing's
+hydrated browser regression checks against the production bundle, not just an
+SSR response. Test SQLCipher and migrations when the SDK or SQLite dependencies
+change.
 
 Use results for the exact candidate from CI or equivalent local checks. The
 project permits local validation when CI is backlogged; waiting for every CI
@@ -154,18 +166,21 @@ native rebuild.
 The shipping-target commands are:
 
 ```sh
-leptoskit --app-target landing lint --no-clippy
+leptoskit --app-target landing lint --no-clippy --deny-warnings
 leptoskit --app-target landing build --release
-leptoskit --app-target relay lint --no-clippy
+leptoskit --app-target relay lint --no-clippy --deny-warnings
 leptoskit --app-target relay build --release
-leptoskit --app-target desktop lint --no-clippy
+leptoskit --app-target desktop lint --no-clippy --deny-warnings
 leptoskit --app-target desktop build --release
 cargo build --locked --release -p quant_cli --bin quant
 ```
 
-Run the desktop build on a supported Mac. Package/architecture checks and
-container builds are additional gates; a local Rust build does not substitute
-for them.
+Run the desktop build on a supported Mac. The `desktop` job of
+`application-targets` also runs
+`cargo build --locked --release -p quant_cli --bin quant`, so that command no
+longer needs a separate local run when the candidate has a green
+`application-targets` run. Package/architecture checks and container builds are
+additional gates; a local Rust build does not substitute for them.
 
 ## 5. Build artifacts once
 
@@ -364,9 +379,9 @@ architectures whose final packages were tested.
   pairing work. Touch ID works with the distribution signature, and declined
   authentication leaves a usable passphrase path.
 - The daemon and UI each start correctly after login; toggling UI autostart
-  does not alter the daemon. Closing the window releases its guest while the
-  menu-bar service remains available. Quitting UI and stopping capture have
-  clearly tested behavior.
+  does not alter the daemon. Closing the window hides it and keeps its guest
+  loaded while the menu-bar service remains available. Quitting UI and stopping
+  capture have clearly tested behavior.
 - Capture consent, denial, revocation, pause/resume, screen lock, sleep/wake
   and offline recovery behave correctly. Test microphone/screen permissions
   on the actual installed executable identities.
@@ -376,8 +391,9 @@ architectures whose final packages were tested.
 - Measure UI-only idle use separately from capture/transcription. Record CPU,
   resident memory, wakeups, disk growth and thermal state over at least one
   hour, including repeated window open/close. Look for sustained CPU activity
-  at idle and memory growth after guests close. Set and record measured budgets
-  before the pilot; do not invent a claim of negligible resource use.
+  at idle and memory growth across repeated window open and close. Set and
+  record measured budgets before the pilot; do not invent a claim of negligible
+  resource use.
 
 Run a 24-hour owner pilot covering normal use and a relay outage before widening
 distribution. Collect operational metrics without captured content. Publish
@@ -444,10 +460,11 @@ reconnect, or sustained resource growth beyond the measured release budget.
 
 ## 10. Gates for future product web and mobile releases
 
-Do not deploy the currently unavailable targets. The `android` target is
-available so that it can be built and run on a development phone; that is not
-a release, and it has none of the device evidence below. A first release of
-each platform requires:
+Do not deploy unreleased web or mobile targets. Only `web` is marked
+`unavailable` in `leptoskit.toml`; `android`, `ios`, `wearos`, `watchos`,
+`harmonyos` and `harmonyos-watch` are selectable so that development builds can
+be made, which is not a release, and none of them has the device evidence below.
+A first release of each platform requires:
 
 | Platform | Required implementation and acceptance |
 | --- | --- |
@@ -489,3 +506,35 @@ sequence: explicit target/environment selection, candidate validation, artifact
 build and retention, staging verification, promotion by digest/package hash,
 and an evidence record. Reuse the current target checks; do not conflate a
 successful CI run with an already deployed release.
+
+## 12. LeptosKit Cloud
+
+LeptosKit Cloud is the SDK's managed hosting. It is not publicly live, and
+nothing in this plan uses it yet; Fly remains the reference path.
+
+Only `landing` and `relay` could ever run there. The vault, the daemon and the
+capture pipeline stay on the owner's machine, as with any other host. Both
+servers already meet Cloud's runtime contract as the pinned SDK defines it:
+`/healthz` and `/readyz` (the relay target declares `probes = true`), graceful
+shutdown inside the grace period, a read-only root filesystem, port 3000, and a
+numeric non-root user.
+
+What blocks using it is in the SDK at the current pin, not in Quant:
+
+- `[cloud]` is a single top-level table and `lk cloud` and `lk deploy` ignore
+  `--app-target`, so one `leptoskit.toml` can describe only one hosted app, and
+  Quant has two.
+- The Cloud builder only looks for a `Dockerfile` at the repository root, and
+  Quant's are under `deploy/`.
+
+Gates before adopting LeptosKit Cloud once those SDK limits are lifted:
+
+- Do not add `[cloud].project` to `leptoskit.toml` before then, because it makes
+  plain `lk deploy` ship to Cloud.
+- Run the relay as exactly one always-on instance (`min = 1`, `max = 1`,
+  `sleep = "never"`), because its connection routing is in process memory.
+- Provide another route for `relay invite add` before using invite gating there,
+  because Cloud has no way to run a one-off command in a container.
+- Verify on the live service that UID 10001 can write the mounted `/data` volume
+  and that a `wss://` connection survives more than two minutes idle through its
+  proxy.
