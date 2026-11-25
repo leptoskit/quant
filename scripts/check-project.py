@@ -21,12 +21,18 @@ def main():
         if path.startswith("platforms/") and Path(path).suffix in {".xml", ".plist"}:
             ET.fromstring((root / path).read_text())
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    root_publish = manifest["workspace"]["package"].get("publish")
+    assert root_publish is False, f"[workspace.package] publish must be false: Cargo.toml ({root_publish!r})"
     packages = {}
     for path in paths:
         if Path(path).name != "Cargo.toml" or path == "Cargo.toml":
             continue
         member = tomllib.loads((root / path).read_text())
         assert "workspace" not in member, f"Nested workspace: {path}"
+        publish = member["package"].get("publish")
+        assert publish is False or publish == {"workspace": True}, (
+            f"Package must not be publishable, so it needs publish.workspace = true: {path}"
+        )
         packages[member["package"]["name"]] = Path(path).parent
         if path.startswith("platforms/"):
             crate_types = member.get("lib", {}).get("crate-type", [])
