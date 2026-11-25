@@ -249,7 +249,9 @@ public website and relay deploy independently without becoming separate apps.
 | `relay` | `crates/quant_relay_server`, `crates/relay_db` | Blind encrypted-connection relay with its own metadata database. |
 | `android` | `platforms/android`, `crates/quant_phone`, `crates/quant_app` | Phone collector for location, app usage, battery and heat. A development build, not a release. |
 | `ios` | `platforms/ios`, `crates/quant_phone`, `crates/quant_app` | The same collector on an iPhone; app usage is lock and unlock only. A development build, not yet run on a device. |
-| `web`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
+| `wearos`, `watchos` | `platforms/wearos`, `platforms/watchos`, `crates/quant_phone`, `crates/quant_app` | Watch collectors (Wear OS 3+ and Apple Watch). Development builds, not releases. |
+| `harmonyos`, `harmonyos-watch` | `platforms/harmonyos`, `crates/quant_phone`, `crates/quant_app` | Experimental HarmonyOS phone, tablet, and watch collectors. Development builds, not releases. |
+| `web` | `crates/quant_app` | Product browser frontend; marked `unavailable` until its authenticated browser transport is implemented. |
 
 From the repository root:
 
