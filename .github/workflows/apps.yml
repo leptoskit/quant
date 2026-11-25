@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: application-targets-${{ github.workflow }}-${{ github.ref }}
+  group: application-targets-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 env:
