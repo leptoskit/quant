@@ -24,3 +24,20 @@ __pycache__/
 /platforms/android/app/build/
 /platforms/android/app/.cxx/
 /platforms/android/local.properties
+
+# Gradle and Android Studio state for the Wear OS host.
+/platforms/wearos/.gradle/
+/platforms/wearos/.kotlin/
+/platforms/wearos/build/
+/platforms/wearos/app/build/
+/platforms/wearos/app/.cxx/
+/platforms/wearos/local.properties
+
+# Local secrets, signing material, and state that must never be committed.
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.jks
+*.keystore
+*.p12

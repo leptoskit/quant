@@ -11,12 +11,20 @@ on:
         required: false
         type: string
         default: ''
+  # A merge made with the repository token starts no push run, so allow a manual one.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Optional git ref or commit SHA to check out
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 jobs:

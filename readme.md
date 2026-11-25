@@ -10,7 +10,7 @@ Quant records what you do — what is on your screens, what you hear and say, wh
 
 Questions like "how did I sleep after late coffee?", "when do I focus best?", or "what did we agree on in Tuesday's call?" are answerable from data you already produce. The data is also the most sensitive you have. Quant treats both facts as requirements:
 
-- **Everything is captured, quietly.** Capture runs in a background daemon at low priority, skips frames that did not change, pauses when you are idle or the screen is locked, and never records password managers or private browsing windows.
+- **Everything is captured, quietly.** Capture runs in a background daemon at low priority, skips frames that did not change, pauses when you are idle or the screen is locked, and keeps the password managers it knows and the private browsing windows it detects out of screenshots.
 - **Nothing is readable by default.** A new agent sees one tool that tells it how to ask you for access.
 - **Access is specific.** `health:summary` lets an agent see your average heart rate per hour, never a raw sample, a screenshot, or a window title. `screen:read` gives on-screen text with secrets redacted, but no images. `audio:raw` is a deliberate choice.
 - **Extraction is bounded.** Each grant has a lookback window, an expiry, and limits on requests per minute, records per hour, and bytes per day.
@@ -75,7 +75,7 @@ quant capture set --exclude-app com.apple.Notes --ocr accurate
 quant capture pause --minutes 30   # or `quant capture resume`
 ```
 
-Password managers and private or incognito browser windows are never captured. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
+Screenshots leave out known password managers and detected private or incognito browser windows, and their window titles are not recorded; which app was in front, and for how long, still is. Review the exclusions with `quant capture show` before relying on them. Changing what is captured, or pausing it, needs your passphrase, so an agent cannot quietly turn capture off. Use `quant daemon --no-capture` to serve the vault without recording.
 
 The menu-bar app in [desktop app](docs/desktop.md) shows the same status, pauses and resumes, saves the last minutes of audio, and approves agents, without a terminal.
 
@@ -249,7 +249,9 @@ public website and relay deploy independently without becoming separate apps.
 | `relay` | `crates/quant_relay_server`, `crates/relay_db` | Blind encrypted-connection relay with its own metadata database. |
 | `android` | `platforms/android`, `crates/quant_phone`, `crates/quant_app` | Phone collector for location, app usage, battery and heat. A development build, not a release. |
 | `ios` | `platforms/ios`, `crates/quant_phone`, `crates/quant_app` | The same collector on an iPhone; app usage is lock and unlock only. A development build, not yet run on a device. |
-| `web`, `harmonyos` | Shared product frontend, future platform hosts | Declared destinations; unavailable until their transport and collector lifecycle are integrated. |
+| `wearos`, `watchos` | `platforms/wearos`, `platforms/watchos`, `crates/quant_phone`, `crates/quant_app` | Watch collectors (Wear OS 3+ and Apple Watch). Development builds, not releases. |
+| `harmonyos`, `harmonyos-watch` | `platforms/harmonyos`, `crates/quant_phone`, `crates/quant_app` | Experimental HarmonyOS phone, tablet, and watch collectors. Development builds, not releases. |
+| `web` | `crates/quant_app` | Product browser frontend; marked `unavailable` until its authenticated browser transport is implemented. |
 
 From the repository root:
 

@@ -14,20 +14,23 @@
 #
 # The SQLite database is the one thing it writes, on a volume at /data.
 
-# The Rust release that builds the app. `1` is the latest stable; pin one,
-# such as 1.96, to build the same way every time.
-ARG RUST_VERSION=1
+# Refresh base digests with `docker buildx imagetools inspect <image>:<tag>`.
+ARG RUST_VERSION=1.100.0
+ARG RUST_IMAGE_DIGEST=sha256:75d26c23c24cc6ea1cdabf0714a6bff8fd7bf3248716043fd7ae86dac7f41b94
+ARG DEBIAN_IMAGE_DIGEST=sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
 # The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
 ARG LEPTOSKIT_REV=2a8294b2f569ff7f1f1bd7d7035e458aa06c0a8c
 
-FROM rust:${RUST_VERSION}-bookworm AS build
+FROM rust:${RUST_VERSION}-bookworm@${RUST_IMAGE_DIGEST} AS build
 ARG LEPTOSKIT_REV
+WORKDIR /src
+# Install the project's pinned toolchain before building the CLI so both use it.
+COPY rust-toolchain.toml ./
+RUN rustup show active-toolchain || rustup toolchain install
+RUN cargo --version
 RUN cargo install --git https://github.com/leptoskit/leptoskit \
     --rev "${LEPTOSKIT_REV}" --locked leptoskit_cli
-WORKDIR /src
-# The toolchain file picks the toolchain everything below uses.
 COPY . .
-RUN rustup show active-toolchain
 # The cache mounts keep downloaded crates and compiled dependencies between
 # builds. The server is copied out, since the target directory is a cache.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -36,13 +39,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     leptoskit --app-target relay build --release \
  && cp target/release/relay /usr/local/bin/relay
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@${DEBIAN_IMAGE_DIGEST}
 # curl answers the health check, and `app` is the unprivileged user the
-# server runs as.
+# server runs as, with uid and gid 10001.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --user-group --uid 10001 --no-create-home app \
+ && groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home app \
  && mkdir /data \
  && chown app:app /data
 WORKDIR /app
@@ -58,7 +62,8 @@ ENV LEPTOS_ENV=PROD \
 # The SQLite database lives on a volume, the one place the server writes.
 ENV DATABASE_URL=sqlite:///data/relay.sqlite3
 VOLUME /data
-USER app
+# Numeric, so hosts that require a non-root user by id (Kubernetes runAsNonRoot) accept it.
+USER 10001:10001
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
   CMD ["curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:3000/healthz"]

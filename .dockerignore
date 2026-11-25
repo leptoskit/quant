@@ -1,4 +1,6 @@
+# Build and tool outputs
 target
+**/target
 .git
 .devenv
 .leptoskit
@@ -7,10 +9,60 @@ node_modules
 test-results
 dist
 .quant-dev
-**/target
 infra
 .kamal
+**/__pycache__
+
+# Local vault state, databases, and environment secrets
 *.sqlite3*
+**/*.sqlite3*
 *.dump
+**/*.dump
 .env
 .env.*
+**/.env
+**/.env.*
+vault.json
+**/vault.json
+**/quant.db
+**/quant.db-*
+media/
+**/media/
+*.db
+**/*.db
+*.db-*
+**/*.db-*
+
+# Local SDK overrides
+.cargo/config.toml
+
+# Signing material and keys
+**/*.jks
+**/*.keystore
+**/*.p12
+**/*.pem
+**/*.key
+
+# Editor and OS noise
+**/.DS_Store
+**/Thumbs.db
+**/*.swp
+**/*.swo
+**/*~
+.idea
+.vscode
+.claude
+
+# Gradle state and outputs under Android and Wear OS
+platforms/android/.gradle
+platforms/android/.kotlin
+platforms/android/build
+platforms/android/app/build
+platforms/android/app/.cxx
+platforms/android/local.properties
+platforms/wearos/.gradle
+platforms/wearos/.kotlin
+platforms/wearos/build
+platforms/wearos/app/build
+platforms/wearos/app/.cxx
+platforms/wearos/local.properties

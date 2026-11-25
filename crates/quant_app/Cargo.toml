@@ -44,7 +44,7 @@ watch = ["phone", "leptoskit/watch"]
 wearos = ["watch", "leptoskit/wearos"]
 watchos = ["watch", "leptoskit/watchos"]
 harmonyos = ["phone"]
-harmonyos-watch = ["watch"]
+harmonyos-watch = ["watch", "harmonyos"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 

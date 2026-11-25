@@ -25,14 +25,15 @@ const PLATFORMS: [Platform; 4] = [
 	Platform {
 		name: "macOS menu bar",
 		body: "A remote for the daemon: see what each source is doing, pause and resume, save the \
-		       last minutes of audio, approve agents, read the audit log, and unlock with Touch \
-		       ID. It can open at login.",
+		       last minutes of audio, approve agents, and read the audit log. It can open at \
+		       login. You build it from source today; Touch ID unlock needs a build signed with \
+		       your own Apple developer identity.",
 		available: true,
 	},
 	Platform {
 		name: "CLI and MCP server",
-		body: "quant on the command line, and quant mcp for Claude Code and other agents. The \
-		       tools an agent sees follow its grant.",
+		body: "quant on the command line, and quant mcp for Claude Code and other agents, \
+		       installed from source with cargo. The tools an agent sees follow its grant.",
 		available: true,
 	},
 	Platform {

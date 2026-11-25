@@ -184,7 +184,7 @@ jobs:
           - Latest: \`${LATEST_REV}\`
           - Upstream diff: https://github.com/leptoskit/leptoskit/compare/${CURRENT_REV}...${LATEST_REV}
 
-          Verification (\`ci\` + \`application-targets\`) runs in [sync-leptoskit](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). This PR squash-merges automatically once every check passes.
+          Verification (\`ci\`, \`application-targets\` and \`containers\`) runs in [sync-leptoskit](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). This PR squash-merges automatically once every check passes.
           EOF
           )
 
@@ -220,8 +220,17 @@ jobs:
     with:
       ref: ${{ needs.sync.outputs.head_sha }}
 
+  verify-containers:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/containers.yml
+    with:
+      ref: ${{ needs.sync.outputs.head_sha }}
+
   merge:
-    needs: [sync, verify-ci, verify-apps]
+    needs: [sync, verify-ci, verify-apps, verify-containers]
     if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -241,11 +250,11 @@ jobs:
             --match-head-commit "$HEAD_SHA"
 
   report-failure:
-    needs: [sync, verify-ci, verify-apps]
+    needs: [sync, verify-ci, verify-apps, verify-containers]
     if: |
       always() &&
       needs.sync.outputs.changed == 'true' &&
-      (needs.verify-ci.result != 'success' || needs.verify-apps.result != 'success')
+      (needs.verify-ci.result != 'success' || needs.verify-apps.result != 'success' || needs.verify-containers.result != 'success')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
