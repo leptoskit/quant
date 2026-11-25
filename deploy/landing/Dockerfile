@@ -16,7 +16,7 @@ ARG RUST_VERSION=1.100.0
 ARG RUST_IMAGE_DIGEST=sha256:75d26c23c24cc6ea1cdabf0714a6bff8fd7bf3248716043fd7ae86dac7f41b94
 ARG DEBIAN_IMAGE_DIGEST=sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
 # The CLI and SDK use the same main commit. Updated by scripts/update-leptoskit.py.
-ARG LEPTOSKIT_REV=2a8294b2f569ff7f1f1bd7d7035e458aa06c0a8c
+ARG LEPTOSKIT_REV=d893e7021c3e4f02aa2a44edb01d0ea423674673
 # binaryen's wasm-opt shrinks the release client, and esbuild minifies its
 # JavaScript glue.
 ARG BINARYEN_VERSION=132
