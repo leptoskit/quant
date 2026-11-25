@@ -138,11 +138,12 @@ jobs:
       - name: Package the desktop app and CLI
         if: matrix.target == 'desktop'
         # Artifact uploads drop symlinks and executable bits, so ship a tarball.
-        env:
-          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           arch=$(uname -m)
+          # Name the commit that was checked out, which is not github.sha when a
+          # ref input checked out a different commit.
+          sha=$(git rev-parse HEAD)
           app_bundle=.leptoskit/macos/App.app
           quant_binary=target/release/quant
           for path in "$app_bundle" "$quant_binary"; do
@@ -159,12 +160,15 @@ jobs:
           cat > "$staging/README.txt" <<EOF
           Quant desktop development build
 
-          This is a development build of commit $GITHUB_SHA for macOS $arch.
+          This is a development build of commit $sha for macOS $arch.
           It is ad-hoc signed and not notarized, so it is not for distribution.
           Touch ID needs a build signed with an Apple developer identity.
           App.app is the menu-bar app; quant is the CLI and daemon.
           See docs/desktop.md in the repository for how to run it.
           EOF
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "Built from the pull request's merge commit, not its head." >> "$staging/README.txt"
+          fi
           tarball="$RUNNER_TEMP/quant-desktop-macos-$arch.tar.gz"
           tar -czf "$tarball" -C "$staging" .
           shasum -a 256 "$tarball"
