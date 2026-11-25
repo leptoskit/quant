@@ -98,6 +98,7 @@ server_package = "relay"
 [targets.relay.serve]
 address = "127.0.0.1"
 port = 3001
+probes = true
 
 [targets.relay.db]
 dialect = "sqlite"

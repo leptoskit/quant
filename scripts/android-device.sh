@@ -160,37 +160,6 @@ artifact() {
 	printf '%s\n' "$ROOT/$path"
 }
 
-# The NDK the Leptoskit CLI builds with: ANDROID_NDK_HOME, or the newest one
-# in the SDK.
-find_ndk() {
-	if [ -n "${ANDROID_NDK_HOME:-}" ]; then
-		printf '%s\n' "$ANDROID_NDK_HOME"
-		return
-	fi
-	local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-	[ -n "$sdk" ] && [ -d "$sdk/ndk" ] || return 1
-	local version
-	version="$(
-		for candidate in "$sdk"/ndk/*/; do
-			[ -f "$candidate/source.properties" ] && basename "$candidate"
-		done | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1
-	)"
-	[ -n "$version" ] && printf '%s\n' "$sdk/ndk/$version"
-}
-
-# cc-rs needs a ranlib for the vendored OpenSSL, and without `llvm-ranlib`
-# on PATH it asks for `aarch64-linux-android-ranlib`, which no NDK ships.
-# Leptoskit sets only the archiver at the pinned revision, so name the
-# NDK's ranlib here. Prints the setting as NAME=VALUE.
-ndk_ranlib() {
-	find_sdk
-	local ndk ranlib
-	ndk="$(find_ndk)" || fail "No Android NDK was found. Install one (Android Studio, SDK Manager, SDK Tools, NDK) or set ANDROID_NDK_HOME."
-	ranlib="$(ls "$ndk"/toolchains/llvm/prebuilt/*/bin/llvm-ranlib 2>/dev/null | head -n 1)"
-	[ -n "$ranlib" ] || fail "The NDK at $ndk has no llvm-ranlib."
-	printf 'RANLIB_aarch64_linux_android=%s\n' "$ranlib"
-}
-
 need_build_tools() {
 	find_sdk
 	command -v cargo >/dev/null 2>&1 || fail "cargo was not found. Install Rust from https://rustup.rs."
@@ -202,11 +171,6 @@ need_build_tools() {
 
 build() {
 	need_build_tools
-	if [ -z "${RANLIB_aarch64_linux_android:-}" ]; then
-		local setting
-		setting="$(ndk_ranlib)"
-		export "${setting?}"
-	fi
 	(
 		cd "$ROOT"
 		rustup target add "$RUST_TARGET" wasm32-unknown-unknown >/dev/null
@@ -418,7 +382,6 @@ case "$command" in
 		"$ADB" uninstall "$PACKAGE"
 		;;
 	doctor) doctor ;;
-	ranlib) ndk_ranlib ;;
 	help | --help) usage ;;
 	*) fail "Unknown command $command. Try \`scripts/android-device.sh help\`." ;;
 esac

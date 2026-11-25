@@ -11,14 +11,16 @@ import LeptosKitNotifications
 #endif
 
 // The host leptoskit generates for iOS apps (its native/templates/App.swift),
-// with the background plugin's launch registration in
-// `application(_:didFinishLaunchingWithOptions:)`, plus one thing of Quant's
-// own there: nothing the app stores is backed up.
+// with the background plugin's launch registration moved to
+// `application(_:willFinishLaunchingWithOptions:)`, as that template does,
+// and one thing of Quant's own in
+// `application(_:didFinishLaunchingWithOptions:)`: nothing the app stores is
+// backed up.
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+        willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         #if canImport(LeptosKitBackground)
         // iOS ends an app that registers a background task's handler after
@@ -26,6 +28,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // screen's `start` only schedules the next app refresh.
         BackgroundPlugin.registerLaunchHandlers()
         #endif
+
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
         excludeAppDataFromBackup()
         return true
     }
