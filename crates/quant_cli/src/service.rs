@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -14,7 +16,7 @@ pub enum Action {
 	Install {
 		/// Also serve phones over TLS on this address, such as `0.0.0.0:7717`.
 		#[arg(long)]
-		tcp: Option<std::net::SocketAddr>,
+		tcp: Option<SocketAddr>,
 	},
 	/// Stop it and remove it.
 	Uninstall,
@@ -22,16 +24,24 @@ pub enum Action {
 	Status,
 }
 
-const LABEL: &str = "dev.leptoskit.quant";
+const LABEL: &str = "dev.leptoskit.quant.daemon";
+const LEGACY_LABEL: &str = "dev.leptoskit.quant";
 
 fn home() -> PathBuf {
 	std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
+fn plist_path_in(home: &Path, label: &str) -> PathBuf {
+	home.join("Library/LaunchAgents")
+		.join(format!("{label}.plist"))
+}
+
 fn plist_path() -> PathBuf {
-	home()
-		.join("Library/LaunchAgents")
-		.join(format!("{LABEL}.plist"))
+	plist_path_in(&home(), LABEL)
+}
+
+fn legacy_plist_path() -> PathBuf {
+	plist_path_in(&home(), LEGACY_LABEL)
 }
 
 fn unit_path() -> PathBuf {
@@ -42,6 +52,93 @@ fn escape(s: &str) -> String {
 	s.replace('&', "&amp;")
 		.replace('<', "&lt;")
 		.replace('>', "&gt;")
+}
+
+fn render_plist(exe: &Path, vault_root: &Path, tcp: Option<SocketAddr>) -> String {
+	let logs = vault_root.join("logs");
+	format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>{LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{exe}</string>
+		<string>--vault</string>
+		<string>{vault}</string>
+		<string>daemon</string>{tcp}
+	</array>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+	<key>ProcessType</key><string>Background</string>
+	<key>LowPriorityIO</key><true/>
+	<key>Nice</key><integer>5</integer>
+	<key>StandardOutPath</key><string>{out}</string>
+	<key>StandardErrorPath</key><string>{err}</string>
+</dict>
+</plist>
+"#,
+		exe = escape(&exe.display().to_string()),
+		tcp = tcp
+			.map(|a| format!("\n\t\t<string>--tcp</string>\n\t\t<string>{a}</string>"))
+			.unwrap_or_default(),
+		vault = escape(&vault_root.display().to_string()),
+		out = escape(&logs.join("quantd.out.log").display().to_string()),
+		err = escape(&logs.join("quantd.err.log").display().to_string()),
+	)
+}
+
+/// Whether `contents` is a plist written by the pre-split daemon installer
+/// under `LEGACY_LABEL`.
+///
+/// The menu-bar app's "Open Quant at login" switch owns `LEGACY_LABEL`, so any
+/// plist without the `daemon` argument in `ProgramArguments` must be left
+/// alone.
+fn is_legacy_daemon_plist(contents: &str) -> bool {
+	let Some((_, after_args)) = contents.split_once("<key>ProgramArguments</key>") else {
+		return false;
+	};
+	let args_block = after_args
+		.split_once("</array>")
+		.map_or(after_args, |(before, _)| before);
+	contents.contains(&format!("<string>{LEGACY_LABEL}</string>"))
+		&& args_block.contains("<string>daemon</string>")
+}
+
+fn has_legacy_daemon_plist(path: &Path) -> bool {
+	std::fs::read_to_string(path).is_ok_and(|contents| is_legacy_daemon_plist(&contents))
+}
+
+fn remove_legacy_daemon(domain: &str, legacy_plist: &Path) -> Result<()> {
+	let _ = Command::new("launchctl")
+		.args(["bootout", &format!("{domain}/{LEGACY_LABEL}")])
+		.status();
+	if legacy_plist.exists() {
+		std::fs::remove_file(legacy_plist)?;
+	}
+	println!("Removed legacy daemon entry {LEGACY_LABEL}.");
+	Ok(())
+}
+
+fn format_macos_status(
+	installed: bool,
+	running: bool,
+	socket: &Path,
+	legacy_installed: bool,
+) -> String {
+	let base = format!(
+		"label: {LABEL}\ninstalled: {installed}\nrunning: {running}\nsocket: {}",
+		socket.display()
+	);
+	if !installed && legacy_installed {
+		format!(
+			"{base}\nnote: the daemon is installed under the legacy label {LEGACY_LABEL}; run \
+			 `quant service install` to move it to {LABEL}."
+		)
+	} else {
+		base
+	}
 }
 
 fn uid() -> String {
@@ -65,8 +162,9 @@ pub fn run(paths: &VaultPaths, action: &Action) -> Result<()> {
 	}
 }
 
-fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<()> {
+fn macos(paths: &VaultPaths, action: &Action, exe: &Path) -> Result<()> {
 	let plist = plist_path();
+	let legacy_plist = legacy_plist_path();
 	let domain = format!("gui/{}", uid());
 	match action {
 		Action::Install { tcp } => {
@@ -76,40 +174,12 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 					paths.root.display()
 				);
 			}
-			let logs = paths.root.join("logs");
-			std::fs::create_dir_all(&logs)?;
-			let body = format!(
-				r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key><string>{LABEL}</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>{exe}</string>
-		<string>--vault</string>
-		<string>{vault}</string>
-		<string>daemon</string>{tcp}
-	</array>
-	<key>RunAtLoad</key><true/>
-	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-	<key>ProcessType</key><string>Background</string>
-	<key>LowPriorityIO</key><true/>
-	<key>Nice</key><integer>5</integer>
-	<key>StandardOutPath</key><string>{out}</string>
-	<key>StandardErrorPath</key><string>{err}</string>
-</dict>
-</plist>
-"#,
-				exe = escape(&exe.display().to_string()),
-				tcp = tcp
-					.map(|a| format!("\n\t\t<string>--tcp</string>\n\t\t<string>{a}</string>"))
-					.unwrap_or_default(),
-				vault = escape(&paths.root.display().to_string()),
-				out = escape(&logs.join("quantd.out.log").display().to_string()),
-				err = escape(&logs.join("quantd.err.log").display().to_string()),
-			);
+			std::fs::create_dir_all(paths.root.join("logs"))?;
+			let body = render_plist(exe, &paths.root, *tcp);
 			std::fs::create_dir_all(plist.parent().context("plist dir")?)?;
+			if has_legacy_daemon_plist(&legacy_plist) {
+				remove_legacy_daemon(&domain, &legacy_plist)?;
+			}
 			let _ = Command::new("launchctl")
 				.args(["bootout", &format!("{domain}/{LABEL}")])
 				.status();
@@ -134,10 +204,14 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 			if plist.exists() {
 				std::fs::remove_file(&plist)?;
 			}
+			if has_legacy_daemon_plist(&legacy_plist) {
+				remove_legacy_daemon(&domain, &legacy_plist)?;
+			}
 			println!("Removed {LABEL}.");
 		}
 		Action::Status => {
 			let installed = plist.exists();
+			let legacy_installed = !installed && has_legacy_daemon_plist(&legacy_plist);
 			let running = Command::new("launchctl")
 				.args(["print", &format!("{domain}/{LABEL}")])
 				.output()
@@ -146,8 +220,8 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 						&& String::from_utf8_lossy(&o.stdout).contains("state = running")
 				});
 			println!(
-				"installed: {installed}\nrunning: {running}\nsocket: {}",
-				paths.socket().display()
+				"{}",
+				format_macos_status(installed, running, &paths.socket(), legacy_installed)
 			);
 		}
 	}
@@ -186,4 +260,170 @@ fn linux(paths: &VaultPaths, action: &Action, exe: &std::path::Path) -> Result<(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::net::SocketAddr;
+	use std::path::Path;
+
+	use super::LABEL;
+	use super::LEGACY_LABEL;
+	use super::format_macos_status;
+	use super::has_legacy_daemon_plist;
+	use super::is_legacy_daemon_plist;
+	use super::plist_path_in;
+	use super::render_plist;
+
+	#[test]
+	fn labels_and_plist_paths_are_distinct() {
+		assert_eq!(LABEL, "dev.leptoskit.quant.daemon");
+		assert_eq!(LEGACY_LABEL, "dev.leptoskit.quant");
+		assert_ne!(LABEL, LEGACY_LABEL);
+
+		let fake_home = tempfile::tempdir().expect("tempdir");
+		let daemon_path = plist_path_in(fake_home.path(), LABEL);
+		let legacy_path = plist_path_in(fake_home.path(), LEGACY_LABEL);
+		assert!(daemon_path.ends_with("Library/LaunchAgents/dev.leptoskit.quant.daemon.plist"));
+		assert!(legacy_path.ends_with("Library/LaunchAgents/dev.leptoskit.quant.plist"));
+		assert_ne!(daemon_path, legacy_path);
+	}
+
+	#[test]
+	fn render_plist_without_tcp() {
+		let body = render_plist(
+			Path::new("/usr/local/bin/quant"),
+			Path::new("/var/tmp/quant-vault"),
+			None,
+		);
+		assert!(body.contains("<key>Label</key><string>dev.leptoskit.quant.daemon</string>"));
+		assert!(body.contains("<string>/usr/local/bin/quant</string>"));
+		assert!(body.contains("<string>--vault</string>"));
+		assert!(body.contains("<string>/var/tmp/quant-vault</string>"));
+		assert!(body.contains("<string>daemon</string>"));
+		assert!(body.contains(
+			"<key>StandardOutPath</key><string>/var/tmp/quant-vault/logs/quantd.out.log</string>"
+		));
+		assert!(body.contains(
+			"<key>StandardErrorPath</key><string>/var/tmp/quant-vault/logs/quantd.err.log</string>"
+		));
+		assert!(!body.contains("--tcp"));
+	}
+
+	#[test]
+	fn render_plist_with_tcp() {
+		let addr: SocketAddr = "0.0.0.0:7717".parse().expect("socket addr");
+		let body = render_plist(
+			Path::new("/usr/local/bin/quant"),
+			Path::new("/var/tmp/quant-vault"),
+			Some(addr),
+		);
+		assert!(body.contains("<string>--tcp</string>"));
+		assert!(body.contains("<string>0.0.0.0:7717</string>"));
+	}
+
+	#[test]
+	fn render_plist_escapes_xml_special_characters() {
+		let body = render_plist(
+			Path::new("/opt/a&b/<quant>/quant"),
+			Path::new("/var/tmp/me&you/<vault>"),
+			None,
+		);
+		assert!(body.contains("<string>/opt/a&amp;b/&lt;quant&gt;/quant</string>"));
+		assert!(body.contains("<string>/var/tmp/me&amp;you/&lt;vault&gt;</string>"));
+		assert!(
+			body.contains("<string>/var/tmp/me&amp;you/&lt;vault&gt;/logs/quantd.out.log</string>")
+		);
+		assert!(
+			body.contains("<string>/var/tmp/me&amp;you/&lt;vault&gt;/logs/quantd.err.log</string>")
+		);
+		assert!(!body.contains("a&b"));
+		assert!(!body.contains("<quant>"));
+		assert!(!body.contains("<vault>"));
+	}
+
+	#[test]
+	fn legacy_detector_matches_old_daemon_plist_only() {
+		let old_daemon = format!(
+			r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>{LEGACY_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/quant</string>
+		<string>--vault</string>
+		<string>/Users/example/Library/Application Support/Quant</string>
+		<string>daemon</string>
+	</array>
+	<key>RunAtLoad</key><true/>
+</dict>
+</plist>
+"#
+		);
+		assert!(is_legacy_daemon_plist(&old_daemon));
+
+		let app_login_item = format!(
+			r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{LEGACY_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Applications/Quant.app/Contents/MacOS/App</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
+"#
+		);
+		assert!(!is_legacy_daemon_plist(&app_login_item));
+
+		let new_daemon = render_plist(
+			Path::new("/usr/local/bin/quant"),
+			Path::new("/var/tmp/quant-vault"),
+			None,
+		);
+		assert!(!is_legacy_daemon_plist(&new_daemon));
+
+		let dir = tempfile::tempdir().expect("tempdir");
+		let legacy_file = plist_path_in(dir.path(), LEGACY_LABEL);
+		assert!(!has_legacy_daemon_plist(&legacy_file));
+
+		std::fs::create_dir_all(legacy_file.parent().expect("parent")).expect("mkdir");
+		std::fs::write(&legacy_file, &old_daemon).expect("write legacy daemon");
+		assert!(has_legacy_daemon_plist(&legacy_file));
+
+		std::fs::write(&legacy_file, &app_login_item).expect("write login item");
+		assert!(!has_legacy_daemon_plist(&legacy_file));
+
+		std::fs::write(&legacy_file, [0xff, 0xfe, 0x00, 0x01]).expect("write binary");
+		assert!(!has_legacy_daemon_plist(&legacy_file));
+	}
+
+	#[test]
+	fn status_output_names_new_label_and_hints_when_only_legacy_exists() {
+		let socket = Path::new("/var/tmp/quant.sock");
+
+		let legacy_only = format_macos_status(false, false, socket, true);
+		assert!(legacy_only.contains(LABEL));
+		assert!(legacy_only.contains(LEGACY_LABEL));
+		assert!(legacy_only.contains("quant service install"));
+
+		let installed = format_macos_status(true, true, socket, false);
+		assert!(installed.contains(LABEL));
+		assert!(!installed.contains("quant service install"));
+
+		let installed_with_legacy = format_macos_status(true, true, socket, true);
+		assert!(installed_with_legacy.contains(LABEL));
+		assert!(!installed_with_legacy.contains("quant service install"));
+
+		let neither = format_macos_status(false, false, socket, false);
+		assert!(neither.contains(LABEL));
+		assert!(!neither.contains("quant service install"));
+	}
 }

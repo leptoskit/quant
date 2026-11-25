@@ -68,7 +68,7 @@ QUANT_HOME=/tmp/q/vault QUANT_CONFIG=/tmp/q/clients .leptoskit/macos/App.app/Con
 
 ### Open at login
 
-The Status section has an "Open Quant at login" checkbox, off by default and never prompted for. Toggling it registers a per-user login entry through `leptoskit_plugin_autostart`: a LaunchAgent at `~/Library/LaunchAgents/dev.leptoskit.quant.plist` pointing at this app's own executable, written only when the owner turns it on. The switch reflects the entry actually present, and the app does nothing at first launch. A local build points at its `.leptoskit` path; a signed copy in `/Applications` registers its real location.
+The Status section has an "Open Quant at login" checkbox, off by default and never prompted for. Toggling it registers a per-user login entry through `leptoskit_plugin_autostart`: a LaunchAgent at `~/Library/LaunchAgents/dev.leptoskit.quant.plist` pointing at this app's own executable, written only when the owner turns it on. The capture daemon installed by `quant service install` uses its own LaunchAgent label (`dev.leptoskit.quant.daemon`, at `~/Library/LaunchAgents/dev.leptoskit.quant.daemon.plist`), so toggling this switch does not interfere with the daemon's entry. The switch reflects the entry actually present, and the app does nothing at first launch. A local build points at its `.leptoskit` path; a signed copy in `/Applications` registers its real location.
 
 ### Snapshots
 
