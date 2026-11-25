@@ -110,7 +110,7 @@ jobs:
       - name: Leptoskit lint and workspace configuration
         run: |
           leptoskit targets
-          leptoskit --app-target ${{ matrix.target }} lint --no-clippy
+          leptoskit --app-target ${{ matrix.target }} lint --no-clippy --deny-warnings
       - name: Install Binaryen
         if: matrix.target == 'landing'
         run: |
