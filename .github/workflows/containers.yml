@@ -1,0 +1,144 @@
+name: containers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/**
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - leptoskit.toml
+      - crates/**
+      - assets/**
+      - web/**
+      - .github/workflows/containers.yml
+  pull_request:
+    paths:
+      - deploy/**
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - leptoskit.toml
+      - crates/**
+      - assets/**
+      - web/**
+      - .github/workflows/containers.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [landing, relay]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image }} image
+        # Invokes `docker buildx build --platform linux/amd64 --file deploy/<name>/Dockerfile
+        # --cache-from type=gha,scope=<name> --cache-to type=gha,mode=max,scope=<name>
+        # --load --tag quant-<name>:ci .` with GitHub Actions cache credentials wired up.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/${{ matrix.image }}/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: quant-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Smoke-test ${{ matrix.image }} container
+        env:
+          IMAGE_NAME: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+
+          image="quant-${IMAGE_NAME}:ci"
+          container="quant-${IMAGE_NAME}-smoke"
+          volume=""
+
+          cleanup() {
+            echo "=== container logs (${container}) ==="
+            docker logs "$container" 2>&1 || true
+            docker rm -f "$container" > /dev/null 2>&1 || true
+            if [ -n "$volume" ]; then
+              docker volume rm -f "$volume" > /dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          start_container() {
+            local args=(
+              --detach
+              --name "$container"
+              --read-only
+              --tmpfs /tmp
+              --publish 127.0.0.1:3000:3000
+            )
+            if [ "$IMAGE_NAME" = "relay" ]; then
+              args+=(--mount "type=volume,src=${volume},dst=/data")
+            fi
+            docker run "${args[@]}" "$image" > /dev/null
+          }
+
+          wait_ready() {
+            for _attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:3000/readyz > /dev/null; then
+                return 0
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "$container" 2> /dev/null || echo false)" != "true" ]; then
+                echo "Container ${container} stopped before becoming ready" >&2
+                return 1
+              fi
+              sleep 1
+            done
+            echo "Timed out waiting for http://127.0.0.1:3000/readyz" >&2
+            return 1
+          }
+
+          verify_container() {
+            wait_ready
+            curl --fail --silent --show-error http://127.0.0.1:3000/healthz
+            printf '\n'
+            curl --fail --silent --show-error http://127.0.0.1:3000/readyz
+            printf '\n'
+            local uid gid
+            uid="$(docker exec "$container" id -u)"
+            gid="$(docker exec "$container" id -g)"
+            echo "container uid=${uid} gid=${gid}"
+            test "$uid" = "10001"
+            test "$gid" = "10001"
+          }
+
+          if [ "$IMAGE_NAME" = "relay" ]; then
+            volume="quant-relay-smoke-data"
+            docker volume create "$volume" > /dev/null
+          fi
+
+          start_container
+          verify_container
+
+          if [ "$IMAGE_NAME" = "relay" ]; then
+            docker exec "$container" test -s /data/relay.sqlite3
+            echo "=== container logs before restart (${container}) ==="
+            docker logs "$container" 2>&1 || true
+            docker stop "$container" > /dev/null
+            docker rm "$container" > /dev/null
+            start_container
+            verify_container
+            docker exec "$container" test -s /data/relay.sqlite3
+          fi
