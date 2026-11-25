@@ -11,6 +11,14 @@ on:
         required: false
         type: string
         default: ''
+  # A merge made with the repository token starts no push run, so allow a manual one.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Optional git ref or commit SHA to check out
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -129,6 +137,10 @@ jobs:
         run: scripts/android-device.sh ranlib >> "$GITHUB_ENV"
       - name: Build
         run: leptoskit --app-target ${{ matrix.target }} ${{ matrix.build }}
+      - name: Build the quant CLI and daemon
+        if: matrix.target == 'desktop'
+        # The macOS app ships this binary, and the release runbook requires it.
+        run: cargo build --locked --release -p quant_cli --bin quant
       - uses: actions/upload-artifact@v4
         if: matrix.target == 'android' || matrix.target == 'wearos'
         with:
