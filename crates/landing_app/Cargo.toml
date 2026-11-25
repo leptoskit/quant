@@ -35,7 +35,7 @@ leptoskit = { workspace = true }
 leptoskit_router = { workspace = true }
 skribble_leptoskit = { workspace = true }
 # The store the screens read through `crate::store`.
-reactive_graph = "0.3.0-rc0"
+reactive_graph = { workspace = true }
 reactive_stores = "0.5.0-rc0"
 leptos = { version = "0.9.0-rc0", default-features = false, optional = true }
 # The embedded wasm-bindgen CLI accepts exactly its matching library version.

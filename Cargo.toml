@@ -155,4 +155,3 @@ strip = "none"
 
 [patch.crates-io]
 leptoskit = { git = "https://github.com/leptoskit/leptoskit", rev = "2ae5db1aa020157c4fced7ce54d39c325412e116" }
-leptoskit_native = { git = "https://github.com/leptoskit/leptoskit", rev = "2ae5db1aa020157c4fced7ce54d39c325412e116" }
