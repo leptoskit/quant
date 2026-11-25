@@ -135,6 +135,45 @@ jobs:
         if: matrix.target == 'desktop'
         # The macOS app ships this binary, and the release runbook requires it.
         run: cargo build --locked --release -p quant_cli --bin quant
+      - name: Package the desktop app and CLI
+        if: matrix.target == 'desktop'
+        # Artifact uploads drop symlinks and executable bits, so ship a tarball.
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          app_bundle=.leptoskit/macos/App.app
+          quant_binary=target/release/quant
+          for path in "$app_bundle" "$quant_binary"; do
+            if [ ! -e "$path" ]; then
+              echo "::error::$path is missing; the build did not produce it"
+              exit 1
+            fi
+          done
+          staging="$RUNNER_TEMP/quant-desktop-macos-$arch"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          ditto "$app_bundle" "$staging/App.app"
+          cp "$quant_binary" "$staging/quant"
+          cat > "$staging/README.txt" <<EOF
+          Quant desktop development build
+
+          This is a development build of commit $GITHUB_SHA for macOS $arch.
+          It is ad-hoc signed and not notarized, so it is not for distribution.
+          Touch ID needs a build signed with an Apple developer identity.
+          App.app is the menu-bar app; quant is the CLI and daemon.
+          See docs/desktop.md in the repository for how to run it.
+          EOF
+          tarball="$RUNNER_TEMP/quant-desktop-macos-$arch.tar.gz"
+          tar -czf "$tarball" -C "$staging" .
+          shasum -a 256 "$tarball"
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'desktop'
+        with:
+          name: quant-desktop-macos
+          path: ${{ runner.temp }}/quant-desktop-macos-*.tar.gz
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: matrix.target == 'android' || matrix.target == 'wearos'
         with:
