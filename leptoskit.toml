@@ -10,6 +10,14 @@ default_platform = "macos"
 platforms = ["web", "server", "macos", "android", "ios", "wearos", "watchos", "harmonyos"]
 icon = "assets/brand/icon.svg"
 
+# The full-bleed drawing, for platforms that mask the icon themselves.
+[app.icons]
+image = "assets/brand/icon-square.svg"
+
+# macOS draws no mask, so it gets the mark on Apple's rounded square.
+[app.icons.macos]
+image = "assets/brand/icon.svg"
+
 [frontends.app]
 package = "quant_app"
 render = "csr"
