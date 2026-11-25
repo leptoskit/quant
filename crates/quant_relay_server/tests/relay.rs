@@ -1,6 +1,8 @@
 //! The relay app over the real database: invite gating, limits, and byte
 //! accounting, end to end over sockets.
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,14 +17,42 @@ use quant_relay::key::RelayKey;
 use quant_relay::limits::day;
 use quant_relay::proto;
 use quant_relay::server::BUSY;
+use quant_relay::server::DAILY;
 use quant_relay::server::HANDSHAKE;
+use quant_relay::server::NO_DAEMON;
 use quant_relay::server::RelayStore as _;
 use relay_db::RelayDb;
 use tokio_tungstenite::tungstenite::Message;
 
+/// A relay app serving on a local port, over a database it keeps open.
+struct Served {
+	/// Where it listens.
+	url: RelayUrl,
+	/// The database it serves from.
+	store: RelayDb,
+	/// The task serving it, which [`Served::stop`] aborts.
+	server: tokio::task::JoinHandle<()>,
+}
+
+impl Served {
+	/// Stop the relay and drop its database handle, so a relay opened later
+	/// over the same file sees only what was committed.
+	async fn stop(self) {
+		self.server.abort();
+		let _ = self.server.await;
+		drop(self.store);
+	}
+}
+
 /// A relay app on a local port, over a fresh in-memory database.
 async fn serve(limits: Limits) -> (RelayUrl, RelayDb) {
-	let db = Db::connect("sqlite::memory:").await.unwrap();
+	let served = serve_at("sqlite::memory:", limits).await;
+	(served.url, served.store)
+}
+
+/// A relay app on a local port, over `database` (a leptoskit database URL).
+async fn serve_at(database: &str, limits: Limits) -> Served {
+	let db = Db::connect(database).await.unwrap();
 	for name in db.migrate(relay_db::MIGRATIONS).await.unwrap() {
 		println!("applied migration {name}");
 	}
@@ -30,11 +60,39 @@ async fn serve(limits: Limits) -> (RelayUrl, RelayDb) {
 	let app = relay::router(store.clone(), limits, &Readiness::new());
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let address = listener.local_addr().unwrap();
-	tokio::spawn(async move {
+	let server = tokio::spawn(async move {
 		axum::serve(listener, app).await.unwrap();
 	});
 	let url = RelayUrl::parse(&format!("ws://{address}")).unwrap();
-	(url, store)
+	Served { url, store, server }
+}
+
+/// A database file of its own for `test`, under the system temporary
+/// directory: the process id and a timestamp keep parallel and repeated runs
+/// apart.
+fn database_file(test: &str) -> PathBuf {
+	let stamp = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap()
+		.as_nanos();
+	std::env::temp_dir().join(format!(
+		"quant-relay-{test}-{}-{stamp}.sqlite3",
+		std::process::id()
+	))
+}
+
+/// The `sqlite://` URL for a database file.
+fn database_url(path: &Path) -> String {
+	format!("sqlite://{}", path.display())
+}
+
+/// Remove `path`, along with SQLite's write-ahead log and shared-memory files.
+fn remove_database(path: &Path) {
+	for suffix in ["", "-wal", "-shm"] {
+		let mut name = path.as_os_str().to_owned();
+		name.push(suffix);
+		let _ = std::fs::remove_file(PathBuf::from(name));
+	}
 }
 
 fn limits() -> Limits {
@@ -109,6 +167,99 @@ async fn echo_from(url: &RelayUrl, key: &Arc<RelayKey>, mut control: dial::Dial)
 			}
 		});
 	}
+}
+
+/// Register `key` on `url` and echo every accepted client frame until the
+/// returned task is aborted.
+async fn start_daemon(url: &RelayUrl, key: &Arc<RelayKey>) -> tokio::task::JoinHandle<()> {
+	let mut control = dial::dial(&url.listen()).await.unwrap();
+	dial::listen_handshake(&mut control, &url.authority, key, None)
+		.await
+		.unwrap();
+	let daemon_url = url.clone();
+	let daemon_key = Arc::clone(key);
+	tokio::spawn(async move {
+		echo_from(&daemon_url, &daemon_key, control).await;
+	})
+}
+
+/// Stop a daemon task and the control socket it holds.
+async fn stop_daemon(daemon: tokio::task::JoinHandle<()>) {
+	daemon.abort();
+	let _ = daemon.await;
+}
+
+/// Send `payload` through `client` and return the daemon's echo.
+async fn echo_round_trip(client: &mut dial::Dial, payload: &[u8]) -> Vec<u8> {
+	client
+		.send(Message::Binary(payload.to_vec().into()))
+		.await
+		.unwrap();
+	tokio::time::timeout(Duration::from_secs(5), async {
+		loop {
+			match client.next().await {
+				Some(Ok(Message::Binary(bytes))) => break bytes.to_vec(),
+				Some(Ok(_)) => {}
+				other => panic!("expected an echo, got {other:?}"),
+			}
+		}
+	})
+	.await
+	.unwrap()
+}
+
+/// Dial a client and return the reason the relay closed it, retrying while
+/// the daemon's registration is still settling.
+async fn refused_connect(url: &RelayUrl, rid: &str) -> String {
+	let deadline = std::time::Instant::now() + Duration::from_secs(5);
+	loop {
+		let mut socket = dial::dial(&url.connect(rid)).await.unwrap();
+		match socket.next().await {
+			Some(Ok(Message::Close(Some(frame))))
+				if frame.reason.as_str() == NO_DAEMON && std::time::Instant::now() < deadline =>
+			{
+				tokio::time::sleep(Duration::from_millis(20)).await;
+			}
+			Some(Ok(Message::Close(Some(frame)))) => return frame.reason.as_str().to_owned(),
+			other => panic!("expected the relay to close the connect, got {other:?}"),
+		}
+	}
+}
+
+/// Wait for the relay to commit `rid`'s registration, so stopping it cannot
+/// race the write.
+async fn wait_for_registration(store: &RelayDb, rid: &str) {
+	for _ in 0..50 {
+		let registered = relay_db::Registration::query()
+			.filter(|row| row.rid.eq(rid.to_owned()))
+			.first(store.db())
+			.await
+			.unwrap()
+			.is_some();
+		if registered {
+			return;
+		}
+		tokio::time::sleep(Duration::from_millis(20)).await;
+	}
+	panic!("the relay did not commit the registration for {rid}");
+}
+
+/// Wait for the stored total for `rid` on `today` to reach `at_least`, and
+/// return it.
+async fn wait_for_usage(store: &RelayDb, rid: &str, today: &str, at_least: u64) -> u64 {
+	let mut counted = 0;
+	for _ in 0..50 {
+		counted = store.usage(rid, today).await.unwrap();
+		if counted >= at_least {
+			break;
+		}
+		tokio::time::sleep(Duration::from_millis(20)).await;
+	}
+	assert!(
+		counted >= at_least,
+		"expected at least {at_least} bytes, saw {counted}"
+	);
+	counted
 }
 
 #[tokio::test]
@@ -293,4 +444,143 @@ async fn the_connection_limit_holds_per_rid() {
 		}
 	};
 	assert!(reason.contains(BUSY), "expected a busy close, got {reason}");
+}
+
+#[tokio::test]
+async fn a_registration_and_its_spent_invite_survive_a_restart() {
+	let path = database_file("registration");
+	let url = database_url(&path);
+	let code = "restart-invite";
+	let key = RelayKey::generate();
+
+	let before = serve_at(&url, limits()).await;
+	relay_db::NewInvite {
+		code: code.into(),
+		used_by: None,
+		used_at: None,
+	}
+	.insert(before.store.db())
+	.await
+	.unwrap();
+	assert_eq!(try_listen(&before.url, &key, Some(code)).await, None);
+	wait_for_registration(&before.store, &key.rid()).await;
+	before.stop().await;
+
+	// A new relay over the same file knows the daemon and the invite it spent.
+	let after = serve_at(&url, limits()).await;
+	assert_eq!(
+		try_listen(&after.url, &key, None).await,
+		None,
+		"a registered daemon re-listens without an invite"
+	);
+	let stranger = RelayKey::generate();
+	assert_eq!(
+		try_listen(&after.url, &stranger, Some(code))
+			.await
+			.as_deref(),
+		Some(HANDSHAKE),
+		"a spent invite stays spent across a restart"
+	);
+	let newcomer = RelayKey::generate();
+	assert_eq!(
+		try_listen(&after.url, &newcomer, None).await.as_deref(),
+		Some(HANDSHAKE),
+		"invite gating stays on across a restart"
+	);
+	after.stop().await;
+
+	remove_database(&path);
+}
+
+#[tokio::test]
+async fn usage_counters_survive_a_restart() {
+	let path = database_file("usage");
+	let url = database_url(&path);
+	let key = Arc::new(RelayKey::generate());
+	let rid = key.rid();
+	let today = day(jiff::Timestamp::now());
+	let payload = vec![7_u8; 1024];
+
+	let before = serve_at(&url, limits()).await;
+	let daemon = start_daemon(&before.url, &key).await;
+	let mut client = dial_client(&before.url, &rid).await;
+	assert_eq!(echo_round_trip(&mut client, &payload).await, payload);
+	client.close(None).await.unwrap();
+	let counted = wait_for_usage(&before.store, &rid, &today, 2048).await;
+	stop_daemon(daemon).await;
+	before.stop().await;
+
+	// The total is still there, rather than starting from zero.
+	let after = serve_at(&url, limits()).await;
+	assert_eq!(
+		after.store.usage(&rid, &today).await.unwrap(),
+		counted,
+		"the stored total is unchanged by a restart"
+	);
+
+	// Further traffic adds to the stored total.
+	let daemon = start_daemon(&after.url, &key).await;
+	let mut client = dial_client(&after.url, &rid).await;
+	assert_eq!(echo_round_trip(&mut client, &payload).await, payload);
+	client.close(None).await.unwrap();
+	wait_for_usage(&after.store, &rid, &today, counted + 2048).await;
+	stop_daemon(daemon).await;
+	after.stop().await;
+
+	remove_database(&path);
+}
+
+#[tokio::test]
+async fn the_daily_byte_limit_holds_across_a_restart() {
+	let limits = Limits {
+		bytes_per_day: 1024,
+		..limits()
+	};
+	let path = database_file("daily-limit");
+	let url = database_url(&path);
+	let key = Arc::new(RelayKey::generate());
+	let rid = key.rid();
+	let today = day(jiff::Timestamp::now());
+
+	let before = serve_at(&url, limits).await;
+	let daemon = start_daemon(&before.url, &key).await;
+	let mut client = dial_client(&before.url, &rid).await;
+	// One frame over the allowance closes the connection with the daily
+	// reason, and its bytes are counted.
+	client
+		.send(Message::Binary(vec![9_u8; 2048].into()))
+		.await
+		.unwrap();
+	let reason = loop {
+		match client.next().await {
+			Some(Ok(Message::Close(Some(frame)))) => break frame.reason.as_str().to_owned(),
+			Some(Ok(_)) => {}
+			other => panic!("expected a daily-limit close, got {other:?}"),
+		}
+	};
+	assert!(
+		reason.contains(DAILY),
+		"expected the daily limit, got {reason}"
+	);
+	let counted = wait_for_usage(&before.store, &rid, &today, 1024).await;
+	stop_daemon(daemon).await;
+	before.stop().await;
+
+	// A new relay over the same file still refuses the daemon's clients.
+	let after = serve_at(&url, limits).await;
+	let daemon = start_daemon(&after.url, &key).await;
+	let reason = refused_connect(&after.url, &rid).await;
+	assert!(
+		reason.contains(DAILY),
+		"the daily limit should survive a restart, got {reason}"
+	);
+	assert_eq!(
+		after.store.usage(&rid, &today).await.unwrap(),
+		counted,
+		"the usage behind the limit is unchanged by a restart"
+	);
+	stop_daemon(daemon).await;
+	after.stop().await;
+
+	remove_database(&path);
 }
