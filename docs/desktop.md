@@ -32,7 +32,7 @@ The window has five sections: **Status** (the daemon's version, each capture sou
 | `quant_app`            | The window, a leptoskit Wasm guest written with builder calls. It only talks to `quant_service`.                                                            |
 | `quant_model`          | What the window and the service say to each other.                                                                                                          |
 | `macos/`               | The app-owned macOS host: `App.swift` and `Info.plist` (`LSUIElement`).                                                                                     |
-| `assets/tray/icon.png` | The menu-bar icon: the Riemann mark as a black-on-transparent template image, 36 × 36 pixels (18 points at 2×), drawn from `assets/brand/mono.svg`.         |
+| `assets/tray/icon.png` | The menu-bar icon: the Quant mark as a black-on-transparent template image, 36 × 36 pixels (18 points at 2×), drawn from `assets/brand/mono.svg`.         |
 
 The host starts the resident core in `quant_service` at launch: a worker thread that talks to the daemon, and the status item. The window's guest is created the first time the window opens and reaches the core through a leptoskit app service (`rust-service-factory`), so an app that stays in the menu bar never loads it.
 
