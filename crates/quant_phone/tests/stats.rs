@@ -309,7 +309,7 @@ fn record(
 		record = record.ending(end);
 	}
 	for (key, value) in attributes {
-		record = record.with(*key, *value);
+		record = record.with(key, *value);
 	}
 	record
 }
