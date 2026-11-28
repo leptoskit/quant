@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use leptoskit::prelude::RwSignal;
+use leptoskit::prelude::Set;
 use leptoskit::prelude::Update;
 use quant_model::AuditRow;
 use quant_model::Command;
@@ -16,13 +17,21 @@ use quant_model::QuestionRow;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
 
+use crate::ui::PhonePanel;
 use crate::ui::State;
 
 pub(crate) fn state() -> State {
 	let data = snapshot();
 	let owner = data.owner.clone();
 	let signal = RwSignal::new(data);
+	let phone = RwSignal::new(PhonePanel::Closed);
 	let mut state = State::new(Arc::new(move |command| {
+		if matches!(command, Command::PhoneLink) {
+			phone.set(PhonePanel::Unavailable(
+				"Preview only · connect to a live Quant daemon to generate a pairing link.".into(),
+			));
+			return;
+		}
 		signal.update(|data| {
 			match command {
 				Command::Pause { .. } => {
@@ -46,6 +55,7 @@ pub(crate) fn state() -> State {
 		});
 	}));
 	state.snapshot = signal;
+	state.phone = phone;
 	state
 }
 

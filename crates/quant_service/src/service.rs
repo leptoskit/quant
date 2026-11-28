@@ -180,6 +180,7 @@ impl Service {
 			Command::EnrolTouchId { public_key } => Job::EnrolTouchId { public_key },
 			Command::TouchIdOff => Job::TouchIdOff,
 			Command::RevokeDevice { device } => Job::RevokeDevice(device),
+			Command::PhoneLink => Job::PhoneLink,
 		})
 	}
 

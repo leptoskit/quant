@@ -103,6 +103,11 @@ pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
 			.read()
 			.unwrap_or_else(std::sync::PoisonError::into_inner)
 			.clone(),
+		tls_address: state
+			.tls_address
+			.read()
+			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			.map(|address| address.to_string()),
 		relay: relay.as_ref().map(|config| config.url.to_string()),
 		relay_rid: relay.is_some().then(|| state.relay_key.rid()),
 	})

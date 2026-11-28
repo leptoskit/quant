@@ -377,10 +377,14 @@ pub enum Command {
 		/// Its id.
 		device: String,
 	},
+	/// Make the `quant://link` a phone uses to pair, and the QR code the
+	/// window draws for it. Answers a [`Reply`] whose data is a
+	/// [`PhoneLink`].
+	PhoneLink,
 }
 
 /// Extra data a [`Command`]'s [`Reply`] can carry.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReplyData {
 	/// A Touch ID unlock challenge: the bytes the window's key signs, and the
@@ -392,6 +396,34 @@ pub enum ReplyData {
 		/// bytes to sign.
 		message: Vec<u8>,
 	},
+	/// The pairing link a phone needs, and the QR code the window draws for
+	/// it without asking any other service.
+	PhoneLink(PhoneLink),
+}
+
+/// A pairing link for a phone, and the QR code the window draws for it.
+///
+/// The link is built with the same `quant_relay::link::Link` writer that
+/// `quant link` uses: `quant://link?addr=…&fp=…&vault=…`, with relay
+/// parameters when the daemon has a relay. The QR code is carried as SVG path
+/// data over a square module view box so the window draws it locally in two
+/// vector paths without touching the network.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PhoneLink {
+	/// The exact `quant://link?…` URL.
+	pub link: String,
+	/// The QR code, when the link fits one.
+	pub qr: Option<PhoneQr>,
+}
+
+/// A QR code as SVG path data over a square module view box that already
+/// includes the four-module quiet zone.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PhoneQr {
+	/// Total width and height in modules, including the quiet zone.
+	pub side: u16,
+	/// SVG path data (`d`) covering every dark module inside `0..side`.
+	pub path: String,
 }
 
 /// The answer to a [`Command`]. Details arrive in the next [`Snapshot`].
@@ -598,5 +630,26 @@ mod tests {
 			r#"{"kind":"touch_id_challenge","challenge":"Q0hBTExFTkdF","message":[1,2,3]}"#
 		);
 		assert_eq!(serde_json::from_str::<ReplyData>(&json).unwrap(), data);
+	}
+
+	#[test]
+	fn a_phone_link_carries_its_qr_path() {
+		let data = ReplyData::PhoneLink(PhoneLink {
+			link: "quant://link?addr=192.168.1.4:7717&fp=ab&vault=v1".into(),
+			qr: Some(PhoneQr {
+				side: 29,
+				path: "M4 4h1v1h-1Z".into(),
+			}),
+		});
+		let json = serde_json::to_string(&data).unwrap();
+		assert_eq!(
+			json,
+			r#"{"kind":"phone_link","link":"quant://link?addr=192.168.1.4:7717&fp=ab&vault=v1","qr":{"side":29,"path":"M4 4h1v1h-1Z"}}"#
+		);
+		assert_eq!(serde_json::from_str::<ReplyData>(&json).unwrap(), data);
+		assert_eq!(
+			Command::PhoneLink,
+			serde_json::from_str(r#"{"command":"phone_link"}"#).unwrap()
+		);
 	}
 }

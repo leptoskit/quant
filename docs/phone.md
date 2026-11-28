@@ -184,6 +184,20 @@ reach it.
 quant service install --tcp 0.0.0.0:7717
 ```
 
+On this Mac you can skip the terminal. Open Quant's window, choose **Status**,
+and press **Connect a phone**. It shows the same `quant://link` that
+`quant link` prints, with the QR code drawn on this Mac, and a read-only field
+holding the link for a camera or scanner that cannot open `quant://` links.
+When the phone appears under **Agents**, check that its pairing code matches
+the one on the phone, then approve it.
+
+The window never starts or changes the daemon. If the card says Quant is not
+listening for phones, or is bound only to loopback, run
+`quant service install --tcp 0.0.0.0:7717` (or
+`quant daemon --tcp 0.0.0.0:7717`) yourself, then open the card again. The link
+uses the TLS bind address and port the daemon actually advertises (including
+non-default ports and bracketed IPv6 hosts), rather than guessing port 7717.
+
 **Over Wi-Fi.** With the phone on the same network, open desktop Quant (or run
 `quant link`). Scan the QR code shown by desktop Quant with the phone's own
 camera, or open the `quant://link` from a message or another app; Quant shows

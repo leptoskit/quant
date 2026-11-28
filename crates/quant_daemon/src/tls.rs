@@ -86,6 +86,11 @@ impl TlsListener {
 			acceptor,
 		})
 	}
+
+	/// The local socket address this listener bound to.
+	pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+		self.tcp.local_addr()
+	}
 }
 
 impl axum::serve::Listener for TlsListener {

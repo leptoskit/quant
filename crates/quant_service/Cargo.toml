@@ -27,9 +27,14 @@ quant_api = { workspace = true }
 quant_client = { workspace = true }
 quant_core = { workspace = true }
 quant_model = { workspace = true }
+quant_relay = { workspace = true, default-features = false }
+qrcode = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+rqrr = { version = "0.11", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = { workspace = true }

@@ -221,11 +221,16 @@ pub async fn serve_tls(
 	shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
 	let listener = tls::TlsListener::bind(address, identity).await?;
+	let bound = listener.local_addr()?;
+	*state
+		.tls_address
+		.write()
+		.unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bound);
 	*state
 		.tls_fingerprint
 		.write()
 		.unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity.fingerprint());
-	tracing::info!(%address, fingerprint = identity.fingerprint(), "serving tls");
+	tracing::info!(address = %bound, fingerprint = identity.fingerprint(), "serving tls");
 	axum::serve(listener, router(state))
 		.with_graceful_shutdown(shutdown)
 		.await

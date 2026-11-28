@@ -7,6 +7,7 @@
 //! [`Shared`], which wakes the UI thread.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Arc;
@@ -34,6 +35,7 @@ use quant_api::ClientKind;
 use quant_api::ClientStatus;
 use quant_api::ClientView;
 use quant_api::EnrolDeviceRequest;
+use quant_api::Hello;
 use quant_api::PauseRequest;
 use quant_api::Paused;
 use quant_api::QuestionListRequest;
@@ -59,11 +61,14 @@ use quant_model::Notice;
 use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::PhoneLink;
+use quant_model::PhoneQr;
 use quant_model::QuestionRow;
 use quant_model::Reply;
 use quant_model::ReplyData;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
+use quant_relay::link::Link as PairingLink;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
@@ -190,6 +195,8 @@ pub enum Job {
 	TouchIdOff,
 	/// Revoke an enrolled owner device.
 	RevokeDevice(String),
+	/// Make the pairing link and QR code the window shows for a phone.
+	PhoneLink,
 }
 
 impl Job {
@@ -600,6 +607,7 @@ impl Worker {
 			Job::EnrolTouchId { public_key } => self.enrol_touch_id(&public_key).await,
 			Job::TouchIdOff => self.touch_id_off().await,
 			Job::RevokeDevice(device) => self.revoke_device(&device).await,
+			Job::PhoneLink => self.phone_link().await,
 		}
 	}
 
@@ -734,6 +742,17 @@ impl Worker {
 	fn forget_touch_id(&mut self) {
 		self.touch_id = None;
 		let _ = write_touch_id(&self.config.touch_id, None);
+	}
+
+	/// The pairing link and locally drawn QR code for a phone.
+	async fn phone_link(&mut self) -> Result<Done, String> {
+		let client = self.client()?.clone();
+		let hello = client
+			.hello()
+			.await
+			.map_err(|error| phone_hello_problem(&error, &self.config.endpoint))?;
+		let link = pairing_link(&hello, &self.config.endpoint)?;
+		Ok(Done::Data(ReplyData::PhoneLink(link)))
 	}
 
 	async fn save(&mut self, minutes: u32) -> Result<String, String> {
@@ -1101,6 +1120,253 @@ fn problem(error: &ClientError) -> String {
 	}
 }
 
+/// What to do when the daemon cannot answer the pairing-link request.
+fn phone_hello_problem(error: &ClientError, endpoint: &Endpoint) -> String {
+	let port = endpoint_port(endpoint).unwrap_or(quant_relay::link::DEFAULT_PORT);
+	match error {
+		ClientError::Unreachable { .. } => {
+			format!(
+				"Quant isn't running. Start it with `quant service install --tcp 0.0.0.0:{port}` \
+				 (or `quant daemon --tcp 0.0.0.0:{port}`), then try again."
+			)
+		}
+		error => {
+			format!(
+				"{} · Make sure Quant serves phones with `quant service install --tcp \
+				 0.0.0.0:{port}`, then try again.",
+				problem(error)
+			)
+		}
+	}
+}
+
+/// What to do when the daemon has no TLS listener for phones.
+fn local_only(port: u16) -> String {
+	format!(
+		"Quant is running, but it isn't listening for phones. Run `quant service install --tcp \
+		 0.0.0.0:{port}` (or `quant daemon --tcp 0.0.0.0:{port}`), then try again."
+	)
+}
+
+/// The pairing link for a hello answer, verified against the daemon's
+/// advertised TLS bind address and the endpoint this app used to reach it.
+fn pairing_link(hello: &Hello, endpoint: &Endpoint) -> Result<PhoneLink, String> {
+	pairing_link_with(
+		hello,
+		endpoint,
+		quant_relay::link::lan_address,
+		quant_relay::link::lan_address_v6,
+	)
+}
+
+fn pairing_link_with(
+	hello: &Hello,
+	endpoint: &Endpoint,
+	lan_v4: impl FnOnce() -> Option<String>,
+	lan_v6: impl FnOnce() -> Option<String>,
+) -> Result<PhoneLink, String> {
+	let fallback_port = endpoint_port(endpoint).unwrap_or(quant_relay::link::DEFAULT_PORT);
+	let fingerprint = hello
+		.tls_fingerprint
+		.as_deref()
+		.ok_or_else(|| local_only(fallback_port))?;
+	let relay = hello
+		.relay
+		.as_deref()
+		.zip(hello.relay_rid.as_deref())
+		.filter(|(_, rid)| quant_relay::key::valid_rid(rid));
+
+	let host_port = if let Some(host_port) = reachable_tls_endpoint(endpoint) {
+		Some(host_port)
+	} else if let Some(advertised) = hello.tls_address.as_deref() {
+		match advertised_host_port(advertised, lan_v4, lan_v6) {
+			Ok(host_port) => host_port,
+			Err(_) if relay.is_some() => None,
+			Err(error) => return Err(error),
+		}
+	} else {
+		None
+	};
+
+	let link = if let Some((host, port)) = host_port {
+		PairingLink::from_host_port(
+			&host,
+			port,
+			fingerprint,
+			&hello.vault_id,
+			hello.relay.clone(),
+			hello.relay_rid.clone(),
+		)
+	} else if let Some((relay, rid)) = relay {
+		PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
+	} else {
+		return Err(
+			"Quant is listening over TLS, but this daemon didn't report its bind address or port, \
+			 so the app can't verify a pairing link. Update and restart the daemon, or run `quant \
+			 link --host <address> --port <port>` in a terminal."
+				.to_owned(),
+		);
+	};
+
+	let url = link.to_url();
+	let qr = phone_qr(&url);
+	Ok(PhoneLink { link: url, qr })
+}
+
+/// The direct `host:port` a phone should use for an advertised bind address,
+/// or `None` when only the relay can reach the daemon. An `Err` is the reason
+/// a direct address could not be found, which a relay may still answer.
+fn advertised_host_port(
+	advertised: &str,
+	lan_v4: impl FnOnce() -> Option<String>,
+	lan_v6: impl FnOnce() -> Option<String>,
+) -> Result<Option<(String, u16)>, String> {
+	let Some((host, port)) = quant_relay::link::split_host_port(advertised) else {
+		return Err(format!(
+			"Quant reported an unusable network address ({advertised}). Check its `--tcp` setting \
+			 or run `quant link --host <address> --port <port>`."
+		));
+	};
+
+	match host.parse::<IpAddr>() {
+		Ok(ip) if ip.is_loopback() => Err(loopback_only(&host, port)),
+		Ok(ip) if ip.is_unspecified() => {
+			let lan = if ip.is_ipv6() {
+				lan_v6().or_else(lan_v4)
+			} else {
+				lan_v4()
+			};
+			lan.map(|host| Some((host, port))).ok_or_else(|| {
+				format!(
+					"This Mac has no network address right now. Join the same network as your \
+					 phone, then try again; `quant link --host <address> --port {port}` can print \
+					 a link for an address you choose."
+				)
+			})
+		}
+		Ok(_) => Ok(Some((host, port))),
+		Err(_) if quant_relay::link::is_reachable_host(&host) => Ok(Some((host, port))),
+		Err(_) => Err(loopback_only(&host, port)),
+	}
+}
+
+/// What to do when the daemon's TLS listener is bound only to loopback.
+fn loopback_only(host: &str, port: u16) -> String {
+	let bound = quant_relay::link::format_host_port(host, port);
+	format!(
+		"Quant's network listener is bound only to {bound} (loopback), so a phone cannot reach \
+		 it. Restart it with `quant service install --tcp 0.0.0.0:{port}` (or `quant daemon --tcp \
+		 0.0.0.0:{port}`), then try again."
+	)
+}
+
+/// The QR code for a link, rendered via `qrcode`'s own renderer (with its
+/// four-module quiet zone) into a single SVG path covering all dark modules.
+fn phone_qr(link: &str) -> Option<PhoneQr> {
+	let code = qrcode::QrCode::new(link.as_bytes()).ok()?;
+	let qr = code.render::<PathPixel>().quiet_zone(true).build();
+	(qr.side > 0 && !qr.path.is_empty()).then_some(qr)
+}
+
+#[derive(Clone, Copy)]
+struct PathPixel;
+
+impl qrcode::render::Pixel for PathPixel {
+	type Canvas = PathCanvas;
+	type Image = PhoneQr;
+
+	fn default_unit_size() -> (u32, u32) {
+		(1, 1)
+	}
+
+	fn default_color(_: qrcode::Color) -> Self {
+		Self
+	}
+}
+
+struct PathCanvas {
+	side: u16,
+	path: String,
+	pending: Option<(u32, u32, u32, u32)>,
+}
+
+impl PathCanvas {
+	fn flush(&mut self) {
+		use std::fmt::Write;
+
+		if let Some((left, top, width, height)) = self.pending.take() {
+			let _ = write!(self.path, "M{left} {top}h{width}v{height}h-{width}Z");
+		}
+	}
+}
+
+impl qrcode::render::Canvas for PathCanvas {
+	type Image = PhoneQr;
+	type Pixel = PathPixel;
+
+	fn new(width: u32, _height: u32, _: PathPixel, _: PathPixel) -> Self {
+		Self {
+			side: u16::try_from(width).unwrap_or(0),
+			path: String::new(),
+			pending: None,
+		}
+	}
+
+	fn draw_dark_pixel(&mut self, x: u32, y: u32) {
+		self.draw_dark_rect(x, y, 1, 1);
+	}
+
+	fn draw_dark_rect(&mut self, left: u32, top: u32, width: u32, height: u32) {
+		if let Some((pl, pt, pw, ph)) = self.pending
+			&& pt == top
+			&& ph == height
+			&& pl + pw == left
+		{
+			self.pending = Some((pl, pt, pw + width, ph));
+			return;
+		}
+		self.flush();
+		self.pending = Some((left, top, width, height));
+	}
+
+	fn into_image(mut self) -> PhoneQr {
+		self.flush();
+		PhoneQr {
+			side: self.side,
+			path: self.path,
+		}
+	}
+}
+
+/// The port an endpoint names, when it names one.
+fn endpoint_port(endpoint: &Endpoint) -> Option<u16> {
+	match endpoint {
+		Endpoint::Tcp(address) | Endpoint::Tls { address, .. } => {
+			quant_relay::link::split_host_port(address).map(|(_, port)| port)
+		}
+		Endpoint::Relay {
+			address: Some(address),
+			..
+		} => quant_relay::link::split_host_port(address).map(|(_, port)| port),
+		_ => None,
+	}
+}
+
+/// The verified direct TLS `host:port` this app already used, when a phone on
+/// the same network could also reach it.
+fn reachable_tls_endpoint(endpoint: &Endpoint) -> Option<(String, u16)> {
+	let address = match endpoint {
+		Endpoint::Tls { address, .. }
+		| Endpoint::Relay {
+			address: Some(address),
+			..
+		} => address.as_str(),
+		_ => return None,
+	};
+	let (host, port) = quant_relay::link::split_host_port(address)?;
+	quant_relay::link::is_reachable_host(&host).then_some((host, port))
+}
+
 fn ok() -> Reply {
 	Reply {
 		ok: true,
@@ -1372,5 +1638,327 @@ fn owner_view(
 		devices,
 		passphrase_session,
 		questions,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use leptoskit_native::vector::PathCommand;
+	use leptoskit_native::vector::PathData;
+
+	use super::*;
+
+	fn hello(tls_address: Option<&str>) -> Hello {
+		Hello {
+			service: "quant".into(),
+			version: "0.1.0".into(),
+			vault_id: "v1".into(),
+			tls_fingerprint: Some("abc123".into()),
+			tls_address: tls_address.map(str::to_owned),
+			relay: None,
+			relay_rid: None,
+		}
+	}
+
+	fn coord(value: f32) -> usize {
+		assert!(
+			value.is_finite() && value >= 0.0,
+			"expected non-negative finite coordinate, got {value}"
+		);
+		#[allow(
+			clippy::cast_possible_truncation,
+			clippy::cast_sign_loss,
+			reason = "non-negative integer module coordinate validated above"
+		)]
+		{
+			value.round() as usize
+		}
+	}
+
+	/// Rasterize the rendered SVG path (`PathData::parse`) onto a `side x side`
+	/// grid and verify every dark module respects the 4-module quiet zone.
+	fn rasterize_qr_path(qr: &PhoneQr) -> Vec<Vec<bool>> {
+		let side = usize::from(qr.side);
+		assert!(side >= 29, "minimum QR (21) + 8 quiet modules = 29");
+		let parsed = PathData::parse(&qr.path).expect("valid SVG path data");
+		let mut grid = vec![vec![false; side]; side];
+		let commands = parsed.commands();
+		assert!(!commands.is_empty());
+		let mut i = 0;
+		while i < commands.len() {
+			let PathCommand::MoveTo(p0) = commands[i] else {
+				panic!("expected MoveTo at {i}, got {:?}", commands[i]);
+			};
+			let PathCommand::LineTo(p1) = commands[i + 1] else {
+				panic!("expected LineTo at {}", i + 1);
+			};
+			let PathCommand::LineTo(p2) = commands[i + 2] else {
+				panic!("expected LineTo at {}", i + 2);
+			};
+			let PathCommand::LineTo(p3) = commands[i + 3] else {
+				panic!("expected LineTo at {}", i + 3);
+			};
+			assert_eq!(commands[i + 4], PathCommand::Close);
+			i += 5;
+
+			let x0 = coord(p0.x);
+			let y0 = coord(p0.y);
+			let x1 = coord(p1.x);
+			let y2 = coord(p2.y);
+			assert_eq!(coord(p1.y), y0);
+			assert_eq!(coord(p2.x), x1);
+			assert_eq!(coord(p3.x), x0);
+			assert_eq!(coord(p3.y), y2);
+			assert!(x1 > x0 && y2 > y0);
+			for row in &mut grid[y0..y2] {
+				for cell in &mut row[x0..x1] {
+					*cell = true;
+				}
+			}
+		}
+		// Verify a clean 4-module quiet zone on every side.
+		for (y, row) in grid.iter().enumerate() {
+			for (x, &dark) in row.iter().enumerate() {
+				if x < 4 || y < 4 || x >= side - 4 || y >= side - 4 {
+					assert!(!dark, "quiet zone module ({x}, {y}) must be light");
+				}
+			}
+		}
+		grid
+	}
+
+	/// Decode the rendered path with `rqrr`, an independently maintained QR
+	/// reader, so the test oracle cannot share a bug with the `qrcode` encoder
+	/// that produced it.
+	fn decode_qr_from_path(qr: &PhoneQr) -> String {
+		const SCALE: usize = 8;
+
+		let grid = rasterize_qr_path(qr);
+		let side = grid.len() * SCALE;
+		let mut image = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+			if grid[y / SCALE][x / SCALE] { 0 } else { 255 }
+		});
+		let grids = image.detect_grids();
+		assert_eq!(grids.len(), 1, "exactly one QR code in the rendered path");
+		let (_, payload) = grids[0]
+			.decode()
+			.expect("rqrr decodes the rendered QR code");
+		payload
+	}
+
+	#[test]
+	fn unix_endpoint_uses_advertised_non_default_port_and_decodable_qr() {
+		let link = pairing_link_with(
+			&hello(Some("0.0.0.0:9000")),
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.link,
+			"quant://link?addr=192.168.1.4:9000&fp=abc123&vault=v1"
+		);
+		let qr = link.qr.expect("the link fits a QR code");
+		assert_eq!(decode_qr_from_path(&qr), link.link);
+	}
+
+	#[test]
+	fn relay_link_qr_round_trips_and_decodes_with_quiet_zone() {
+		let mut h = hello(Some("0.0.0.0:9000"));
+		h.tls_fingerprint = Some("0123456789abcdef".repeat(4));
+		h.relay = Some("wss://relay.example:8443".into());
+		h.relay_rid = Some("abcdefghijklmnopqrstuvwxyz".into());
+		let link = pairing_link_with(
+			&h,
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.link,
+			format!(
+				"quant://link?addr=192.168.1.4:9000&fp={}&vault=v1&relay=wss%3A%2F%2Frelay.\
+				 example%3A8443&rid=abcdefghijklmnopqrstuvwxyz",
+				"0123456789abcdef".repeat(4)
+			)
+		);
+		let qr = link.qr.expect("relayed link fits a QR code");
+		assert_eq!(decode_qr_from_path(&qr), link.link);
+	}
+
+	#[test]
+	fn advertised_specific_ipv6_bind_is_bracketed_and_decodable() {
+		let link = pairing_link_with(
+			&hello(Some("[2001:db8::1]:9000")),
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| None,
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.link,
+			"quant://link?addr=[2001:db8::1]:9000&fp=abc123&vault=v1"
+		);
+		let qr = link.qr.expect("IPv6 link fits a QR code");
+		assert_eq!(decode_qr_from_path(&qr), link.link);
+	}
+
+	#[test]
+	fn advertised_loopback_bind_without_relay_refuses_to_make_broken_qr() {
+		let error = pairing_link_with(
+			&hello(Some("127.0.0.1:9000")),
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap_err();
+		assert!(error.contains("127.0.0.1:9000"), "{error}");
+		assert!(error.contains("loopback"), "{error}");
+		assert!(
+			error.contains("quant service install --tcp 0.0.0.0:9000"),
+			"{error}"
+		);
+		assert!(!error.contains("quant://link"), "{error}");
+	}
+
+	#[test]
+	fn advertised_loopback_bind_with_relay_builds_relay_only_link() {
+		let mut h = hello(Some("127.0.0.1:9000"));
+		h.relay = Some("wss://relay.example".into());
+		h.relay_rid = Some("abcdefghijklmnopqrstuvwxyz".into());
+		let link = pairing_link_with(
+			&h,
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.link,
+			"quant://link?fp=abc123&vault=v1&relay=wss%3A%2F%2Frelay.example&\
+			 rid=abcdefghijklmnopqrstuvwxyz"
+		);
+		assert_eq!(decode_qr_from_path(link.qr.as_ref().unwrap()), link.link);
+	}
+
+	#[test]
+	fn unknown_tls_address_on_unix_endpoint_returns_actionable_fallback() {
+		let error = pairing_link_with(
+			&hello(None),
+			&Endpoint::Unix("/tmp/quant.sock".into()),
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap_err();
+		assert!(error.contains("quant link --host"), "{error}");
+		assert!(!error.contains("quant://link"), "{error}");
+	}
+
+	#[test]
+	fn unknown_tls_address_on_verified_tls_endpoint_uses_that_endpoint_and_brackets_ipv6() {
+		let endpoint = Endpoint::Tls {
+			address: "[2001:db8::5]:9000".into(),
+			fingerprint: [0; 32],
+		};
+		let link = pairing_link_with(&hello(None), &endpoint, || None, || None).unwrap();
+		assert_eq!(
+			link.link,
+			"quant://link?addr=[2001:db8::5]:9000&fp=abc123&vault=v1"
+		);
+	}
+
+	#[test]
+	fn a_local_only_vault_says_how_to_listen() {
+		let mut h = hello(None);
+		h.tls_fingerprint = None;
+		let error = pairing_link(&h, &Endpoint::Unix("/tmp/quant.sock".into())).unwrap_err();
+		assert!(error.contains("quant service install --tcp 0.0.0.0:7717"));
+		assert!(!error.contains("quant://link"), "{error}");
+	}
+
+	#[test]
+	fn a_local_only_vault_on_a_non_default_port_says_that_port() {
+		let mut h = hello(None);
+		h.tls_fingerprint = None;
+		let endpoint = Endpoint::Tls {
+			address: "192.168.1.4:9000".into(),
+			fingerprint: [0; 32],
+		};
+		let error = pairing_link(&h, &endpoint).unwrap_err();
+		assert!(error.contains("quant service install --tcp 0.0.0.0:9000"));
+	}
+
+	#[test]
+	fn an_offline_vault_says_how_to_start_it() {
+		let error = ClientError::Unreachable {
+			endpoint: "unix:/tmp/quant.sock".into(),
+			source: std::io::Error::other("gone"),
+		};
+		let text = phone_hello_problem(&error, &Endpoint::Unix("/tmp/quant.sock".into()));
+		assert!(text.contains("quant service install"), "{text}");
+		assert!(!text.contains("quant://link"), "{text}");
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn worker_phone_link_reads_advertised_tls_address_over_unix_socket() {
+		use tokio::io::AsyncReadExt;
+		use tokio::io::AsyncWriteExt;
+
+		let dir = PathBuf::from(format!("/tmp/qpl-{}", std::process::id()));
+		let _ = std::fs::create_dir_all(&dir);
+		let sock = dir.join("q.sock");
+		let _ = std::fs::remove_file(&sock);
+		let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+
+		let server = tokio::spawn(async move {
+			let (mut stream, _) = listener.accept().await.unwrap();
+			let mut buf = [0u8; 1024];
+			let _ = stream.read(&mut buf).await.unwrap();
+			let body = serde_json::to_string(&Hello {
+				service: "quant".into(),
+				version: "0.1.0".into(),
+				vault_id: "v1".into(),
+				tls_fingerprint: Some("deadbeef".into()),
+				tls_address: Some("192.168.1.9:9443".into()),
+				relay: Some("wss://relay.example".into()),
+				relay_rid: Some("abcdefghijklmnopqrstuvwxyz".into()),
+			})
+			.unwrap();
+			let resp = format!(
+				"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+				 {}\r\nconnection: close\r\n\r\n{}",
+				body.len(),
+				body
+			);
+			stream.write_all(resp.as_bytes()).await.unwrap();
+		});
+
+		let mut worker = Worker::new(
+			Config {
+				endpoint: Endpoint::Unix(sock.clone()),
+				vault: None,
+				identity: dir.join("desktop.identity.json"),
+				touch_id: dir.join("desktop.touch-id.json"),
+				cache: dir.join("cache"),
+				tz: TimeZone::UTC,
+			},
+			Arc::new(Shared::default()),
+		);
+		let done = worker.phone_link().await.unwrap();
+		server.await.unwrap();
+		let _ = std::fs::remove_dir_all(&dir);
+
+		let Done::Data(ReplyData::PhoneLink(link)) = done else {
+			panic!("expected ReplyData::PhoneLink");
+		};
+		assert_eq!(
+			link.link,
+			"quant://link?addr=192.168.1.9:9443&fp=deadbeef&vault=v1&relay=wss%3A%2F%2Frelay.\
+			 example&rid=abcdefghijklmnopqrstuvwxyz"
+		);
+		assert_eq!(decode_qr_from_path(link.qr.as_ref().unwrap()), link.link);
 	}
 }

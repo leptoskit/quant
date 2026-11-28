@@ -46,6 +46,7 @@ use quant_core::DeviceId;
 use quant_core::OwnerDeviceId;
 use quant_core::QuestionId;
 use quant_core::Record;
+use quant_relay::link::Link;
 use quant_store::VaultPaths;
 
 #[derive(Parser)]
@@ -300,13 +301,14 @@ enum Command {
 	/// Print the link (and QR code) a phone uses to reach this daemon over
 	/// the network. The daemon must be running with `--tcp`.
 	Link {
-		/// The address phones should use; defaults to this machine's LAN
-		/// address.
+		/// The address phones should use; defaults to the daemon's advertised
+		/// address or this machine's LAN address.
 		#[arg(long)]
 		host: Option<String>,
-		/// The port `quant daemon --tcp` listens on.
-		#[arg(long, default_value_t = 7717)]
-		port: u16,
+		/// The port `quant daemon --tcp` listens on; defaults to the daemon's
+		/// advertised TLS port, or 7717.
+		#[arg(long)]
+		port: Option<u16>,
 	},
 	/// Run the MCP server on stdio for an AI agent.
 	Mcp {
@@ -1296,32 +1298,19 @@ async fn mcp(cx: &Ctx, scopes: &[String], setup: bool) -> Result<()> {
 	Ok(())
 }
 
-async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
+async fn link(cx: &Ctx, host: Option<String>, port: Option<u16>) -> Result<()> {
 	let hello = Client::new(cx.endpoint.clone(), Identity::generate("link"))
 		.hello()
 		.await?;
-	let fingerprint = hello.tls_fingerprint.context(
-		"the daemon is not listening on the network; start it with `quant daemon --tcp \
-		 0.0.0.0:7717`",
+	let built = build_cli_link(
+		&hello,
+		host,
+		port,
+		quant_relay::link::lan_address,
+		quant_relay::link::lan_address_v6,
 	)?;
-	let host = match host {
-		Some(host) => host,
-		None => lan_address().context("could not find this machine's LAN address; pass --host")?,
-	};
-	let mut link = format!(
-		"quant://link?addr={host}:{port}&fp={fingerprint}&vault={}",
-		hello.vault_id
-	);
-	let relayed = hello.relay.is_some();
-	if let Some(relay) = hello.relay
-		&& let Some(rid) = hello.relay_rid
-	{
-		let encoded = relay.replace(':', "%3A").replace('/', "%2F");
-		link.push_str("&relay=");
-		link.push_str(&encoded);
-		link.push_str("&rid=");
-		link.push_str(&rid);
-	}
+	let relayed = built.has_relay();
+	let link = built.to_url();
 	let code = qrcode::QrCode::new(link.as_bytes())?;
 	println!(
 		"{}",
@@ -1341,11 +1330,74 @@ async fn link(cx: &Ctx, host: Option<String>, port: u16) -> Result<()> {
 	Ok(())
 }
 
-/// The address this machine uses to reach the network (no packet is sent).
-fn lan_address() -> Option<String> {
-	let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-	socket.connect("192.0.2.1:9").ok()?;
-	Some(socket.local_addr().ok()?.ip().to_string())
+fn build_cli_link(
+	hello: &quant_api::Hello,
+	host: Option<String>,
+	port: Option<u16>,
+	lan_v4: impl FnOnce() -> Option<String>,
+	lan_v6: impl FnOnce() -> Option<String>,
+) -> Result<Link> {
+	let fingerprint = hello.tls_fingerprint.as_deref().context(
+		"the daemon is not listening on the network; start it with `quant daemon --tcp \
+		 0.0.0.0:7717`",
+	)?;
+	let advertised = hello
+		.tls_address
+		.as_deref()
+		.and_then(quant_relay::link::split_host_port);
+	let resolved_port = port
+		.or_else(|| advertised.as_ref().map(|(_, p)| *p))
+		.unwrap_or(quant_relay::link::DEFAULT_PORT);
+	let resolved_host = match host {
+		Some(host) => host,
+		None => {
+			match advertised {
+				Some((adv_host, _)) => {
+					if let Ok(ip) = adv_host.parse::<std::net::IpAddr>() {
+						if ip.is_loopback() {
+							anyhow::bail!(
+								"the daemon's TLS listener is bound only to loopback ({}); \
+								 restart it with `quant daemon --tcp 0.0.0.0:{resolved_port}` or \
+								 pass --host",
+								quant_relay::link::format_host_port(&adv_host, resolved_port)
+							);
+						}
+						if ip.is_unspecified() {
+							if ip.is_ipv6() {
+								lan_v6().or_else(lan_v4).context(
+									"could not find this machine's LAN address; pass --host",
+								)?
+							} else {
+								lan_v4().context(
+									"could not find this machine's LAN address; pass --host",
+								)?
+							}
+						} else {
+							adv_host
+						}
+					} else if quant_relay::link::is_reachable_host(&adv_host) {
+						adv_host
+					} else {
+						anyhow::bail!(
+							"the daemon's TLS listener address ({adv_host}) is not reachable from \
+							 a phone; restart with `--tcp 0.0.0.0:{resolved_port}` or pass --host"
+						);
+					}
+				}
+				None => {
+					lan_v4().context("could not find this machine's LAN address; pass --host")?
+				}
+			}
+		}
+	};
+	Ok(Link::from_host_port(
+		&resolved_host,
+		resolved_port,
+		fingerprint,
+		&hello.vault_id,
+		hello.relay.clone(),
+		hello.relay_rid.clone(),
+	))
 }
 
 fn hostname() -> String {
@@ -1357,4 +1409,81 @@ fn hostname() -> String {
 		.map(|s| s.trim().to_owned())
 		.filter(|s| !s.is_empty())
 		.unwrap_or_else(|| "this machine".into())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn hello(tls_address: Option<&str>) -> quant_api::Hello {
+		quant_api::Hello {
+			service: "quant".into(),
+			version: "0.1.0".into(),
+			vault_id: "v1".into(),
+			tls_fingerprint: Some("abc123".into()),
+			tls_address: tls_address.map(str::to_owned),
+			relay: None,
+			relay_rid: None,
+		}
+	}
+
+	#[test]
+	fn cli_link_uses_advertised_non_default_port_and_lan_for_unspecified_bind() {
+		let link = build_cli_link(
+			&hello(Some("0.0.0.0:9000")),
+			None,
+			None,
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.to_url(),
+			"quant://link?addr=192.168.1.4:9000&fp=abc123&vault=v1"
+		);
+	}
+
+	#[test]
+	fn cli_link_preserves_explicit_host_and_port_overrides_and_brackets_ipv6() {
+		let link = build_cli_link(
+			&hello(Some("127.0.0.1:7717")),
+			Some("2001:db8::1".into()),
+			Some(8443),
+			|| None,
+			|| None,
+		)
+		.unwrap();
+		assert_eq!(
+			link.to_url(),
+			"quant://link?addr=[2001:db8::1]:8443&fp=abc123&vault=v1"
+		);
+	}
+
+	#[test]
+	fn cli_link_rejects_loopback_bind_without_host_override() {
+		let err = build_cli_link(
+			&hello(Some("127.0.0.1:9000")),
+			None,
+			None,
+			|| Some("192.168.1.4".into()),
+			|| None,
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(err.contains("loopback"), "{err}");
+		assert!(err.contains("--host"), "{err}");
+	}
+
+	#[test]
+	fn cli_link_keeps_default_port_for_legacy_daemon_and_relay_formatting() {
+		let mut h = hello(None);
+		h.relay = Some("wss://relay.example".into());
+		h.relay_rid = Some("abcdefghijklmnopqrstuvwxyz".into());
+		let link = build_cli_link(&h, None, None, || Some("192.168.1.4".into()), || None).unwrap();
+		assert_eq!(
+			link.to_url(),
+			"quant://link?addr=192.168.1.4:7717&fp=abc123&vault=v1&relay=wss%3A%2F%2Frelay.\
+			 example&rid=abcdefghijklmnopqrstuvwxyz"
+		);
+	}
 }
