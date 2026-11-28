@@ -7,6 +7,13 @@
 //! the service unread, as a [`Reading`]; the service decodes it, queues it, and
 //! delivers it to the vault. The screen never sees a signing key, and nothing
 //! it hands over is trusted until the service has decoded it.
+//!
+//! The collector is write-only. When the owner asks for it, the service also
+//! keeps an opt-in companion identity with its own key and grant, approved
+//! through the same pairing workflow, so the screen can show bounded
+//! aggregates of the vault. The companion never widens the collector's
+//! scopes, never handles the owner's passphrase, and a failure to read it
+//! never stops recording, queueing, or delivery.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,7 +49,8 @@ pub const READING: u32 = 3;
 /// The write scopes the phone pairs with: where it has been, which apps were
 /// in front, its screen, battery and thermal state, plus health and motion
 /// readings from `HealthKit` / Health Connect and paired BLE sensors. None of
-/// them lets the phone read anything back.
+/// them lets the collector read anything back; stats use the separate,
+/// opt-in companion identity in [`STATS_SCOPES`].
 pub const PHONE_SCOPES: [&str; 6] = [
 	"location:write",
 	"apps:write",
@@ -60,6 +68,118 @@ pub const WATCH_SCOPES: [&str; 5] = [
 	"device:write",
 	"sensor:write",
 ];
+
+/// The scopes the opt-in stats companion asks for: aggregates of every
+/// stream the owner chose to share, never records, text, or media.
+pub const STATS_SCOPES: [&str; 1] = ["*:summary"];
+
+/// One capability the opt-in companion identity can ask the owner to
+/// approve.
+///
+/// The companion has its own signing key and its own grant, separate from
+/// the write-only collector's. Follow-on features add a variant here with
+/// their own scopes; the request, approval, revocation, and clearing
+/// workflow stays exactly the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionCapability {
+	/// Read bounded aggregates from the streams the owner shares.
+	StatsSummary,
+}
+
+impl CompanionCapability {
+	/// Every capability this build can request, in approval order.
+	pub const ALL: [Self; 1] = [Self::StatsSummary];
+
+	/// The scopes this capability asks the owner for. A capability never
+	/// widens another one's request.
+	pub fn scopes(self) -> &'static [&'static str] {
+		match self {
+			Self::StatsSummary => &STATS_SCOPES,
+		}
+	}
+
+	/// The capability's name on the screen.
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::StatsSummary => "Stats",
+		}
+	}
+}
+
+/// The stretch a stats summary covers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsWindow {
+	/// The last 24 hours.
+	#[default]
+	Day,
+	/// The last 7 days.
+	Week,
+}
+
+impl StatsWindow {
+	/// Every window the screen can ask for.
+	pub const ALL: [Self; 2] = [Self::Day, Self::Week];
+
+	/// How far back the window reaches, in milliseconds.
+	pub fn span_ms(self) -> i64 {
+		match self {
+			Self::Day => 24 * 60 * 60 * 1000,
+			Self::Week => 7 * 24 * 60 * 60 * 1000,
+		}
+	}
+
+	/// How the window reads on the screen.
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::Day => "Past 24 hours",
+			Self::Week => "Past 7 days",
+		}
+	}
+}
+
+/// Where the opt-in stats companion stands with the vault.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum StatsAccess {
+	/// No vault is paired yet, so there is nothing to read from.
+	Unpaired,
+	/// The owner has not asked this phone for stats.
+	#[default]
+	NotRequested,
+	/// A companion identity exists and its grant has not been checked since
+	/// launch. Asking for a summary resolves this.
+	Checking,
+	/// Waiting for the owner to approve the companion.
+	Pending {
+		/// The pairing code the owner approves.
+		code: String,
+	},
+	/// Approved, and allowed to read at least one stream.
+	Ready,
+	/// Approved, but the grant shares no stream this capability can read.
+	Restricted,
+	/// The owner refused or revoked the companion, or its grant ran out.
+	Revoked,
+	/// The vault, or this phone's companion identity, could not be read.
+	Unreachable {
+		/// Why.
+		reason: String,
+	},
+}
+
+/// What the screen knows about the opt-in stats companion without asking
+/// the vault.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StatsState {
+	/// How the companion stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the last request or summary stopped, when it did.
+	pub problem: Option<String>,
+}
 
 /// How often the screen asks the service to look again and upload.
 pub const TICK_SECONDS: u64 = 60;
@@ -93,6 +213,10 @@ pub struct Snapshot {
 	pub delivered: Option<String>,
 	/// Why the last delivery stopped, when it did.
 	pub upload_problem: Option<String>,
+	/// The opt-in stats companion. Collection and delivery never depend on
+	/// it.
+	#[serde(default)]
+	pub stats: StatsState,
 	/// What each source has handed over since the app started.
 	pub sources: Vec<SourceRow>,
 	/// The result of the last action.
@@ -228,6 +352,187 @@ pub struct SourceRow {
 	pub problem: Option<String>,
 }
 
+/// Whether a stream holds discrete records or numeric samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsKind {
+	/// Discrete records.
+	Event,
+	/// Numeric samples.
+	Series,
+}
+
+/// The most streams one summary lists.
+pub const MAX_STATS_STREAMS: usize = 24;
+/// The most streams whose detail is read in one summary.
+pub const MAX_STATS_DETAILS: usize = 8;
+/// The most channels one numeric stream lists.
+pub const MAX_STATS_CHANNELS: usize = 8;
+/// The most buckets one numeric stream lists.
+pub const MAX_STATS_BUCKETS: usize = 12;
+/// The most groups one duration breakdown lists.
+pub const MAX_STATS_GROUPS: usize = 8;
+
+/// One channel's aggregates across a range. `samples` is the number of
+/// readings, never the sum of their values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsChannel {
+	/// Channel name, such as `bpm` or `steps`.
+	pub name: String,
+	/// Unit, such as `bpm`, `count`, or `m`.
+	pub unit: String,
+	/// Number of samples behind the statistics.
+	pub samples: u64,
+	/// Smallest value, when there is a sample.
+	pub min: Option<f64>,
+	/// Largest value, when there is a sample.
+	pub max: Option<f64>,
+	/// Mean value, when there is a sample.
+	pub mean: Option<f64>,
+}
+
+/// One channel's aggregates inside one bucket.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsBucketChannel {
+	/// Channel name.
+	pub name: String,
+	/// Unit, such as `bpm`, `count`, or `m`.
+	pub unit: String,
+	/// Number of samples in the bucket.
+	pub samples: u64,
+	/// Smallest value.
+	pub min: f64,
+	/// Largest value.
+	pub max: f64,
+	/// Mean value.
+	pub mean: f64,
+}
+
+/// One bucket of a numeric stream.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsBucket {
+	/// The bucket's start, as the screen words it.
+	pub start: String,
+	/// The bucket's start, in Unix milliseconds.
+	pub start_ms: i64,
+	/// Every channel with a sample in this bucket.
+	pub channels: Vec<StatsBucketChannel>,
+}
+
+/// One group's share of time in an event stream.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsDuration {
+	/// The group, such as an app or sleep stage.
+	pub group: Option<String>,
+	/// Records in the group.
+	pub count: u64,
+	/// Seconds the group covered.
+	pub seconds: f64,
+	/// The same span, as the screen words it, such as "1h 20m".
+	pub duration: String,
+}
+
+/// How much detail one stream's summary carries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StatsDetail {
+	/// Bucketed numeric aggregates, with each channel's unit.
+	Numeric {
+		/// Every channel, including ones with no samples in the range.
+		channels: Vec<StatsChannel>,
+		/// The buckets that hold samples.
+		buckets: Vec<StatsBucket>,
+		/// Whether channels were left out by the display bound.
+		channels_truncated: bool,
+		/// Whether buckets were left out by the display bound.
+		buckets_truncated: bool,
+	},
+	/// Time spent per group in an event stream whose spec names summary
+	/// keys.
+	Durations {
+		/// The attribute the groups are.
+		group_by: String,
+		/// Groups, longest first.
+		groups: Vec<StatsDuration>,
+		/// Whether groups were left out by the display bound.
+		truncated: bool,
+	},
+	/// Only the record count is shown.
+	Counted,
+	/// Readable, but the summary's detail budget was already spent.
+	Bounded,
+}
+
+/// One stream in a bounded summary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsStream {
+	/// The stream id, such as `health.heart_rate`.
+	pub stream: String,
+	/// The stream's short name on the screen.
+	pub label: String,
+	/// The family's name on the screen.
+	pub family: String,
+	/// One line explaining the stream.
+	pub description: String,
+	/// Records or numeric samples.
+	pub kind: StatsKind,
+	/// Records for event streams, samples for series streams. Never a sum
+	/// of their values.
+	pub count: u64,
+	/// The unit for `count`: `records` or `samples`.
+	pub count_unit: String,
+	/// First reading, as the screen words it.
+	pub first: Option<String>,
+	/// Last reading, as the screen words it.
+	pub last: Option<String>,
+	/// First reading, in Unix milliseconds.
+	pub first_ms: Option<i64>,
+	/// Last reading, in Unix milliseconds.
+	pub last_ms: Option<i64>,
+	/// The detail the vault allowed.
+	pub detail: StatsDetail,
+}
+
+/// A bounded, display-ready summary of what the paired vault holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VaultStats {
+	/// The window that was asked for.
+	pub window: StatsWindow,
+	/// How the window reads, such as "Past 24 hours".
+	pub span: String,
+	/// The effective range's start, as the screen words it. The vault may
+	/// clip it to the companion grant's lookback.
+	pub from: String,
+	/// The effective range's end, as the screen words it.
+	pub to: String,
+	/// The effective range's start, in Unix milliseconds.
+	pub from_ms: i64,
+	/// The effective range's end, in Unix milliseconds.
+	pub to_ms: i64,
+	/// The streams the companion can read, including empty ones.
+	pub streams: Vec<StatsStream>,
+	/// Whether readable streams were left out by the display bound.
+	pub truncated: bool,
+	/// Whether some stream detail was left out by the detail bound.
+	pub details_truncated: bool,
+	/// When the vault answered, as the screen words it.
+	pub fetched: String,
+}
+
+/// The answer to a stats request: where access stands, and the summary
+/// when the vault answered.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsReply {
+	/// How the companion stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request or summary stopped, when it did.
+	pub problem: Option<String>,
+	/// The bounded summary, when the vault answered.
+	pub summary: Option<VaultStats>,
+}
+
 /// Something the screen asks the service to do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -291,10 +596,24 @@ pub enum Command {
 	/// Ask for the saved vault pairing link so the phone can forward it to a
 	/// paired watch over `watch-sync`. Answers [`ReplyData::PairLink`].
 	ExportPairLink,
+	/// Ask the owner to approve the opt-in stats companion. This is the
+	/// only way the companion identity is ever requested; collection never
+	/// asks for it on its own.
+	RequestStats,
+	/// Forget the stats companion and its signing key. The collector's
+	/// identity, the encrypted spool, and everything waiting are untouched.
+	ForgetStats,
+	/// Read a bounded summary through the approved stats companion. Answers
+	/// [`ReplyData::VaultStats`] with its access, approval, offline, or empty
+	/// state.
+	VaultStats {
+		/// Which window to summarise.
+		window: StatsWindow,
+	},
 }
 
 /// Extra data a [`Command`]'s [`Reply`] can carry.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReplyData {
 	/// A fresh spool key, base64.
@@ -324,11 +643,16 @@ pub enum ReplyData {
 		/// Pairing link URI.
 		link: String,
 	},
+	/// The answer to [`Command::VaultStats`].
+	VaultStats {
+		/// Where access stands, and the bounded summary when it answered.
+		stats: StatsReply,
+	},
 }
 
 /// The answer to a [`Command`] or a reading. Details arrive in the next
 /// [`Snapshot`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Reply {
 	/// Whether it worked.
 	pub ok: bool,
@@ -755,5 +1079,109 @@ mod tests {
 	fn the_phone_asks_only_for_write_scopes() {
 		assert!(PHONE_SCOPES.iter().all(|scope| scope.ends_with(":write")));
 		assert!(WATCH_SCOPES.iter().all(|scope| scope.ends_with(":write")));
+	}
+
+	#[test]
+	fn the_stats_companion_asks_for_aggregates_only() {
+		assert_eq!(CompanionCapability::StatsSummary.scopes(), ["*:summary"]);
+		assert_eq!(
+			CompanionCapability::ALL,
+			[CompanionCapability::StatsSummary]
+		);
+		assert!(
+			CompanionCapability::StatsSummary
+				.scopes()
+				.iter()
+				.all(|scope| scope.ends_with(":summary"))
+		);
+		assert_eq!(CompanionCapability::StatsSummary.label(), "Stats");
+	}
+
+	#[test]
+	fn stats_windows_are_bounded_and_readable() {
+		assert_eq!(StatsWindow::Day.span_ms(), 24 * 60 * 60 * 1000);
+		assert_eq!(StatsWindow::Week.span_ms(), 7 * 24 * 60 * 60 * 1000);
+		assert_eq!(StatsWindow::default(), StatsWindow::Day);
+		assert_eq!(StatsWindow::Day.label(), "Past 24 hours");
+		assert_eq!(StatsWindow::ALL.len(), 2);
+	}
+
+	#[test]
+	fn stats_commands_and_replies_round_trip_as_tagged_json() {
+		let command = Command::VaultStats {
+			window: StatsWindow::Week,
+		};
+		let json = serde_json::to_string(&command).unwrap();
+		assert_eq!(json, r#"{"command":"vault_stats","window":"week"}"#);
+		assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+
+		let reply = Reply::data(ReplyData::VaultStats {
+			stats: StatsReply {
+				access: StatsAccess::Pending {
+					code: "K7QD-M2XA".into(),
+				},
+				approve: Some("quant approve K7QD-M2XA --scope '*:summary'".into()),
+				problem: None,
+				summary: Some(VaultStats {
+					window: StatsWindow::Day,
+					span: StatsWindow::Day.label().into(),
+					from: "Yesterday 14:03".into(),
+					to: "Today 13:07".into(),
+					from_ms: 1,
+					to_ms: 2,
+					streams: vec![StatsStream {
+						stream: "health.steps".into(),
+						label: "Steps".into(),
+						family: "Health".into(),
+						description: "Steps counted per interval.".into(),
+						kind: StatsKind::Series,
+						count: 12,
+						count_unit: "samples".into(),
+						first: None,
+						last: None,
+						first_ms: None,
+						last_ms: None,
+						detail: StatsDetail::Numeric {
+							channels: vec![StatsChannel {
+								name: "steps".into(),
+								unit: "count".into(),
+								samples: 12,
+								min: Some(4.0),
+								max: Some(30.0),
+								mean: Some(12.5),
+							}],
+							buckets: vec![StatsBucket {
+								start: "Today 12:00".into(),
+								start_ms: 2,
+								channels: vec![StatsBucketChannel {
+									name: "steps".into(),
+									unit: "count".into(),
+									samples: 4,
+									min: 4.0,
+									max: 30.0,
+									mean: 12.5,
+								}],
+							}],
+							channels_truncated: false,
+							buckets_truncated: false,
+						},
+					}],
+					truncated: false,
+					details_truncated: false,
+					fetched: "Today 13:07".into(),
+				}),
+			},
+		});
+		let json = serde_json::to_string(&reply).unwrap();
+		assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
+	}
+
+	#[test]
+	fn a_snapshot_without_stats_still_loads() {
+		let mut json = serde_json::to_value(Snapshot::default()).unwrap();
+		json.as_object_mut().unwrap().remove("stats");
+		let snapshot: Snapshot = serde_json::from_value(json).unwrap();
+		assert_eq!(snapshot.stats, StatsState::default());
+		assert_eq!(snapshot.stats.access, StatsAccess::NotRequested);
 	}
 }

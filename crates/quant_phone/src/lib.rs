@@ -22,13 +22,16 @@
 //! service's worker thread sleeps until the screen or the platform's
 //! background wake gives it something to do.
 
+mod companion;
 mod saved;
 mod service;
+mod stats;
 mod words;
 mod worker;
 
 use std::path::Path;
 
+pub use companion::Companion;
 use leptoskit_bridge::Error;
 use leptoskit_bridge_ffi::app::ServiceInstaller;
 pub use worker::Config;
