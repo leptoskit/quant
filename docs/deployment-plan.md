@@ -483,6 +483,12 @@ audio boundaries, upload retry/deduplication, bounded disk/memory, low storage,
 low battery, network loss and revocation of each capture permission. Confirm
 captured data is not exported to public infrastructure or unapproved models.
 
+Also exercise an external `quant://link` on both platforms, cold and while
+running: Quant must open with a reviewable Connect card, send nothing until
+Connect is tapped, and never replace a paired vault merely because a link
+arrived. Pasting the link must remain available as the fallback, and the
+receiving platform must not request camera permission.
+
 Produce signed platform packages with version/build numbers, privacy metadata
 and an internal-testing distribution first. Record supported OS versions and
 device classes, migration behavior and a recovery strategy; mobile storefronts

@@ -23,6 +23,17 @@ use crate::Notice;
 /// The service's capability name.
 pub const SERVICE: &str = "quant-phone";
 
+/// The app-owned bridge plugin that holds an inbound `quant://link`.
+///
+/// The platform host registers it; the screen asks for the next link. A link
+/// waits in the plugin until the screen takes it, so a cold launch cannot
+/// lose it. It never pairs anything by itself.
+pub const LINK_PLUGIN: &str = "quant-link";
+
+/// Wait for the next inbound link. Answers its UTF-8 bytes, or empty when the
+/// plugin is closing. The call stays pending while no link has arrived.
+pub const LINK_NEXT: u32 = 1;
+
 /// Wait for a snapshot newer than the version sent (a little-endian `u64`).
 /// Answers a JSON [`Snapshot`].
 pub const WATCH: u32 = 1;

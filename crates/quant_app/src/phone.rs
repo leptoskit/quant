@@ -57,6 +57,160 @@ pub enum Grant {
 	Unavailable,
 }
 
+/// A `quant://link` the operating system delivered, held for the owner to
+/// review.
+///
+/// Receiving one changes nothing: it is shown with a Connect action, and only
+/// that action sends [`Command::Pair`]. The link itself stays out of the
+/// screen's text; the card names the vault it would reach. The service checks
+/// the fingerprint and address again when it connects, so this parse only
+/// decides what is worth showing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Invite {
+	link: String,
+	place: String,
+	relay: bool,
+}
+
+impl Invite {
+	/// The longest inbound link accepted from a platform entry point.
+	pub const MAX_BYTES: usize = 4096;
+
+	/// Read the address a pairing link names, without exposing the whole URL.
+	///
+	/// Only a `quant://link?…` with a full SHA-256 fingerprint is accepted.
+	/// A direct address wins when a link carries both a direct address and a
+	/// relay, because the phone tries that first.
+	pub fn parse(text: &str) -> Option<Self> {
+		let text = text.trim();
+
+		if text.is_empty() || text.len() > Self::MAX_BYTES || text.chars().any(char::is_control) {
+			return None;
+		}
+
+		let query = text.strip_prefix("quant://link")?.strip_prefix('?')?;
+		let mut addr = None;
+		let mut fingerprint = None;
+		let mut relay = None;
+		let mut rid = None;
+
+		for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+			let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+			let value = percent_decode(value);
+
+			match name {
+				"addr" => addr = Some(value),
+				"fp" => fingerprint = Some(value),
+				"relay" => relay = Some(value),
+				"rid" => rid = Some(value),
+				_ => {}
+			}
+		}
+
+		let fingerprint = fingerprint?.replace(':', "");
+		if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+			return None;
+		}
+
+		let addr = addr.filter(|value| display_host(value).is_some());
+		let relay = if rid.as_deref().is_some_and(valid_rid) {
+			relay.and_then(|value| relay_authority(&value))
+		} else {
+			None
+		};
+
+		let (place, relay) = match (addr, relay) {
+			(Some(addr), _) => (addr, false),
+			(None, Some(relay)) => (relay, true),
+			(None, None) => return None,
+		};
+
+		Some(Self {
+			link: text.to_owned(),
+			place,
+			relay,
+		})
+	}
+
+	/// The exact link a [`Command::Pair`] should receive.
+	pub fn link(&self) -> &str {
+		&self.link
+	}
+
+	/// The address or relay the card names.
+	pub fn place(&self) -> &str {
+		&self.place
+	}
+
+	/// Whether [`Invite::place`] is a relay rather than a direct address.
+	pub fn through_relay(&self) -> bool {
+		self.relay
+	}
+}
+
+/// A display-safe `host:port`, kept ASCII so the card cannot be spoofed with
+/// control or bidirectional text.
+fn display_host(value: &str) -> Option<&str> {
+	let value = display_authority(value)?;
+	value.contains(':').then_some(value)
+}
+
+/// A display-safe host or `host:port`.
+fn display_authority(value: &str) -> Option<&str> {
+	let value = value.trim();
+	if value.is_empty()
+		|| !value.is_ascii()
+		|| value.len() > 255
+		|| value.chars().any(|c| c.is_whitespace() || c.is_control())
+	{
+		return None;
+	}
+	Some(value)
+}
+
+/// The authority of a `wss://` or `https://` relay URL.
+fn relay_authority(value: &str) -> Option<String> {
+	let value = value.trim();
+	let (scheme, rest) = value.split_once("://")?;
+	if !matches!(scheme, "wss" | "https") {
+		return None;
+	}
+	let authority = rest.split('/').next()?;
+	let authority = display_authority(authority)?;
+	Some(authority.to_owned())
+}
+
+/// The rendezvous ids the relay issues: 26 lowercase base32 characters.
+fn valid_rid(value: &str) -> bool {
+	value.len() == 26
+		&& value
+			.bytes()
+			.all(|byte| matches!(byte, b'a'..=b'z' | b'2'..=b'7'))
+}
+
+/// Decode the few escapes `quant link` uses, passing bad escapes through.
+fn percent_decode(text: &str) -> String {
+	let bytes = text.as_bytes();
+	let mut out = Vec::with_capacity(bytes.len());
+	let mut index = 0;
+
+	while index < bytes.len() {
+		if bytes[index] == b'%' && index + 2 < bytes.len() {
+			let high = (bytes[index + 1] as char).to_digit(16);
+			let low = (bytes[index + 2] as char).to_digit(16);
+			if let (Some(high), Some(low)) = (high, low) {
+				out.push(u8::try_from(high * 16 + low).expect("two hex digits are a byte"));
+				index += 3;
+				continue;
+			}
+		}
+		out.push(bytes[index]);
+		index += 1;
+	}
+
+	String::from_utf8_lossy(&out).into_owned()
+}
+
 /// What the system makes the owner allow in person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
@@ -266,6 +420,8 @@ pub struct State {
 	pub permissions: RwSignal<Permissions>,
 	/// The pairing link being typed or pasted.
 	pub link: RwSignal<String>,
+	/// A link the operating system delivered, waiting for review.
+	pub invite: RwSignal<Option<Invite>>,
 	/// Why the last action failed.
 	pub problem: RwSignal<Option<String>>,
 	/// What stops the collector on this phone, when something does.
@@ -287,6 +443,7 @@ impl State {
 			snapshot: RwSignal::new(Snapshot::default()),
 			permissions: RwSignal::new(Permissions::default()),
 			link: RwSignal::new(String::new()),
+			invite: RwSignal::new(None),
 			problem: RwSignal::new(None),
 			collector: RwSignal::new(None),
 			live_workout: RwSignal::new(false),
@@ -318,6 +475,7 @@ pub fn Screen(state: State) -> Element {
 				View()
 					.class(theme::CONTENT)
 					.child(storage_card(&state))
+					.child(invite_card(&state))
 					.child(stage_view(&state)),
 			),
 		)
@@ -360,6 +518,94 @@ fn stage_view(state: &State) -> Element {
 				Stage::Pair => pair_stage(&state),
 				Stage::Home => home_view(&state),
 			}
+		},
+	)
+}
+
+/// The card for one link the operating system delivered.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct InvitePart {
+	invite: Invite,
+	replace: bool,
+}
+
+/// Shows a link the app received, above whichever stage is open.
+///
+/// Receiving a link only fills this card. The vault is replaced or paired
+/// when, and only when, the owner taps Connect; Not now drops the link
+/// without sending anything.
+fn invite_card(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let invite = state.invite;
+	let state = state.clone();
+	For(
+		move || {
+			let replace = !matches!(snapshot.get().link, Link::Unpaired);
+			invite
+				.get()
+				.map(|invite| InvitePart { invite, replace })
+				.into_iter()
+				.collect()
+		},
+		Clone::clone,
+		move |part| {
+			let connect = state.clone();
+			let dismiss = state.clone();
+			let link = part.invite.link().to_owned();
+			let route = if part.invite.through_relay() {
+				format!("through the relay at {}", part.invite.place())
+			} else {
+				format!("at {}", part.invite.place())
+			};
+			View()
+				.class(theme::CARD)
+				.child(Text("LINK RECEIVED").class(theme::EYEBROW))
+				.child(
+					Text(if part.replace {
+						"Connect to another vault?"
+					} else {
+						"Connect to this vault?"
+					})
+					.class(theme::HEADING)
+					.test_id("invite"),
+				)
+				.child(
+					Text(format!(
+						"A link opened Quant for the vault {route}. Quant checks the certificate \
+						 it pinned, then asks your computer to approve this phone. Nothing is \
+						 sent until you tap Connect, so only connect if you just ran `quant link` \
+						 yourself."
+					))
+					.class(theme::MUTED),
+				)
+				.children(part.replace.then(|| {
+					Text(
+						"This phone is already connected. Connecting switches it to this vault; \
+						 readings waiting on this phone stay.",
+					)
+					.class(theme::MUTED)
+				}))
+				.child(
+					View()
+						.class("gap-2")
+						.child(
+							Button("Connect")
+								.class(theme::PRIMARY)
+								.accessibility_label("Connect to the vault in the link")
+								.test_id("invite-connect")
+								.on_press(move || {
+									connect.invite.set(None);
+									connect.pairing.set(true);
+									connect.send(Command::Pair { link: link.clone() });
+								}),
+						)
+						.child(
+							Button("Not now")
+								.class(theme::QUIET)
+								.test_id("invite-dismiss")
+								.on_press(move || dismiss.invite.set(None)),
+						),
+				)
 		},
 	)
 }
@@ -1497,5 +1743,133 @@ mod tests {
 		});
 		tester.tap(&Finder::test_id("reset-storage")).unwrap();
 		assert_eq!(*done.lock().unwrap(), [Action::ResetStorage]);
+	}
+
+	/// A SHA-256 fingerprint as `quant link` prints it.
+	const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+	fn inbound(addr: &str) -> String {
+		format!("quant://link?addr={addr}&fp={FINGERPRINT}&vault=v1")
+	}
+
+	#[test]
+	fn an_inbound_link_names_its_vault_without_showing_the_url() {
+		let link = inbound("192.168.1.4:7717");
+		let invite = Invite::parse(&link).unwrap();
+		assert_eq!(invite.link(), link.as_str());
+		assert_eq!(invite.place(), "192.168.1.4:7717");
+		assert!(!invite.through_relay());
+	}
+
+	#[test]
+	fn a_relay_link_names_the_relay_and_a_direct_address_wins() {
+		let rid = "abcdefghijklmnopqrstuvwxyz";
+		let relay =
+			format!("quant://link?relay=wss%3A%2F%2Frelay.example&rid={rid}&fp={FINGERPRINT}");
+		let invite = Invite::parse(&relay).unwrap();
+		assert_eq!(invite.place(), "relay.example");
+		assert!(invite.through_relay());
+
+		let both = format!(
+			"quant://link?addr=192.168.1.4:7717&relay=wss%3A%2F%2Frelay.example&rid={rid}&\
+			 fp={FINGERPRINT}"
+		);
+		let invite = Invite::parse(&both).unwrap();
+		assert_eq!(invite.place(), "192.168.1.4:7717");
+		assert!(!invite.through_relay());
+	}
+
+	#[test]
+	fn malformed_and_unpinned_links_are_refused() {
+		let malformed = [
+			String::new(),
+			"https://example.com/link".into(),
+			"quant://link".into(),
+			"quant://pair?addr=192.168.1.4:7717".into(),
+			"quant://link?addr=192.168.1.4:7717".into(),
+			"quant://link?addr=192.168.1.4:7717&fp=ab".into(),
+			"quant://link?addr=192.168.1.4:7717&fp=zz".into(),
+			format!("quant://link?relay=wss%3A%2F%2Frelay.example&fp={FINGERPRINT}"),
+			format!("quant://link?addr=192.168.1.4%3A7717%00&fp={FINGERPRINT}"),
+			format!(
+				"quant://link?addr=192.168.1.4:7717&fp={FINGERPRINT}&pad={}",
+				"a".repeat(Invite::MAX_BYTES)
+			),
+		];
+		for malformed in malformed {
+			assert!(Invite::parse(&malformed).is_none(), "{malformed}");
+		}
+	}
+
+	#[test]
+	fn an_incoming_link_is_reviewed_before_any_connection() {
+		let link = inbound("192.168.1.4:7717");
+		let (mut tester, state, done) = harness(Snapshot {
+			headline: "Not connected to your vault".into(),
+			collecting: true,
+			sources: rows(0),
+			..Snapshot::default()
+		});
+		state.invite.set(Some(Invite::parse(&link).unwrap()));
+		tester.pump();
+
+		tester.get_by_text("Connect to this vault?").unwrap();
+		assert!(tester.query_by_text(&link).unwrap().is_none());
+		assert!(done.lock().unwrap().is_empty());
+
+		tester.tap(&Finder::test_id("invite-connect")).unwrap();
+		assert!(state.invite.get().is_none());
+		assert!(state.pairing.get());
+		assert_eq!(
+			*done.lock().unwrap(),
+			[Action::Command(Command::Pair { link })]
+		);
+	}
+
+	#[test]
+	fn a_link_can_be_dismissed_without_sending_anything() {
+		let link = inbound("192.168.1.4:7717");
+		let (mut tester, state, done) = harness(Snapshot {
+			headline: "Not connected to your vault".into(),
+			collecting: true,
+			sources: rows(0),
+			..Snapshot::default()
+		});
+		state.invite.set(Some(Invite::parse(&link).unwrap()));
+		tester.pump();
+
+		tester.tap(&Finder::test_id("invite-dismiss")).unwrap();
+		assert!(state.invite.get().is_none());
+		assert!(done.lock().unwrap().is_empty());
+		assert_eq!(state.snapshot.get().link, Link::Unpaired);
+	}
+
+	#[test]
+	fn a_link_while_paired_warns_and_waits_for_connect() {
+		let link = inbound("192.168.1.4:7717");
+		let (mut tester, state, done) = harness(ready());
+		state.invite.set(Some(Invite::parse(&link).unwrap()));
+		tester.pump();
+
+		tester.get_by_text("Connect to another vault?").unwrap();
+		tester
+			.get_by_text(
+				"This phone is already connected. Connecting switches it to this vault; readings \
+				 waiting on this phone stay.",
+			)
+			.unwrap();
+		assert!(done.lock().unwrap().is_empty());
+		assert_eq!(state.snapshot.get().link, Link::Ready);
+	}
+
+	#[test]
+	fn one_link_at_a_time_is_shown() {
+		let link = inbound("192.168.1.4:7717");
+		let (mut tester, state, _) = harness(ready());
+		let invite = Invite::parse(&link).unwrap();
+		state.invite.set(Some(invite.clone()));
+		state.invite.set(Some(invite));
+		tester.pump();
+		assert_eq!(tester.query_all(&Finder::test_id("invite")).len(), 1);
 	}
 }
