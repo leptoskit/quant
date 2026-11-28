@@ -895,7 +895,36 @@ impl Worker {
 					self.capture = Some(state);
 					return Link::Ready;
 				}
-				Err(error) if error.code() == Some("unauthenticated") => {}
+				Err(error) if error.code() == Some("unauthenticated") => {
+					// The daemon knows this identity but admitted no request:
+					// the pairing is waiting, the app was revoked, or its grant
+					// lapsed. Ask `/v1/me` where it stands instead of pairing
+					// again, so a status poll never files another request.
+					if let Ok(me) = client.me().await {
+						match me.status {
+							ClientStatus::Pending => {
+								return Link::Pending {
+									code: client.identity().key().public().pairing_code(),
+								};
+							}
+							ClientStatus::Active if me.grant.is_some() => {
+								// Approved between the two calls: read what the
+								// new grant allows.
+								return match client.capture_status().await {
+									Ok(state) => {
+										self.capture = Some(state);
+										Link::Ready
+									}
+									Err(_) => Link::Revoked,
+								};
+							}
+							// Refused, or approved but the grant it had is gone.
+							ClientStatus::Revoked | ClientStatus::Active => {
+								return Link::Revoked;
+							}
+						}
+					}
+				}
 				Err(error) => {
 					return Link::Unreachable {
 						reason: error.to_string(),
