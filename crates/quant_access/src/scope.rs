@@ -109,6 +109,7 @@ impl FromStr for Target {
 /// | `*:summary`           | Aggregates of everything                               |
 /// | `motion:write`        | Sending motion data (for capturing devices)            |
 /// | `memory:write`        | Writing notes into memory (for agents)                 |
+/// | `companion:write`     | Asking one approved agent; reading its reply           |
 /// | `audit:read`          | Reading the audit log                                  |
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -125,6 +126,11 @@ pub enum Scope {
 		/// What may be written.
 		target: Target,
 	},
+	/// Message one approved agent from a separately approved companion
+	/// client, and read its reply. Deliberately its own permission: no read
+	/// or write scope implies it, and the daemon only accepts it from a
+	/// client paired as a device or app.
+	CompanionWrite,
 	/// Read the audit log.
 	AuditRead,
 }
@@ -146,6 +152,7 @@ impl fmt::Display for Scope {
 		match self {
 			Scope::Read { target, level } => write!(f, "{target}:{}", level.as_str()),
 			Scope::Write { target } => write!(f, "{target}:write"),
+			Scope::CompanionWrite => f.write_str("companion:write"),
 			Scope::AuditRead => f.write_str("audit:read"),
 		}
 	}
@@ -158,6 +165,9 @@ impl FromStr for Scope {
 		let invalid = || AccessError::InvalidScope(s.to_owned());
 		if s == "audit:read" {
 			return Ok(Scope::AuditRead);
+		}
+		if s == "companion:write" {
+			return Ok(Scope::CompanionWrite);
 		}
 		let (target, permission) = s.rsplit_once(':').ok_or_else(invalid)?;
 		let target: Target = target.parse().map_err(|_| invalid())?;
@@ -253,6 +263,13 @@ impl Scopes {
 			.any(|scope| matches!(scope, Scope::Write { target } if target.covers(stream)))
 	}
 
+	/// Whether these scopes allow companion messaging. This is checked only
+	/// against the explicit scope: read and write permissions on any target
+	/// never imply it.
+	pub fn can_companion(&self) -> bool {
+		self.0.contains(&Scope::CompanionWrite)
+	}
+
 	/// Whether these scopes allow reading the audit log.
 	pub fn can_read_audit(&self) -> bool {
 		self.0.contains(&Scope::AuditRead)
@@ -281,6 +298,7 @@ mod tests {
 			"sensor.vest:read",
 			"*:summary",
 			"motion:write",
+			"companion:write",
 			"audit:read",
 		] {
 			let scope: Scope = s.parse().unwrap();
@@ -297,6 +315,9 @@ mod tests {
 			"Health:read",
 			":read",
 			"audit:write",
+			"companion:read",
+			"companion:summary",
+			"*:companion",
 		] {
 			assert!(s.parse::<Scope>().is_err(), "{s} should be rejected");
 		}
@@ -339,6 +360,19 @@ mod tests {
 		let scopes = Scopes::parse(["health:write"]).unwrap();
 		assert!(scopes.can_write(&stream("health.steps")));
 		assert_eq!(scopes.read_level(&stream("health.steps")), None);
+	}
+
+	#[test]
+	fn companion_messaging_is_its_own_permission() {
+		let companion = Scopes::parse(["companion:write"]).unwrap();
+		assert!(companion.can_companion());
+		assert_eq!(companion.read_level(&stream("screen.frame")), None);
+		assert!(!companion.can_write(&stream("screen.frame")));
+		assert!(!companion.can_read_audit());
+
+		// Every other read and write permission leaves it off.
+		let broad = Scopes::parse(["*:write", "*:raw", "audit:read"]).unwrap();
+		assert!(!broad.can_companion());
 	}
 
 	#[test]

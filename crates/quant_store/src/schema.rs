@@ -255,6 +255,39 @@ const MIGRATIONS: &[&str] = &[
 		PRIMARY KEY (question, record)
 	) STRICT, WITHOUT ROWID;
 	",
+	// 9: companion messages. A separately approved companion device asks one
+	// approved agent a question; the agent answers with citations. This is a
+	// mailbox separate from the agent-opened questions ledger, so neither
+	// list can expose the other. The dedupe key is unique per requester, so a
+	// retry after a lost response returns the original message.
+	"
+	CREATE TABLE companion_messages (
+		rowid INTEGER PRIMARY KEY,
+		id BLOB NOT NULL UNIQUE,
+		requester BLOB NOT NULL REFERENCES clients (id),
+		recipient BLOB NOT NULL REFERENCES clients (id),
+		grant BLOB NOT NULL,
+		submitted_us INTEGER NOT NULL,
+		question TEXT NOT NULL,
+		purpose TEXT,
+		dedupe TEXT NOT NULL,
+		status TEXT NOT NULL,
+		answer TEXT,
+		answered_us INTEGER
+	) STRICT;
+	CREATE UNIQUE INDEX companion_messages_by_dedupe
+		ON companion_messages (requester, dedupe);
+	CREATE INDEX companion_messages_inbox
+		ON companion_messages (recipient, status, submitted_us);
+	CREATE INDEX companion_messages_sent
+		ON companion_messages (requester, submitted_us);
+
+	CREATE TABLE companion_citations (
+		message INTEGER NOT NULL REFERENCES companion_messages (rowid) ON DELETE CASCADE,
+		record INTEGER NOT NULL REFERENCES records (rowid) ON DELETE CASCADE,
+		PRIMARY KEY (message, record)
+	) STRICT, WITHOUT ROWID;
+	",
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {

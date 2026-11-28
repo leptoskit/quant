@@ -344,6 +344,16 @@ impl Store {
 		if changed == 0 {
 			return Err(StoreError::NotFound);
 		}
+		// Re-approving without the explicit companion permission withdraws
+		// any open messages the client left waiting. Read and write scopes
+		// never restore it.
+		if !grant.scopes.can_companion() {
+			tx.execute(
+				"UPDATE companion_messages SET status = 'abandoned'
+				 WHERE status = 'open' AND requester = ?1",
+				[client],
+			)?;
+		}
 		tx.commit()?;
 		Ok(())
 	}
@@ -410,6 +420,14 @@ impl Store {
 		)?;
 		tx.execute(
 			"UPDATE clients SET status = 'revoked' WHERE id = ?1",
+			[grant.client.0.as_bytes().as_slice()],
+		)?;
+		// Revoking either side of a conversation closes its unanswered
+		// messages: the requester can no longer read a reply, and the agent
+		// should not answer into a revoked grant.
+		tx.execute(
+			"UPDATE companion_messages SET status = 'abandoned'
+			 WHERE status = 'open' AND (requester = ?1 OR recipient = ?1)",
 			[grant.client.0.as_bytes().as_slice()],
 		)?;
 		tx.commit()?;

@@ -220,7 +220,7 @@ A scope is `<target>:<permission>`. Targets are `*`, a family (`health`), or a s
 | `raw`      | Also screenshots and audio.                                                                  |
 | `write`    | Sending data in (for capturing devices). Never implies reading.                              |
 
-`audit:read` lets a client read its own audit entries.
+`audit:read` lets a client read its own audit entries. `companion:write` lets a phone or desktop companion submit a question to one approved agent and read its reply; no read or write scope implies it.
 
 | Family     | Streams                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------ |
