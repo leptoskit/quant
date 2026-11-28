@@ -9,20 +9,29 @@
 //! Messages and answers are text about the owner, so they are stored as given
 //! inside the encrypted vault, exactly like questions, and sanitised and
 //! redacted on the way out. A message can only be answered once, by its
-//! recipient; the update is transactional, so two sessions of the same agent
-//! cannot both reply.
+//! recipient; the first answer is stored and a simultaneous equivalent
+//! request reads that same reply back. Submission is one transaction too:
+//! the dedupe decision, the payload a retry must match, both sides' current
+//! grants (including natural expiry), and the grant's hourly cap are settled
+//! with the insert, so no check can go stale before the row exists.
 
 use jiff::SignedDuration;
 use jiff::Timestamp;
+use quant_access::Denied;
+use quant_access::Grant;
 use quant_core::ClientId;
 use quant_core::GrantId;
 use quant_core::QuestionId;
 use quant_core::RecordId;
+use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Row;
+use rusqlite::TransactionBehavior;
 use rusqlite::params;
 use uuid::Uuid;
 
+use crate::ClientKind;
+use crate::ClientStatus;
 use crate::Result;
 use crate::Store;
 use crate::StoreError;
@@ -75,7 +84,7 @@ pub enum MessageStatus {
 	/// Answered by the addressed agent.
 	Answered,
 	/// Left unanswered past the window, or closed because either side's
-	/// grant was revoked.
+	/// grant was revoked, expired, or lost its companion permission.
 	Abandoned,
 }
 
@@ -97,6 +106,26 @@ impl MessageStatus {
 			_ => Err(StoreError::Corrupt("companion message status")),
 		}
 	}
+}
+
+/// A submission: the stored message, and whether this call created it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Submission {
+	/// The message as stored.
+	pub message: Message,
+	/// Whether this call inserted it. `false` means the same requester had
+	/// already used the dedupe key for an identical request.
+	pub created: bool,
+}
+
+/// A recorded reply: the message as stored, and whether this call wrote it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answered {
+	/// The message with the reply as stored.
+	pub message: Message,
+	/// Whether this call recorded the reply. `false` means an equivalent
+	/// answer was already stored by the request that won the race.
+	pub stored: bool,
 }
 
 const COLUMNS: &str = "m.id, m.requester, m.recipient, m.grant, m.submitted_us, m.question, \
@@ -145,7 +174,7 @@ fn message_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Message>> {
 	})())
 }
 
-fn attach_citations(conn: &rusqlite::Connection, messages: &mut [Message]) -> Result<()> {
+fn attach_citations(conn: &Connection, messages: &mut [Message]) -> Result<()> {
 	let mut statement = conn.prepare_cached(
 		"SELECT r.id FROM companion_citations cc JOIN records r ON r.rowid = cc.record
 		 WHERE cc.message IN (SELECT rowid FROM companion_messages WHERE id = ?1)",
@@ -164,40 +193,231 @@ fn attach_citations(conn: &rusqlite::Connection, messages: &mut [Message]) -> Re
 	Ok(())
 }
 
+/// One message by id, with its citations, on a connection the caller
+/// already holds. Used both inside a transaction and by the public reads.
+fn message_at(conn: &Connection, id: QuestionId) -> Result<Option<Message>> {
+	let found = conn
+		.query_row(
+			&format!(
+				"SELECT {COLUMNS} FROM companion_messages m
+				 JOIN clients requester ON requester.id = m.requester
+				 JOIN clients recipient ON recipient.id = m.recipient
+				 WHERE m.id = ?1"
+			),
+			[id.0.as_bytes().as_slice()],
+			message_from_row,
+		)
+		.optional()?
+		.transpose()?;
+	if let Some(mut message) = found {
+		attach_citations(conn, std::slice::from_mut(&mut message))?;
+		Ok(Some(message))
+	} else {
+		Ok(None)
+	}
+}
+
+/// What a submission reads about an existing row before deciding whether it
+/// is a retry.
+struct ExistingSubmission {
+	id: Vec<u8>,
+	recipient: Vec<u8>,
+	question: String,
+	purpose: Option<String>,
+}
+
+/// What an answer reads about its row before deciding whether it may write.
+struct StoredReply {
+	requester: Vec<u8>,
+	recipient: Vec<u8>,
+	status: String,
+	answer: Option<String>,
+}
+
+/// Whether `client` may still take part in a companion conversation at
+/// `now`. A companion must be an approved device or app whose current grant
+/// is live and still carries `companion:write`; an agent must be approved
+/// with a live grant. A revoked, expired, replaced, or unrecognised client
+/// is not live.
+fn conversation_live(conn: &Connection, client: ClientId, now: Timestamp) -> Result<bool> {
+	let Some(client) = crate::access::client_at(conn, client)? else {
+		return Ok(false);
+	};
+	if client.status != ClientStatus::Active {
+		return Ok(false);
+	}
+	let Some(grant) = crate::access::active_grant_at(conn, client.id)? else {
+		return Ok(false);
+	};
+	if grant.check_live(now).is_err() {
+		return Ok(false);
+	}
+	Ok(match client.kind {
+		ClientKind::Agent => true,
+		ClientKind::Device | ClientKind::App => grant.scopes.can_companion(),
+		ClientKind::Cli => false,
+	})
+}
+
+/// The requester's current grant, checked for a submission at `now`. A
+/// request admitted under a grant the owner has since replaced is stale:
+/// the caller re-reads its grant and signs again.
+fn live_requester(
+	conn: &Connection,
+	requester: ClientId,
+	grant: GrantId,
+	now: Timestamp,
+) -> Result<Grant> {
+	let Some(client) = crate::access::client_at(conn, requester)? else {
+		return Err(StoreError::Denied(Denied::Revoked));
+	};
+	if client.status != ClientStatus::Active
+		|| !matches!(client.kind, ClientKind::Device | ClientKind::App)
+	{
+		return Err(StoreError::Denied(Denied::Revoked));
+	}
+	let Some(current) = crate::access::active_grant_at(conn, requester)? else {
+		return Err(StoreError::Denied(Denied::Revoked));
+	};
+	if current.id != grant {
+		return Err(StoreError::Denied(Denied::Revoked));
+	}
+	current.check_live(now)?;
+	if !current.scopes.can_companion() {
+		return Err(StoreError::Denied(Denied::OutOfScope));
+	}
+	Ok(current)
+}
+
+/// Check that the addressed agent is approved and holds a live grant.
+/// Anything else is [`StoreError::NotFound`], so a companion cannot tell an
+/// unknown agent from one the owner has not approved.
+fn live_recipient(conn: &Connection, recipient: ClientId, now: Timestamp) -> Result<()> {
+	let Some(client) = crate::access::client_at(conn, recipient)? else {
+		return Err(StoreError::NotFound);
+	};
+	if client.kind != ClientKind::Agent || client.status != ClientStatus::Active {
+		return Err(StoreError::NotFound);
+	}
+	let Some(grant) = crate::access::active_grant_at(conn, recipient)? else {
+		return Err(StoreError::NotFound);
+	};
+	grant.check_live(now).map_err(|_| StoreError::NotFound)
+}
+
 impl Store {
-	/// Close every companion message older than [`MESSAGE_WINDOW`] that is
-	/// still open. A week-old question is better recorded as abandoned than
-	/// answered late.
+	/// Close every open companion message that can no longer be delivered
+	/// or answered: past [`MESSAGE_WINDOW`], or with either side's current
+	/// grant revoked, expired, or missing its companion permission. A
+	/// week-old question is better recorded as abandoned than answered
+	/// late, and an expired sender must not leave a replyable question
+	/// behind.
 	pub fn abandon_stale_messages(&self, now: Timestamp) -> Result<u64> {
+		let mut conn = self.conn();
+		let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 		let cutoff = micros(now - MESSAGE_WINDOW);
-		let changed = self.conn().execute(
+		let mut changed = tx.execute(
 			"UPDATE companion_messages SET status = 'abandoned'
 			 WHERE status = 'open' AND submitted_us < ?1",
 			[cutoff],
 		)?;
+		// Only the distinct clients of still-open messages are checked, not
+		// one grant read per message: the conversation sides are bounded by
+		// the clients that have ever messaged.
+		let clients: Vec<Vec<u8>> = {
+			let mut statement = tx.prepare(
+				"SELECT requester FROM companion_messages WHERE status = 'open'
+				 UNION
+				 SELECT recipient FROM companion_messages WHERE status = 'open'",
+			)?;
+			let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+			rows.collect::<rusqlite::Result<_>>()?
+		};
+		let mut lapsed = Vec::new();
+		for bytes in clients {
+			let client = ClientId(
+				Uuid::from_slice(&bytes).map_err(|_| StoreError::Corrupt("message client"))?,
+			);
+			if !conversation_live(&tx, client, now)? {
+				lapsed.push(bytes);
+			}
+		}
+		if !lapsed.is_empty() {
+			let placeholders = vec!["?"; lapsed.len()].join(", ");
+			let sql = format!(
+				"UPDATE companion_messages SET status = 'abandoned'
+				 WHERE status = 'open'
+				   AND (requester IN ({placeholders}) OR recipient IN ({placeholders}))"
+			);
+			let bound = lapsed.iter().chain(lapsed.iter()).cloned();
+			changed += tx.execute(&sql, rusqlite::params_from_iter(bound))?;
+		}
+		tx.commit()?;
 		Ok(u64::try_from(changed).unwrap_or(0))
 	}
 
-	/// Store a message. A message with the same requester and `dedupe` key
-	/// already exists: return that one instead, so a retry after a lost
-	/// response never creates a second question.
-	pub fn insert_message(&self, message: &Message) -> Result<Message> {
+	/// Store `message` unless its requester already used its dedupe key.
+	///
+	/// The dedupe decision, the payload a retry must match, both sides'
+	/// current grants (including natural expiry), and the requester grant's
+	/// `questions_per_hour` cap are settled in the same write transaction as
+	/// the insert. A revoked or expired side therefore either stops the
+	/// insert, or its revocation closes the row this insert just wrote.
+	pub fn submit_message(&self, message: &Message) -> Result<Submission> {
 		let mut conn = self.conn();
-		let id = {
-			let tx = conn.transaction()?;
-			let existing: Option<Vec<u8>> = tx
+		let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+		let (id, created) = {
+			let existing: Option<ExistingSubmission> = tx
 				.query_row(
-					"SELECT id FROM companion_messages WHERE requester = ?1 AND dedupe = ?2",
+					"SELECT id, recipient, question, purpose
+					 FROM companion_messages WHERE requester = ?1 AND dedupe = ?2",
 					params![
 						message.requester.0.as_bytes().as_slice(),
 						message.dedupe.as_str()
 					],
-					|row| row.get(0),
+					|row| {
+						Ok(ExistingSubmission {
+							id: row.get(0)?,
+							recipient: row.get(1)?,
+							question: row.get(2)?,
+							purpose: row.get(3)?,
+						})
+					},
 				)
 				.optional()?;
-			let id = if let Some(bytes) = existing {
-				Uuid::from_slice(&bytes).map_err(|_| StoreError::Corrupt("message id"))?
+			if let Some(existing) = existing {
+				// A retry is only the same request when it names the same
+				// target and text. A key reused for anything else is a
+				// caller mistake, never an idempotent replay.
+				if existing.recipient.as_slice() != message.recipient.0.as_bytes().as_slice()
+					|| existing.question != message.question
+					|| existing.purpose != message.purpose
+				{
+					return Err(StoreError::Invalid(
+						"that dedupe key already names a different message".into(),
+					));
+				}
+				(
+					QuestionId(
+						Uuid::from_slice(&existing.id)
+							.map_err(|_| StoreError::Corrupt("message id"))?,
+					),
+					false,
+				)
 			} else {
+				let grant =
+					live_requester(&tx, message.requester, message.grant, message.submitted_at)?;
+				live_recipient(&tx, message.recipient, message.submitted_at)?;
+				let since = micros(message.submitted_at - SignedDuration::from_hours(1));
+				let recent: i64 = tx.query_row(
+					"SELECT count(*) FROM companion_messages
+					 WHERE grant = ?1 AND submitted_us >= ?2",
+					params![message.grant.0.as_bytes().as_slice(), since],
+					|row| row.get(0),
+				)?;
+				if u64::try_from(recent).unwrap_or(u64::MAX) >= grant.limits.questions_per_hour {
+					return Err(StoreError::Denied(Denied::RateLimited));
+				}
 				tx.execute(
 					"INSERT INTO companion_messages
 					 (id, requester, recipient, grant, submitted_us, question, purpose,
@@ -215,37 +435,21 @@ impl Store {
 						message.status.as_str(),
 					],
 				)?;
-				message.id.0
-			};
-			tx.commit()?;
-			id
+				(message.id, true)
+			}
 		};
+		tx.commit()?;
 		drop(conn);
-		self.message(QuestionId(id))?.ok_or(StoreError::NotFound)
+		let stored = self.message(id)?.ok_or(StoreError::NotFound)?;
+		Ok(Submission {
+			message: stored,
+			created,
+		})
 	}
 
 	/// One message by id, with its citations.
 	pub fn message(&self, id: QuestionId) -> Result<Option<Message>> {
-		let conn = self.conn();
-		let found = conn
-			.query_row(
-				&format!(
-					"SELECT {COLUMNS} FROM companion_messages m
-					 JOIN clients requester ON requester.id = m.requester
-					 JOIN clients recipient ON recipient.id = m.recipient
-					 WHERE m.id = ?1"
-				),
-				[id.0.as_bytes().as_slice()],
-				message_from_row,
-			)
-			.optional()?
-			.transpose()?;
-		if let Some(mut message) = found {
-			attach_citations(&conn, std::slice::from_mut(&mut message))?;
-			Ok(Some(message))
-		} else {
-			Ok(None)
-		}
+		message_at(&self.conn(), id)
 	}
 
 	/// A requester's message by its idempotency key.
@@ -284,7 +488,8 @@ impl Store {
 
 	/// Open messages addressed to `recipient`, oldest first: the agent's
 	/// actionable inbox. Listing changes nothing; answering is the only way
-	/// a message leaves the inbox.
+	/// a message leaves the inbox, and a message whose sides have lapsed is
+	/// closed by [`Store::abandon_stale_messages`] before it can be listed.
 	pub fn messages_to(&self, recipient: ClientId, limit: usize) -> Result<Vec<Message>> {
 		self.select_messages(
 			"m.recipient = ? AND m.status = 'open'",
@@ -322,9 +527,12 @@ impl Store {
 	}
 
 	/// Record `recipient`'s answer to `id`, with citations. Only the
-	/// addressed agent may answer, only while the message is open, and every
-	/// cited record must exist; anything else is [`StoreError::NotFound`],
-	/// never saying which check failed.
+	/// addressed agent may answer, only while the message is open, both
+	/// sides must still hold live grants, and every cited record must exist;
+	/// anything else is [`StoreError::NotFound`], never saying which check
+	/// failed. An equivalent answer that lost a race with `recipient`'s own
+	/// successful request reads the stored reply back instead of failing, so
+	/// a retry after a timeout has one sensible result.
 	pub fn answer_message(
 		&self,
 		id: QuestionId,
@@ -332,12 +540,62 @@ impl Store {
 		answer: &str,
 		citations: &[RecordId],
 		now: Timestamp,
-	) -> Result<()> {
+	) -> Result<Answered> {
 		let mut citations = citations.to_vec();
 		citations.sort();
 		citations.dedup();
 		let mut conn = self.conn();
-		let tx = conn.transaction()?;
+		let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+		let row: Option<StoredReply> = tx
+			.query_row(
+				"SELECT requester, recipient, status, answer
+				 FROM companion_messages WHERE id = ?1",
+				[id.0.as_bytes().as_slice()],
+				|row| {
+					Ok(StoredReply {
+						requester: row.get(0)?,
+						recipient: row.get(1)?,
+						status: row.get(2)?,
+						answer: row.get(3)?,
+					})
+				},
+			)
+			.optional()?;
+		let Some(row) = row else {
+			return Err(StoreError::NotFound);
+		};
+		if row.recipient.as_slice() != recipient.0.as_bytes().as_slice() {
+			return Err(StoreError::NotFound);
+		}
+		match MessageStatus::parse(&row.status)? {
+			MessageStatus::Answered => {
+				if row.answer.as_deref() != Some(answer) {
+					return Err(StoreError::NotFound);
+				}
+				let mut stored = message_at(&tx, id)?.ok_or(StoreError::NotFound)?;
+				stored.citations.sort();
+				stored.citations.dedup();
+				if stored.citations != citations {
+					return Err(StoreError::NotFound);
+				}
+				tx.commit()?;
+				return Ok(Answered {
+					message: stored,
+					stored: false,
+				});
+			}
+			MessageStatus::Abandoned => return Err(StoreError::NotFound),
+			MessageStatus::Open => {}
+		}
+		// A grant that lapsed after the question was left open makes it
+		// unanswerable even if a listing has not swept the message yet.
+		let requester = ClientId(
+			Uuid::from_slice(&row.requester)
+				.map_err(|_| StoreError::Corrupt("message requester"))?,
+		);
+		if !conversation_live(&tx, requester, now)? || !conversation_live(&tx, recipient, now)? {
+			return Err(StoreError::NotFound);
+		}
 		let changed = tx.execute(
 			"UPDATE companion_messages SET answer = ?3, answered_us = ?4, status = 'answered'
 			 WHERE id = ?1 AND recipient = ?2 AND status = 'open'",
@@ -369,8 +627,12 @@ impl Store {
 				return Err(StoreError::NotFound);
 			}
 		}
+		let stored = message_at(&tx, id)?.ok_or(StoreError::NotFound)?;
 		tx.commit()?;
-		Ok(())
+		Ok(Answered {
+			message: stored,
+			stored: true,
+		})
 	}
 
 	/// How many companion messages `grant` submitted at or after `since`.
@@ -386,6 +648,9 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+	use std::sync::Arc;
+	use std::sync::Barrier;
+
 	use quant_access::Scopes;
 	use quant_access::auth::ClientKey;
 	use quant_core::DeviceId;
@@ -393,7 +658,6 @@ mod tests {
 	use quant_core::TimeRange;
 
 	use super::*;
-	use crate::ClientKind;
 	use crate::test_support::store;
 
 	fn at(minutes: i64) -> Timestamp {
@@ -425,14 +689,27 @@ mod tests {
 			.id
 	}
 
-	fn message(from: ClientId, to: ClientId, minute: i64, dedupe: &str) -> Message {
+	/// Register a client and approve `scopes` for it, as the owner would.
+	fn approved(
+		store: &Store,
+		name: &str,
+		kind: ClientKind,
+		scopes: &[&str],
+	) -> (ClientId, GrantId) {
+		let client = client(store, name, kind);
+		let grant = Grant::new(client, name, Scopes::parse(scopes).unwrap());
+		store.approve(&grant).unwrap();
+		(client, grant.id)
+	}
+
+	fn message(from: ClientId, grant: GrantId, to: ClientId, minute: i64, dedupe: &str) -> Message {
 		Message {
 			id: QuestionId::new(),
 			requester: from,
 			requester_name: "Phone".into(),
 			recipient: to,
 			recipient_name: "Claude".into(),
-			grant: GrantId::new(),
+			grant,
 			submitted_at: at(minute),
 			question: "How did I sleep after late coffee?".into(),
 			purpose: Some("the owner asked on their phone".into()),
@@ -444,6 +721,14 @@ mod tests {
 		}
 	}
 
+	/// Make the client's current grant expire at `expiry`, without revoking
+	/// or replacing it: the natural expiry a clock reaches on its own.
+	fn lapse(store: &Store, client: ClientId, expiry: Timestamp) {
+		let mut grant = store.active_grant(client).unwrap().unwrap();
+		grant.expires_at = Some(expiry);
+		store.update_grant(&grant).unwrap();
+	}
+
 	fn record(minute: i64, text: &str) -> Record {
 		Record::new("screen.frame".parse().unwrap(), DeviceId::new())
 			.starting(at(minute))
@@ -453,11 +738,13 @@ mod tests {
 	#[test]
 	fn a_message_is_stored_listed_and_read_back() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let other = client(&store, "Other", ClientKind::Agent);
-		let open = message(phone, agent, 0, "phone-0001");
-		let stored = store.insert_message(&open).unwrap();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let (other, _) = approved(&store, "Other", ClientKind::Agent, &["screen:read"]);
+		let open = message(phone, grant, agent, 0, "phone-0001");
+		let submission = store.submit_message(&open).unwrap();
+		assert!(submission.created);
+		let stored = submission.message;
 		assert_eq!(stored.id, open.id);
 		assert_eq!(stored.status, MessageStatus::Open);
 		assert_eq!(stored.requester_name, "Phone");
@@ -473,37 +760,55 @@ mod tests {
 	#[test]
 	fn dedupe_returns_the_original_message_per_requester() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let other_phone = client(&store, "Other phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let first = message(phone, agent, 0, "phone-0001");
-		let stored = store.insert_message(&first).unwrap();
+		let (phone, phone_grant) =
+			approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (other_phone, other_grant) = approved(
+			&store,
+			"Other phone",
+			ClientKind::Device,
+			&["companion:write"],
+		);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let first = message(phone, phone_grant, agent, 0, "phone-0001");
+		let stored = store.submit_message(&first).unwrap();
+		assert!(stored.created);
 
-		let retry = message(phone, agent, 1, "phone-0001");
-		let back = store.insert_message(&retry).unwrap();
+		let retry = message(phone, phone_grant, agent, 1, "phone-0001");
+		let back = store.submit_message(&retry).unwrap();
+		assert!(!back.created);
 		assert_eq!(
-			back.id, stored.id,
+			back.message.id, stored.message.id,
 			"the retry must not create a second message"
 		);
 		assert_eq!(store.messages_from(phone, 10).unwrap().len(), 1);
 		assert_eq!(store.messages_to(agent, 10).unwrap().len(), 1);
 
+		// The same key with different text is a caller mistake, refused
+		// inside the same transaction rather than replayed as the old id.
+		let mut different_text = retry.clone();
+		different_text.question = "A different question".into();
+		assert!(matches!(
+			store.submit_message(&different_text),
+			Err(StoreError::Invalid(_))
+		));
+		assert_eq!(store.messages_from(phone, 10).unwrap().len(), 1);
+
 		// The same key is scoped to its requester, and other keys are
 		// independent.
-		let other = message(other_phone, agent, 1, "phone-0001");
-		assert_eq!(store.insert_message(&other).unwrap().id, other.id);
-		let different = message(phone, agent, 2, "phone-0002");
-		assert_eq!(store.insert_message(&different).unwrap().id, different.id);
+		let other = message(other_phone, other_grant, agent, 1, "phone-0001");
+		assert!(store.submit_message(&other).unwrap().created);
+		let different = message(phone, phone_grant, agent, 2, "phone-0002");
+		assert!(store.submit_message(&different).unwrap().created);
 	}
 
 	#[test]
 	fn only_the_recipient_answers_once_and_citations_must_exist() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let other = client(&store, "Other agent", ClientKind::Agent);
-		let open = message(phone, agent, 0, "phone-0001");
-		store.insert_message(&open).unwrap();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let (other, _) = approved(&store, "Other agent", ClientKind::Agent, &["screen:read"]);
+		let open = message(phone, grant, agent, 0, "phone-0001");
+		store.submit_message(&open).unwrap();
 
 		let records = store
 			.insert_records(&[record(1, "slept badly"), record(2, "coffee at 21:00")])
@@ -535,10 +840,11 @@ mod tests {
 		assert!(untouched.answer.is_none());
 		assert!(untouched.citations.is_empty());
 
-		store
+		let first = store
 			.answer_message(open.id, agent, "Badly: 5.2 hours.", &cited, at(4))
 			.unwrap();
-		let answered = store.message(open.id).unwrap().unwrap();
+		assert!(first.stored);
+		let answered = first.message;
 		assert_eq!(answered.status, MessageStatus::Answered);
 		assert_eq!(answered.answer.as_deref(), Some("Badly: 5.2 hours."));
 		assert_eq!(answered.answered_at, Some(at(4)));
@@ -548,9 +854,22 @@ mod tests {
 		expected.sort();
 		assert_eq!(served, expected);
 
-		// Only once, and answering removes it from the inbox.
+		// The equivalent request that lost the race reads the same stored
+		// reply back instead of failing.
+		let replay = store
+			.answer_message(open.id, agent, "Badly: 5.2 hours.", &cited, at(5))
+			.unwrap();
+		assert!(!replay.stored);
+		assert_eq!(replay.message, answered);
+
+		// A different answer, or the same text with different citations,
+		// is not a retry.
 		assert!(matches!(
 			store.answer_message(open.id, agent, "again", &[], at(5)),
+			Err(StoreError::NotFound)
+		));
+		assert!(matches!(
+			store.answer_message(open.id, agent, "Badly: 5.2 hours.", &[], at(5)),
 			Err(StoreError::NotFound)
 		));
 		assert!(store.messages_to(agent, 10).unwrap().is_empty());
@@ -560,12 +879,12 @@ mod tests {
 	#[test]
 	fn stale_messages_are_abandoned() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let stale = message(phone, agent, 0, "phone-0001");
-		let fresh = message(phone, agent, 60 * 24 * 6, "phone-0002");
-		store.insert_message(&stale).unwrap();
-		store.insert_message(&fresh).unwrap();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let stale = message(phone, grant, agent, 0, "phone-0001");
+		let fresh = message(phone, grant, agent, 60 * 24 * 6, "phone-0002");
+		store.submit_message(&stale).unwrap();
+		store.submit_message(&fresh).unwrap();
 
 		assert_eq!(store.abandon_stale_messages(at(60 * 24 * 8)).unwrap(), 1);
 		assert_eq!(
@@ -585,12 +904,10 @@ mod tests {
 	#[test]
 	fn counts_submissions_per_grant() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let grant = GrantId::new();
-		let mut first = message(phone, agent, 0, "phone-0001");
-		first.grant = grant;
-		store.insert_message(&first).unwrap();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let first = message(phone, grant, agent, 0, "phone-0001");
+		store.submit_message(&first).unwrap();
 		assert_eq!(
 			store
 				.message_count(grant, at(0) - SignedDuration::from_hours(1))
@@ -601,12 +918,247 @@ mod tests {
 	}
 
 	#[test]
+	fn a_lapsed_sender_cannot_submit_or_leave_a_message_answerable() {
+		let store = store();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = store
+			.submit_message(&message(phone, grant, agent, 0, "phone-0001"))
+			.unwrap()
+			.message;
+
+		lapse(&store, phone, at(5));
+
+		// A new submission under the expired grant is refused without a row.
+		assert!(matches!(
+			store.submit_message(&message(phone, grant, agent, 10, "phone-0002")),
+			Err(StoreError::Denied(Denied::Expired))
+		));
+		assert_eq!(store.messages_from(phone, 10).unwrap().len(), 1);
+
+		// The question left open is no longer answerable, and the next read
+		// records it as abandoned rather than delivering it.
+		assert!(matches!(
+			store.answer_message(open.id, agent, "late", &[], at(6)),
+			Err(StoreError::NotFound)
+		));
+		assert_eq!(
+			store.message(open.id).unwrap().unwrap().status,
+			MessageStatus::Open,
+			"the refusal is a liveness check, not a quiet answer"
+		);
+		assert_eq!(store.abandon_stale_messages(at(6)).unwrap(), 1);
+		assert_eq!(
+			store.message(open.id).unwrap().unwrap().status,
+			MessageStatus::Abandoned
+		);
+		assert!(store.messages_to(agent, 10).unwrap().is_empty());
+	}
+
+	#[test]
+	fn a_lapsed_recipient_cannot_receive_or_keep_messages() {
+		let store = store();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = store
+			.submit_message(&message(phone, grant, agent, 0, "phone-0001"))
+			.unwrap()
+			.message;
+
+		lapse(&store, agent, at(5));
+
+		assert!(matches!(
+			store.submit_message(&message(phone, grant, agent, 10, "phone-0002")),
+			Err(StoreError::NotFound)
+		));
+		assert!(matches!(
+			store.answer_message(open.id, agent, "late", &[], at(6)),
+			Err(StoreError::NotFound)
+		));
+		assert_eq!(store.abandon_stale_messages(at(6)).unwrap(), 1);
+		assert_eq!(
+			store.message(open.id).unwrap().unwrap().status,
+			MessageStatus::Abandoned
+		);
+		assert!(store.messages_to(agent, 10).unwrap().is_empty());
+	}
+
+	#[test]
+	fn revoking_either_side_stops_new_messages_and_closes_open_ones() {
+		// Revoking the sender's grant stops submissions and closes what it
+		// left waiting, even though the message still names that grant.
+		let store = store();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = store
+			.submit_message(&message(phone, grant, agent, 0, "phone-0001"))
+			.unwrap()
+			.message;
+		store.revoke_grant(grant).unwrap();
+		assert!(matches!(
+			store.submit_message(&message(phone, grant, agent, 5, "phone-0002")),
+			Err(StoreError::Denied(Denied::Revoked))
+		));
+		assert_eq!(
+			store.message(open.id).unwrap().unwrap().status,
+			MessageStatus::Abandoned
+		);
+		assert!(store.messages_to(agent, 10).unwrap().is_empty());
+
+		// Revoking the recipient's grant closes the conversation the same
+		// way, while a retry of the requester's own earlier send still reads
+		// that message back.
+		let other = crate::test_support::store();
+		let (phone, grant) = approved(&other, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, agent_grant) = approved(&other, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = other
+			.submit_message(&message(phone, grant, agent, 0, "phone-0001"))
+			.unwrap()
+			.message;
+		other.revoke_grant(agent_grant).unwrap();
+		assert!(matches!(
+			other.submit_message(&message(phone, grant, agent, 5, "phone-0002")),
+			Err(StoreError::NotFound)
+		));
+		assert!(matches!(
+			other.answer_message(open.id, agent, "late", &[], at(5)),
+			Err(StoreError::NotFound)
+		));
+		let replay = other
+			.submit_message(&message(phone, grant, agent, 6, "phone-0001"))
+			.unwrap();
+		assert!(!replay.created);
+		assert_eq!(replay.message.id, open.id);
+		assert_eq!(replay.message.status, MessageStatus::Abandoned);
+	}
+
+	#[test]
+	fn the_hourly_cap_is_settled_with_the_insert() {
+		let store = store();
+		let (phone, _) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let mut grant = store.active_grant(phone).unwrap().unwrap();
+		grant.limits.questions_per_hour = 2;
+		store.update_grant(&grant).unwrap();
+		let grant_id = grant.id;
+
+		let first = store
+			.submit_message(&message(phone, grant_id, agent, 0, "phone-0001"))
+			.unwrap();
+		assert!(first.created);
+		assert!(
+			store
+				.submit_message(&message(phone, grant_id, agent, 1, "phone-0002"))
+				.unwrap()
+				.created
+		);
+		// The third submission is refused and cannot slip a row in beside
+		// the count that saw room.
+		assert!(matches!(
+			store.submit_message(&message(phone, grant_id, agent, 2, "phone-0003")),
+			Err(StoreError::Denied(Denied::RateLimited))
+		));
+		assert_eq!(
+			store
+				.message_count(grant_id, at(0) - SignedDuration::from_hours(1))
+				.unwrap(),
+			2
+		);
+		// A retry of the first is not a new submission and still returns it.
+		let retried = store
+			.submit_message(&message(phone, grant_id, agent, 2, "phone-0001"))
+			.unwrap();
+		assert!(!retried.created);
+		assert_eq!(retried.message.id, first.message.id);
+	}
+
+	#[test]
+	fn simultaneous_equivalent_answers_store_one_reply() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("quant.db");
+		let key = quant_crypto::VaultKey::generate();
+		let first = Store::open(&path, &key).unwrap();
+		let second = Store::open(&path, &key).unwrap();
+		let (phone, grant) = approved(&first, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&first, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = first
+			.submit_message(&message(phone, grant, agent, 0, "phone-0001"))
+			.unwrap()
+			.message;
+
+		let barrier = Arc::new(Barrier::new(2));
+		let worker = |store: Store, barrier: Arc<Barrier>| {
+			std::thread::spawn(move || {
+				barrier.wait();
+				store
+					.answer_message(open.id, agent, "Badly: 5.2 hours.", &[], at(3))
+					.map(|answered| (answered.stored, answered.message))
+					.map_err(|error| error.to_string())
+			})
+		};
+		let left = worker(first, Arc::clone(&barrier));
+		let right = worker(second, barrier);
+		let left = left.join().unwrap().unwrap();
+		let right = right.join().unwrap().unwrap();
+
+		assert_ne!(
+			left.0, right.0,
+			"exactly one simultaneous request records the reply"
+		);
+		assert_eq!(left.1, right.1, "both requests see the same stored reply");
+		assert_eq!(left.1.status, MessageStatus::Answered);
+		assert_eq!(left.1.answer.as_deref(), Some("Badly: 5.2 hours."));
+	}
+
+	#[test]
+	fn simultaneous_retries_with_one_key_cannot_both_insert() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("quant.db");
+		let key = quant_crypto::VaultKey::generate();
+		let first = Store::open(&path, &key).unwrap();
+		let second = Store::open(&path, &key).unwrap();
+		let (phone, grant) = approved(&first, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&first, "Claude", ClientKind::Agent, &["screen:read"]);
+		let left = message(phone, grant, agent, 0, "phone-0001");
+		let mut right = message(phone, grant, agent, 0, "phone-0001");
+		right.question = "A different question".into();
+
+		let barrier = Arc::new(Barrier::new(2));
+		let worker = |store: Store, message: Message, barrier: Arc<Barrier>| {
+			std::thread::spawn(move || {
+				barrier.wait();
+				store
+					.submit_message(&message)
+					.map(|submission| (submission.message.id, submission.created))
+					.map_err(|error| error.to_string())
+			})
+		};
+		let first_result = worker(first, left, Arc::clone(&barrier));
+		let second_result = worker(second, right, barrier);
+		let results = [first_result.join().unwrap(), second_result.join().unwrap()];
+
+		assert_eq!(
+			results.iter().filter(|result| result.is_ok()).count(),
+			1,
+			"only the request that won the race may insert"
+		);
+		assert!(
+			results
+				.iter()
+				.any(|result| matches!(result, Err(error) if error.contains("dedupe"))),
+			"the loser is refused because its payload does not match"
+		);
+		let check = Store::open(&path, &key).unwrap();
+		assert_eq!(check.messages_from(phone, 10).unwrap().len(), 1);
+	}
+
+	#[test]
 	fn deleting_a_cited_record_cascades_out_of_the_reply() {
 		let store = store();
-		let phone = client(&store, "Phone", ClientKind::Device);
-		let agent = client(&store, "Claude", ClientKind::Agent);
-		let open = message(phone, agent, 0, "phone-0001");
-		store.insert_message(&open).unwrap();
+		let (phone, grant) = approved(&store, "Phone", ClientKind::Device, &["companion:write"]);
+		let (agent, _) = approved(&store, "Claude", ClientKind::Agent, &["screen:read"]);
+		let open = message(phone, grant, agent, 0, "phone-0001");
+		store.submit_message(&open).unwrap();
 		store.insert_records(&[record(1, "the citation")]).unwrap();
 		let cited: Vec<RecordId> = store
 			.records(&crate::RecordQuery::new(

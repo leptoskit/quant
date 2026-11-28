@@ -145,6 +145,35 @@ fn client_from_row(row: &Row<'_>) -> rusqlite::Result<Result<Client>> {
 const CLIENT_COLUMNS: &str =
 	"id, name, kind, public_key, status, requested, created_us, last_seen_us, agent";
 
+/// A client by id on `conn`, so a caller already holding a transaction can
+/// read it without taking the store lock again.
+pub(crate) fn client_at(conn: &rusqlite::Connection, id: ClientId) -> Result<Option<Client>> {
+	conn.query_row(
+		&format!("SELECT {CLIENT_COLUMNS} FROM clients WHERE id = ?1"),
+		[id.0.as_bytes().as_slice()],
+		client_from_row,
+	)
+	.optional()?
+	.transpose()
+}
+
+/// The live grant a client holds on `conn`, if any. The same read as
+/// [`Store::active_grant`], usable inside an open transaction.
+pub(crate) fn active_grant_at(
+	conn: &rusqlite::Connection,
+	client: ClientId,
+) -> Result<Option<Grant>> {
+	let body: Option<String> = conn
+		.query_row(
+			"SELECT body FROM grants WHERE client = ?1 AND revoked = 0 ORDER BY rowid DESC LIMIT 1",
+			[client.0.as_bytes().as_slice()],
+			|r| r.get(0),
+		)
+		.optional()?;
+	body.map(|b| serde_json::from_str(&b).map_err(Into::into))
+		.transpose()
+}
+
 /// Most clients that may wait for approval at once, so an unauthenticated
 /// caller cannot flood the owner's list.
 pub const MAX_PENDING: usize = 16;
@@ -240,14 +269,7 @@ impl Store {
 
 	/// A client by id.
 	pub fn client(&self, id: ClientId) -> Result<Option<Client>> {
-		self.conn()
-			.query_row(
-				&format!("SELECT {CLIENT_COLUMNS} FROM clients WHERE id = ?1"),
-				[id.0.as_bytes().as_slice()],
-				client_from_row,
-			)
-			.optional()?
-			.transpose()
+		client_at(&self.conn(), id)
 	}
 
 	/// A client by public key.
@@ -360,17 +382,7 @@ impl Store {
 
 	/// The live grant a client holds, if any.
 	pub fn active_grant(&self, client: ClientId) -> Result<Option<Grant>> {
-		let body: Option<String> = self
-			.conn()
-			.query_row(
-				"SELECT body FROM grants WHERE client = ?1 AND revoked = 0 ORDER BY rowid DESC \
-				 LIMIT 1",
-				[client.0.as_bytes().as_slice()],
-				|r| r.get(0),
-			)
-			.optional()?;
-		body.map(|b| serde_json::from_str(&b).map_err(Into::into))
-			.transpose()
+		active_grant_at(&self.conn(), client)
 	}
 
 	/// Every grant, live and revoked, newest first.

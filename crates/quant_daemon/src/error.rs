@@ -30,6 +30,7 @@ impl From<StoreError> for Error {
 		match error {
 			StoreError::NotFound => Error::NotFound,
 			StoreError::Invalid(message) => Error::Invalid(message),
+			StoreError::Denied(denied) => Error::Forbidden(denied),
 			other => Error::Internal(other.to_string()),
 		}
 	}
