@@ -33,6 +33,9 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
 zeroize = { workspace = true }
 
+[dev-dependencies]
+rqrr = { version = "0.11", default-features = false }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = { workspace = true }
 leptoskit_plugin_menu = { workspace = true }

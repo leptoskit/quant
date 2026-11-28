@@ -7,6 +7,7 @@
 //! [`Shared`], which wakes the UI thread.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Arc;
@@ -1140,117 +1141,84 @@ fn pairing_link_with(
 		.tls_fingerprint
 		.as_deref()
 		.ok_or_else(|| local_only(fallback_port))?;
-	let valid_relay = hello
+	let relay = hello
 		.relay
 		.as_deref()
 		.zip(hello.relay_rid.as_deref())
 		.filter(|(_, rid)| quant_relay::key::valid_rid(rid));
 
-	let direct_endpoint = reachable_tls_endpoint(endpoint);
-	let link = match hello.tls_address.as_deref() {
-		Some(advertised) => {
-			if let Some((host, port)) = direct_endpoint {
-				PairingLink::from_host_port(
-					&host,
-					port,
-					fingerprint,
-					&hello.vault_id,
-					hello.relay.clone(),
-					hello.relay_rid.clone(),
-				)
-			} else if let Some((adv_host, adv_port)) =
-				quant_relay::link::split_host_port(advertised)
-			{
-				if let Ok(ip) = adv_host.parse::<std::net::IpAddr>() {
-					if ip.is_loopback() {
-						if let Some((relay, rid)) = valid_relay {
-							PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
-						} else {
-							return Err(loopback_only(&adv_host, adv_port));
-						}
-					} else if ip.is_unspecified() {
-						let lan = if ip.is_ipv6() {
-							lan_v6().or_else(lan_v4)
-						} else {
-							lan_v4()
-						};
-						if let Some(host) = lan {
-							PairingLink::from_host_port(
-								&host,
-								adv_port,
-								fingerprint,
-								&hello.vault_id,
-								hello.relay.clone(),
-								hello.relay_rid.clone(),
-							)
-						} else if let Some((relay, rid)) = valid_relay {
-							PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
-						} else {
-							return Err(format!(
-								"This Mac has no network address right now. Join the same network \
-								 as your phone, then try again; `quant link --host <address> \
-								 --port {adv_port}` can print a link for an address you choose."
-							));
-						}
-					} else {
-						PairingLink::from_host_port(
-							&adv_host,
-							adv_port,
-							fingerprint,
-							&hello.vault_id,
-							hello.relay.clone(),
-							hello.relay_rid.clone(),
-						)
-					}
-				} else if quant_relay::link::is_reachable_host(&adv_host) {
-					PairingLink::from_host_port(
-						&adv_host,
-						adv_port,
-						fingerprint,
-						&hello.vault_id,
-						hello.relay.clone(),
-						hello.relay_rid.clone(),
-					)
-				} else if let Some((relay, rid)) = valid_relay {
-					PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
-				} else {
-					return Err(loopback_only(&adv_host, adv_port));
-				}
-			} else if let Some((relay, rid)) = valid_relay {
-				PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
-			} else {
-				return Err(format!(
-					"Quant reported an unusable network address ({advertised}). Check its `--tcp` \
-					 setting or run `quant link --host <address> --port <port>`."
-				));
-			}
+	let host_port = if let Some(host_port) = reachable_tls_endpoint(endpoint) {
+		Some(host_port)
+	} else if let Some(advertised) = hello.tls_address.as_deref() {
+		match advertised_host_port(advertised, lan_v4, lan_v6) {
+			Ok(host_port) => host_port,
+			Err(_) if relay.is_some() => None,
+			Err(error) => return Err(error),
 		}
-		None => {
-			if let Some((host, port)) = direct_endpoint {
-				PairingLink::from_host_port(
-					&host,
-					port,
-					fingerprint,
-					&hello.vault_id,
-					hello.relay.clone(),
-					hello.relay_rid.clone(),
-				)
-			} else if let Some((relay, rid)) = valid_relay {
-				PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
-			} else {
-				return Err(
-					"Quant is listening over TLS, but this daemon didn't report its bind address \
-					 or port, so the app can't verify a pairing link. Update and restart the \
-					 daemon, or run `quant link --host <address> --port <port>` in a terminal."
-						.to_owned(),
-				);
-			}
-		}
+	} else {
+		None
+	};
+
+	let link = if let Some((host, port)) = host_port {
+		PairingLink::from_host_port(
+			&host,
+			port,
+			fingerprint,
+			&hello.vault_id,
+			hello.relay.clone(),
+			hello.relay_rid.clone(),
+		)
+	} else if let Some((relay, rid)) = relay {
+		PairingLink::relay_only(fingerprint, &hello.vault_id, relay, rid)
+	} else {
+		return Err(
+			"Quant is listening over TLS, but this daemon didn't report its bind address or port, \
+			 so the app can't verify a pairing link. Update and restart the daemon, or run `quant \
+			 link --host <address> --port <port>` in a terminal."
+				.to_owned(),
+		);
 	};
 
 	let url = link.to_url();
 	let qr = phone_qr(&url);
 	Ok(PhoneLink { link: url, qr })
+}
+
+/// The direct `host:port` a phone should use for an advertised bind address,
+/// or `None` when only the relay can reach the daemon. An `Err` is the reason
+/// a direct address could not be found, which a relay may still answer.
+fn advertised_host_port(
+	advertised: &str,
+	lan_v4: impl FnOnce() -> Option<String>,
+	lan_v6: impl FnOnce() -> Option<String>,
+) -> Result<Option<(String, u16)>, String> {
+	let Some((host, port)) = quant_relay::link::split_host_port(advertised) else {
+		return Err(format!(
+			"Quant reported an unusable network address ({advertised}). Check its `--tcp` setting \
+			 or run `quant link --host <address> --port <port>`."
+		));
+	};
+
+	match host.parse::<IpAddr>() {
+		Ok(ip) if ip.is_loopback() => Err(loopback_only(&host, port)),
+		Ok(ip) if ip.is_unspecified() => {
+			let lan = if ip.is_ipv6() {
+				lan_v6().or_else(lan_v4)
+			} else {
+				lan_v4()
+			};
+			lan.map(|host| Some((host, port))).ok_or_else(|| {
+				format!(
+					"This Mac has no network address right now. Join the same network as your \
+					 phone, then try again; `quant link --host <address> --port {port}` can print \
+					 a link for an address you choose."
+				)
+			})
+		}
+		Ok(_) => Ok(Some((host, port))),
+		Err(_) if quant_relay::link::is_reachable_host(&host) => Ok(Some((host, port))),
+		Err(_) => Err(loopback_only(&host, port)),
+	}
 }
 
 /// What to do when the daemon's TLS listener is bound only to loopback.
@@ -1730,246 +1698,23 @@ mod tests {
 		grid
 	}
 
-	/// ISO/IEC 18004 QR decoder for versions 1..=12 (`EcLevel::M`, the default
-	/// of `qrcode::QrCode::new`), reading directly from the rasterized
-	/// `PathData` bitmap after verifying the 4-module quiet zone.
+	/// Decode the rendered path with `rqrr`, an independently maintained QR
+	/// reader, so the test oracle cannot share a bug with the `qrcode` encoder
+	/// that produced it.
 	fn decode_qr_from_path(qr: &PhoneQr) -> String {
-		const ALNUM: &[u8; 45] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+		const SCALE: usize = 8;
 
-		let full = rasterize_qr_path(qr);
-		let side = full.len();
-		let n = side - 8;
-		assert_eq!((n - 17) % 4, 0, "invalid QR size {n}");
-		let version = (n - 17) / 4;
-		let matrix: Vec<Vec<bool>> = full[4..(4 + n)]
-			.iter()
-			.map(|row| row[4..(4 + n)].to_vec())
-			.collect();
-
-		// Verify all three 7x7 finder patterns.
-		for (fx, fy) in [(0, 0), (n - 7, 0), (0, n - 7)] {
-			assert!(matrix[fy][fx]);
-			assert!(matrix[fy][fx + 6] && matrix[fy + 6][fx]);
-			assert!(!matrix[fy + 1][fx + 1]);
-			assert!(matrix[fy + 3][fx + 3]);
-		}
-
-		// Read 15-bit format information (top-left) and unmask with 0x5412.
-		let format_coords = [
-			(0, 8),
-			(1, 8),
-			(2, 8),
-			(3, 8),
-			(4, 8),
-			(5, 8),
-			(7, 8),
-			(8, 8),
-			(8, 7),
-			(8, 5),
-			(8, 4),
-			(8, 3),
-			(8, 2),
-			(8, 1),
-			(8, 0),
-		];
-		let mut raw_fmt: u16 = 0;
-		for &(x, y) in &format_coords {
-			raw_fmt = (raw_fmt << 1) | u16::from(matrix[y][x]);
-		}
-		let fmt = raw_fmt ^ 0x5412;
-		let ec_bits = (fmt >> 13) & 0b11;
-		assert_eq!(ec_bits, 0b00, "expected EcLevel::M format bits");
-		let mask = usize::from((fmt >> 10) & 0b111);
-
-		// Mark function modules (finders, separators, format, timing, dark,
-		// alignment, and version info).
-		let mut function = vec![vec![false; n]; n];
-		for (y, row) in function.iter_mut().enumerate() {
-			for (x, slot) in row.iter_mut().enumerate() {
-				let top_left = x <= 8 && y <= 8;
-				let top_right = x >= n - 8 && y <= 8;
-				let bottom_left = x <= 8 && y >= n - 8;
-				let timing = x == 6 || y == 6;
-				if top_left || top_right || bottom_left || timing {
-					*slot = true;
-				}
-			}
-		}
-		let align_centers: &[usize] = match version {
-			1 => &[],
-			2 => &[6, 18],
-			3 => &[6, 22],
-			4 => &[6, 26],
-			5 => &[6, 30],
-			6 => &[6, 34],
-			7 => &[6, 22, 38],
-			8 => &[6, 24, 42],
-			9 => &[6, 26, 46],
-			10 => &[6, 28, 50],
-			11 => &[6, 30, 54],
-			12 => &[6, 32, 58],
-			_ => panic!("unsupported test QR version {version}"),
-		};
-		for &cy in align_centers {
-			for &cx in align_centers {
-				let hits_top_finder = cy <= 8 && (cx <= 8 || cx >= n - 8);
-				let hits_bottom_finder = cx <= 8 && cy >= n - 8;
-				if hits_top_finder || hits_bottom_finder {
-					continue;
-				}
-				for row in &mut function[(cy - 2)..=(cy + 2)] {
-					for slot in &mut row[(cx - 2)..=(cx + 2)] {
-						*slot = true;
-					}
-				}
-			}
-		}
-		if version >= 7 {
-			for y in 0..6 {
-				for x in (n - 11)..(n - 8) {
-					function[y][x] = true;
-					function[x][y] = true;
-				}
-			}
-		}
-
-		// Read unmasked data bits in standard zig-zag order.
-		let mut bits = Vec::new();
-		let mut col: isize = n.cast_signed() - 1;
-		let mut upward = true;
-		while col > 0 {
-			if col == 6 {
-				col -= 1;
-			}
-			for step in 0..n {
-				let r = if upward { n - 1 - step } else { step };
-				for dc in 0..=1 {
-					let c = (col - dc).cast_unsigned();
-					if function[r][c] {
-						continue;
-					}
-					let flip = match mask {
-						0 => (r + c) % 2 == 0,
-						1 => r % 2 == 0,
-						2 => c % 3 == 0,
-						3 => (r + c) % 3 == 0,
-						4 => ((r / 2) + (c / 3)) % 2 == 0,
-						5 => (r * c) % 2 + (r * c) % 3 == 0,
-						6 => ((r * c) % 2 + (r * c) % 3) % 2 == 0,
-						7 => ((r + c) % 2 + (r * c) % 3) % 2 == 0,
-						_ => unreachable!(),
-					};
-					bits.push(matrix[r][c] ^ flip);
-				}
-			}
-			col -= 2;
-			upward = !upward;
-		}
-
-		// Group into raw codewords and de-interleave data blocks for
-		// `EcLevel::M`.
-		let codewords: Vec<u8> = bits
-			.as_chunks::<8>()
-			.0
-			.iter()
-			.map(|chunk| chunk.iter().fold(0u8, |acc, &b| (acc << 1) | u8::from(b)))
-			.collect();
-		let block_lens: &[usize] = match version {
-			1 => &[16],
-			2 => &[28],
-			3 => &[44],
-			4 => &[32, 32],
-			5 => &[43, 43],
-			6 => &[27, 27, 27, 27],
-			7 => &[31, 31, 31, 31],
-			8 => &[38, 38, 39, 39],
-			9 => &[36, 36, 36, 37, 37],
-			10 => &[43, 43, 43, 43, 44],
-			11 => &[50, 51, 51, 51, 51],
-			12 => &[36, 36, 36, 36, 36, 36, 37, 37],
-			_ => panic!("unsupported test QR version {version}"),
-		};
-		let max_len = *block_lens.iter().max().unwrap();
-		let mut blocks: Vec<Vec<u8>> = block_lens.iter().map(|&l| Vec::with_capacity(l)).collect();
-		let mut idx = 0;
-		for pos in 0..max_len {
-			for (b, &len) in block_lens.iter().enumerate() {
-				if pos < len {
-					blocks[b].push(codewords[idx]);
-					idx += 1;
-				}
-			}
-		}
-		let data: Vec<u8> = blocks.into_iter().flatten().collect();
-		let data_bits: Vec<bool> = data
-			.iter()
-			.flat_map(|&byte| (0..8).rev().map(move |shift| ((byte >> shift) & 1) == 1))
-			.collect();
-		let read_u16 = |offset: usize, count: usize| -> u16 {
-			data_bits[offset..offset + count]
-				.iter()
-				.fold(0u16, |acc, &b| (acc << 1) | u16::from(b))
-		};
-		let mut out = Vec::new();
-		let mut pos = 0;
-		while pos + 4 <= data_bits.len() {
-			let mode = read_u16(pos, 4);
-			pos += 4;
-			match mode {
-				0b0000 => break, // Terminator
-				0b0001 => {
-					// Numeric mode
-					let count_bits = if version <= 9 { 10 } else { 12 };
-					let mut remaining = usize::from(read_u16(pos, count_bits));
-					pos += count_bits;
-					while remaining >= 3 {
-						let v = read_u16(pos, 10);
-						pos += 10;
-						out.extend_from_slice(format!("{v:03}").as_bytes());
-						remaining -= 3;
-					}
-					if remaining == 2 {
-						let v = read_u16(pos, 7);
-						pos += 7;
-						out.extend_from_slice(format!("{v:02}").as_bytes());
-					} else if remaining == 1 {
-						let v = read_u16(pos, 4);
-						pos += 4;
-						out.extend_from_slice(format!("{v:01}").as_bytes());
-					}
-				}
-				0b0010 => {
-					// Alphanumeric mode
-					let count_bits = if version <= 9 { 9 } else { 11 };
-					let mut remaining = usize::from(read_u16(pos, count_bits));
-					pos += count_bits;
-					while remaining >= 2 {
-						let v = usize::from(read_u16(pos, 11));
-						pos += 11;
-						out.push(ALNUM[v / 45]);
-						out.push(ALNUM[v % 45]);
-						remaining -= 2;
-					}
-					if remaining == 1 {
-						let v = usize::from(read_u16(pos, 6));
-						pos += 6;
-						out.push(ALNUM[v]);
-					}
-				}
-				0b0100 => {
-					// Byte mode
-					let count_bits = if version <= 9 { 8 } else { 16 };
-					let len = usize::from(read_u16(pos, count_bits));
-					pos += count_bits;
-					for _ in 0..len {
-						out.push(u8::try_from(read_u16(pos, 8)).expect("8 bits fit in u8"));
-						pos += 8;
-					}
-				}
-				other => panic!("unsupported QR segment mode {other:#b}"),
-			}
-		}
-		String::from_utf8(out).expect("QR payload is valid UTF-8")
+		let grid = rasterize_qr_path(qr);
+		let side = grid.len() * SCALE;
+		let mut image = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+			if grid[y / SCALE][x / SCALE] { 0 } else { 255 }
+		});
+		let grids = image.detect_grids();
+		assert_eq!(grids.len(), 1, "exactly one QR code in the rendered path");
+		let (_, payload) = grids[0]
+			.decode()
+			.expect("rqrr decodes the rendered QR code");
+		payload
 	}
 
 	#[test]
