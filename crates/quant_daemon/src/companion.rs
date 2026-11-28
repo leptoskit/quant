@@ -16,7 +16,10 @@
 //! pulled by that agent; the requester can only read back its own messages.
 //! Every input is sanitised and bounded, submissions are rate limited by the
 //! grant's `questions_per_hour`, and a required dedupe key makes a retry
-//! after a lost response return the original message.
+//! after a lost response return the original message. The retry, both sides'
+//! current grants, and the cap are decided in the store's write transaction,
+//! so a grant revoked or expired while the request was in flight cannot leave
+//! a deliverable message behind.
 
 use std::sync::Arc;
 
@@ -24,7 +27,6 @@ use axum::Json;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State as AxumState;
-use jiff::SignedDuration;
 use jiff::Timestamp;
 use quant_access::Denied;
 use quant_access::audit::AuditEvent;
@@ -41,6 +43,7 @@ use quant_store::ClientKind;
 use quant_store::ClientStatus;
 use quant_store::Message;
 use quant_store::MessageStatus;
+use quant_store::StoreError;
 use serde::Deserialize;
 
 use crate::authn::Caller;
@@ -267,36 +270,10 @@ pub async fn send(
 	let now = Timestamp::now();
 	state.vault.store.abandon_stale_messages(now)?;
 
-	// A retry with the same key returns the original message, provided it is
-	// the same request, even if the recipient has since lost its grant: the
-	// requester is only reading back its own earlier send. Reusing a key for
-	// a different target or text is a caller mistake, not a retry.
-	if let Some(existing) = state
-		.vault
-		.store
-		.message_by_dedupe(caller.client.id, &dedupe)?
-	{
-		let same = existing.recipient == body.to
-			&& existing.question == question
-			&& existing.purpose == purpose;
-		if !same {
-			return Err(Error::Invalid(
-				"that dedupe key already names a different message".into(),
-			));
-		}
-		audit_with_purpose(
-			&state,
-			caller,
-			"companion.send",
-			existing.id.to_string(),
-			allowed(),
-			purpose.as_deref(),
-			serde_json::json!({ "retry": true, "from": caller.client.id, "to": existing.recipient }),
-		)?;
-		return Ok(Json(shape(&existing, !caller.grant.unredacted)));
-	}
-
-	// A new message needs a recipient that is an approved agent right now.
+	// The store settles the dedupe decision, the payload a retry must
+	// match, both sides' current grants, and the hourly cap in one
+	// transaction with the insert. The recipient lookup here only supplies
+	// the name kept with the message; the store decides eligibility again.
 	let Some(target) = state.vault.store.client(body.to)? else {
 		audit_with_purpose(
 			&state,
@@ -309,35 +286,6 @@ pub async fn send(
 		)?;
 		return Err(Error::NotFound);
 	};
-	if !target_live(&state, &target, now)? {
-		audit_with_purpose(
-			&state,
-			caller,
-			"companion.send",
-			target.id.to_string(),
-			Outcome::Failed,
-			purpose.as_deref(),
-			serde_json::json!({ "reason": "recipient is not an approved agent" }),
-		)?;
-		return Err(Error::NotFound);
-	}
-
-	let hour_ago = now - SignedDuration::from_hours(1);
-	let recent = state.vault.store.message_count(caller.grant.id, hour_ago)?;
-	if recent >= caller.grant.limits.questions_per_hour {
-		audit_with_purpose(
-			&state,
-			caller,
-			"companion.send",
-			"",
-			Outcome::Denied {
-				reason: Denied::RateLimited,
-			},
-			purpose.as_deref(),
-			serde_json::json!({ "from": caller.client.id, "to": body.to }),
-		)?;
-		return Err(Error::Forbidden(Denied::RateLimited));
-	}
 
 	let message = Message {
 		id: QuestionId::new(),
@@ -355,7 +303,40 @@ pub async fn send(
 		answered_at: None,
 		citations: Vec::new(),
 	};
-	let stored = state.vault.store.insert_message(&message)?;
+	let submission = match state.vault.store.submit_message(&message) {
+		Ok(submission) => submission,
+		Err(error) => {
+			let (outcome, reason) = match &error {
+				StoreError::NotFound => {
+					(
+						Outcome::Failed,
+						"recipient is not an approved agent".to_owned(),
+					)
+				}
+				StoreError::Denied(denied) => {
+					(Outcome::Denied { reason: *denied }, denied.to_string())
+				}
+				StoreError::Invalid(_) => {
+					(
+						Outcome::Failed,
+						"the dedupe key names a different message".to_owned(),
+					)
+				}
+				_ => (Outcome::Failed, "message not stored".to_owned()),
+			};
+			audit_with_purpose(
+				&state,
+				caller,
+				"companion.send",
+				body.to.to_string(),
+				outcome,
+				purpose.as_deref(),
+				serde_json::json!({ "reason": reason }),
+			)?;
+			return Err(error.into());
+		}
+	};
+	let stored = submission.message;
 	audit_with_purpose(
 		&state,
 		caller,
@@ -364,6 +345,7 @@ pub async fn send(
 		allowed(),
 		purpose.as_deref(),
 		serde_json::json!({
+			"retry": !submission.created,
 			"from": caller.client.id,
 			"to": stored.recipient,
 			"question_chars": question.chars().count(),
@@ -575,11 +557,11 @@ pub async fn answer(
 		)?;
 		return Err(Error::NotFound);
 	}
-	state
-		.vault
-		.store
-		.answer_message(id, caller.client.id, &answer, &body.citations, now)?;
-	let answered = state.vault.store.message(id)?.ok_or(Error::NotFound)?;
+	let answered =
+		state
+			.vault
+			.store
+			.answer_message(id, caller.client.id, &answer, &body.citations, now)?;
 	audit(
 		&state,
 		caller,
@@ -587,9 +569,10 @@ pub async fn answer(
 		id.to_string(),
 		allowed(),
 		serde_json::json!({
+			"retry": !answered.stored,
 			"citations": body.citations.len(),
 			"answer_chars": answer.chars().count(),
 		}),
 	)?;
-	Ok(Json(shape(&answered, !caller.grant.unredacted)))
+	Ok(Json(shape(&answered.message, !caller.grant.unredacted)))
 }

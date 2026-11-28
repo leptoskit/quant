@@ -634,6 +634,117 @@ async fn withdrawing_companion_permission_abandons_open_messages() {
 }
 
 #[tokio::test]
+async fn expired_grants_close_open_messages_on_either_side() {
+	let h = start().await;
+	let agent = h
+		.paired("Claude", ClientKind::Agent, approve(&["screen:read"]))
+		.await;
+	let agent_id = id(&agent).await;
+	let phone = h
+		.paired("Phone", ClientKind::Device, approve(&["companion:write"]))
+		.await;
+	let phone_id = id(&phone).await;
+
+	let open = phone
+		.send_companion_message(&send(agent_id, "Still there?", "phone-00000001"))
+		.await
+		.unwrap();
+	assert_eq!(agent.inbox(None).await.unwrap().len(), 1);
+
+	// Let the sender's grant expire without revoking it: the question it
+	// left open must not be delivered or answered after the clock passes.
+	let mut grant = h.state.vault.store.active_grant(phone_id).unwrap().unwrap();
+	grant.expires_at = Some(Timestamp::now() - SignedDuration::from_mins(1));
+	h.state.vault.store.update_grant(&grant).unwrap();
+	assert!(agent.inbox(None).await.unwrap().is_empty());
+	assert_eq!(
+		h.state
+			.vault
+			.store
+			.message(open.id)
+			.unwrap()
+			.unwrap()
+			.status,
+		quant_store::MessageStatus::Abandoned
+	);
+	assert_eq!(
+		agent
+			.answer_message(
+				open.id,
+				&CompanionAnswer {
+					answer: "A late reply".into(),
+					citations: Vec::new(),
+				},
+			)
+			.await
+			.unwrap_err()
+			.code(),
+		Some("not_found")
+	);
+	// The expired companion can neither submit nor read its history.
+	assert_eq!(
+		phone
+			.send_companion_message(&send(agent_id, "Again?", "phone-00000002"))
+			.await
+			.unwrap_err()
+			.code(),
+		Some("forbidden")
+	);
+	assert_eq!(
+		phone.companion_messages(None).await.unwrap_err().code(),
+		Some("forbidden")
+	);
+
+	// Expiring the recipient closes a message that was already waiting,
+	// and refuses new ones addressed to it.
+	let other_phone = h
+		.paired(
+			"Other phone",
+			ClientKind::Device,
+			approve(&["companion:write"]),
+		)
+		.await;
+	let other_agent = h
+		.paired("Other agent", ClientKind::Agent, approve(&["screen:read"]))
+		.await;
+	let other_agent_id = id(&other_agent).await;
+	let waiting = other_phone
+		.send_companion_message(&send(other_agent_id, "Waiting?", "phone-00000001"))
+		.await
+		.unwrap();
+	assert_eq!(other_agent.inbox(None).await.unwrap().len(), 1);
+	let mut grant = h
+		.state
+		.vault
+		.store
+		.active_grant(other_agent_id)
+		.unwrap()
+		.unwrap();
+	grant.expires_at = Some(Timestamp::now() - SignedDuration::from_mins(1));
+	h.state.vault.store.update_grant(&grant).unwrap();
+	assert_eq!(
+		other_phone
+			.companion_message(waiting.id)
+			.await
+			.unwrap()
+			.status,
+		CompanionMessageStatus::Abandoned
+	);
+	assert_eq!(
+		other_phone
+			.send_companion_message(&send(other_agent_id, "Again?", "phone-00000002"))
+			.await
+			.unwrap_err()
+			.code(),
+		Some("not_found")
+	);
+	assert_eq!(
+		other_agent.inbox(None).await.unwrap_err().code(),
+		Some("forbidden")
+	);
+}
+
+#[tokio::test]
 async fn a_legacy_agent_question_remains_its_own_ledger() {
 	let h = start().await;
 	let screen = seed(&h.state);
