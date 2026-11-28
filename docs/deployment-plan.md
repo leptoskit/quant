@@ -520,22 +520,22 @@ current platform/store requirements when that release is implemented.
 - **Open gates (no publication):** on-device iOS (simulator and physical
   iPhone), physical-device battery, thermal, and OS permission measurements, and
   release signing/store gates remain open.
-- **Repeat with synthetic data:** initialize a disposable vault (`QUANT_HOME`
-  in an isolated directory) with `quant init` and start `quant daemon --tcp`,
+- **Repeat with synthetic data:** set `QUANT_HOME` and `QUANT_CONFIG` to
+  separate disposable directories. Run `quant init --no-keychain` and start
+  `quant daemon --tcp 127.0.0.1:18771 --no-capture --no-relay` for the Android emulator,
   pair a synthetic writer (`quant pair --kind cli --scope health:write` and
   `quant approve <code>`) and pipe synthetic samples via
   `quant ingest --stream health.heart_rate --format csv` (or `--records` for
-  JSON records), pair the phone with `quant link`, approve the phone's companion
+  JSON records), pair the emulator with `quant link --host 10.0.2.2 --port 18771`, approve the phone's companion
   request with `*:summary` (**Vault**) and `companion:write` (**Ask**), pair and
   approve an agent (`quant mcp`), and exercise `quant_inbox`, `quant_series`,
   and `quant_inbox_answer`.
-- **Revoke companion access while preserving recording:** run `quant clients`
-  to find the companion client's grant or client ID and run `quant revoke <id>`
-  (or tap **Remove access** in the phone's companion settings). Revoking or
-  removing companion access abandons open companion messages, removes
-  `phone.companion.identity.json`, and clears in-memory **Vault**/**Ask** state
-  while keeping `phone.identity.json` and `spool/` intact so write-only
-  collection continues uninterrupted.
+- To withdraw access at the vault, use `quant clients` to identify the
+  companion and run `quant revoke <id>`. The vault closes its unanswered
+  messages. The phone clears companion state when it next checks the grant.
+  **Remove access** on the phone deletes its local companion identity.
+  Use the vault command when the grant itself needs to end. Both operations
+  preserve the separate collector pairing and queued readings.
 
 ## 11. Deployment completion checklist
 
