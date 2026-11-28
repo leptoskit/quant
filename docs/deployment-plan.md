@@ -17,8 +17,8 @@ resources and release artifacts remain destinations of this one application.
 | `desktop` | Signed macOS app plus the `quant` CLI/daemon | Local install, owner pilot, then signed public distribution after packaging gates pass. |
 | `desktop-preview` | Local UI with explicitly labelled, synthetic sample data | Design review and screenshots only; never distribute as the product. |
 | `web` | Product browser frontend | Blocked by `targets.web.unavailable`; authenticated transport is unfinished. |
-| `android` | Debug APK of the phone collector (incl. Health Connect, BLE, watch sync) | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
-| `ios` | Unsigned device build of the phone collector (incl. HealthKit, BLE, WatchConnectivity) | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
+| `android` | Debug APK of the phone app (collector incl. Health Connect, BLE, watch sync; optional Vault/Ask companion) | Development builds on the owner's own phone only ([guide](phone.md)). No release until the Android gates in section 10 pass. |
+| `ios` | Unsigned device build of the phone app (collector incl. HealthKit, BLE, WatchConnectivity; optional Vault/Ask companion) | Development builds in the simulator or on the owner's own iPhone only ([guide](phone.md)). No release until the iOS gates in section 10 pass. |
 | `wearos` | Debug Wear OS 3+ watch APK (`platforms/wearos`, incl. Pixel Watch & Samsung Galaxy Watch; built in CI) | Development builds only ([wearables guide](wearables.md)). No release until watch hardware, battery, thermal, and store gates in section 10 pass. |
 | `watchos` | Apple Watch app (`platforms/watchos`) | Development builds only ([wearables guide](wearables.md)). No release until watchOS hardware, HealthKit workout, battery, thermal, and store gates in section 10 pass. |
 | `harmonyos` / `harmonyos-watch` | Experimental HarmonyOS phone/tablet and Huawei Watch HAP (`platforms/harmonyos`) | Experimental development builds only ([wearables guide](wearables.md)). No release until HarmonyOS SDK/device gates in section 10 pass. |
@@ -445,6 +445,14 @@ Migrations run on relay startup and vault open. Do not apply down migrations
 automatically or assume an old image can open newer state. Where restore loses
 newer data, retain the post-failure copy and record that loss/reconciliation.
 
+Specifically for vault schema 9 (`PRAGMA user_version = 9`, which adds
+`companion_messages` and `companion_citations`), rolling back the daemon to a
+pre-schema-9 binary requires stopping all writers cleanly and restoring the
+verified pre-upgrade vault backup (`vault.json`, `quant.db`, sealed `media/`,
+and any WAL/journal files) before starting the older daemon; retain the
+post-upgrade vault copy if any post-upgrade records or messages need
+reconciliation.
+
 ### Observation and handover
 
 During rollout, watch readiness, error rates, relay reconnects, resource use,
@@ -494,6 +502,40 @@ and an internal-testing distribution first. Record supported OS versions and
 device classes, migration behavior and a recovery strategy; mobile storefronts
 may require a replacement release rather than an immediate downgrade. Verify
 current platform/store requirements when that release is implemented.
+
+### Phone, Vault, and Ask pilot verification and recovery
+
+- **Android 15 emulator evidence:** verified on unpublished integrated Quant
+  revision `3a76f8f64aa23591ebdacbcd18c3b1529d64cf16` with pinned Leptoskit SDK
+  `3d2887b72737ef9972a8374a5a6d79b24500ff5a` and debug APK SHA-256
+  `896f3822ec050d84f421e934913ef21ccdbdf96c99043e1ff84403cfe74e3982`, paired
+  against a disposable test daemon running the companion mailbox implementation
+  at `c103ba0a4044800e71748689a7f765def70e7b5c`. Upgrading the app preserved the
+  existing write-only collector pairing. Fixture-backed **Vault** listed 44
+  streams and displayed 3 `health.heart_rate` samples (mean 72 bpm, min 68, max
+  76). **Ask** posted a question and showed waiting; the test agent retrieved it
+  via `quant_inbox`, fetched the measured values via `quant_series`, persisted
+  its reply via `quant_inbox_answer`, and the reply appeared in the app. Prior
+  desktop QR and Android `quant://link` acceptance were independently verified.
+- **Open gates (no publication):** on-device iOS (simulator and physical
+  iPhone), physical-device battery, thermal, and OS permission measurements, and
+  release signing/store gates remain open.
+- **Repeat with synthetic data:** initialize a disposable vault (`QUANT_HOME`
+  in an isolated directory) with `quant init` and start `quant daemon --tcp`,
+  pair a synthetic writer (`quant pair --kind cli --scope health:write` and
+  `quant approve <code>`) and pipe synthetic samples via
+  `quant ingest --stream health.heart_rate --format csv` (or `--records` for
+  JSON records), pair the phone with `quant link`, approve the phone's companion
+  request with `*:summary` (**Vault**) and `companion:write` (**Ask**), pair and
+  approve an agent (`quant mcp`), and exercise `quant_inbox`, `quant_series`,
+  and `quant_inbox_answer`.
+- **Revoke companion access while preserving recording:** run `quant clients`
+  to find the companion client's grant or client ID and run `quant revoke <id>`
+  (or tap **Remove access** in the phone's companion settings). Revoking or
+  removing companion access abandons open companion messages, removes
+  `phone.companion.identity.json`, and clears in-memory **Vault**/**Ask** state
+  while keeping `phone.identity.json` and `spool/` intact so write-only
+  collection continues uninterrupted.
 
 ## 11. Deployment completion checklist
 
