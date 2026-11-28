@@ -113,6 +113,14 @@ pub async fn hello(AxumState(state): Shared) -> Json<Hello> {
 	})
 }
 
+fn pair_response(client: &Client) -> PairResponse {
+	PairResponse {
+		client: client.id,
+		pairing_code: client.pairing_code(),
+		status: status_out(client.status),
+	}
+}
+
 /// `POST /v1/pair`. Unauthenticated: it only ever creates a pending client
 /// with no access, and the number waiting is capped. An agent must say
 /// what it is — product, vendor, model, version, and host — and no other
@@ -147,6 +155,14 @@ pub async fn pair(
 			"only agents pair with an agent identity".into(),
 		));
 	}
+	// A client that already has a pairing waiting gets its code back. A
+	// caller may poll while it waits for the owner, and each request must not
+	// write another `pair.request` audit entry for one waiting client.
+	if let Some(client) = state.vault.store.client_by_key(&body.public_key)?
+		&& client.status == ClientStatus::Pending
+	{
+		return Ok(Json(pair_response(&client)));
+	}
 	let client = state.vault.store.register_client(
 		&body.name,
 		kind_in(body.kind),
@@ -154,9 +170,7 @@ pub async fn pair(
 		&scopes,
 		body.agent.as_ref(),
 	)?;
-	if client.status == ClientStatus::Pending
-		&& client.created_at > Timestamp::now() - SignedDuration::from_secs(5)
-	{
+	if client.status == ClientStatus::Pending {
 		state.vault.store.audit(
 			AuditEvent::new(
 				Actor::Unknown {
@@ -183,11 +197,7 @@ pub async fn pair(
 			})),
 		)?;
 	}
-	Ok(Json(PairResponse {
-		client: client.id,
-		pairing_code: client.pairing_code(),
-		status: status_out(client.status),
-	}))
+	Ok(Json(pair_response(&client)))
 }
 
 /// `POST /v1/owner/unlock`
