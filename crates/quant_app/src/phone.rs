@@ -13,11 +13,15 @@
 pub mod bridge;
 #[cfg(all(target_arch = "wasm32", feature = "phone"))]
 pub mod collect;
+pub mod splash;
 
 use std::sync::Arc;
 
+use leptoskit::native::animation::Presence;
+use leptoskit::native::animation::Spring;
 use leptoskit::native::reactive::For;
 use leptoskit::native::reactive::Show;
+use leptoskit::prelude::ActivityIndicator;
 use leptoskit::prelude::Button;
 use leptoskit::prelude::Element;
 use leptoskit::prelude::Get;
@@ -32,8 +36,12 @@ use leptoskit::prelude::component;
 use quant_model::phone::Command;
 use quant_model::phone::Link;
 use quant_model::phone::Snapshot;
+use quant_model::phone::Source;
 use quant_model::phone::SourceRow;
 use quant_model::phone::Storage;
+
+use crate::theme;
+use crate::theme::Icon;
 
 /// Where one thing the owner has to allow stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -160,6 +168,19 @@ impl Step {
 			Step::Bluetooth => "bluetooth",
 		}
 	}
+
+	/// The line icon that names this step in its row.
+	fn icon(self) -> Icon {
+		match self {
+			Step::Location | Step::Always => Icon::Pin,
+			Step::Notifications => Icon::Bell,
+			Step::Usage => Icon::Apps,
+			Step::Battery => Icon::Battery,
+			Step::Health => Icon::Heart,
+			Step::Wearable => Icon::Watch,
+			Step::Bluetooth => Icon::Bluetooth,
+		}
+	}
 }
 
 /// Where every [`Step`] stands.
@@ -252,6 +273,10 @@ pub struct State {
 	/// Whether a high-frequency live workout sensor session is active on a
 	/// watch.
 	pub live_workout: RwSignal<bool>,
+	/// Whether the launch animation still covers the screen.
+	pub splash: RwSignal<bool>,
+	/// Whether the owner has left the welcome screen to pair this phone.
+	pub pairing: RwSignal<bool>,
 	act: Act,
 }
 
@@ -265,6 +290,8 @@ impl State {
 			problem: RwSignal::new(None),
 			collector: RwSignal::new(None),
 			live_workout: RwSignal::new(false),
+			splash: RwSignal::new(false),
+			pairing: RwSignal::new(false),
 			act,
 		}
 	}
@@ -279,37 +306,156 @@ impl State {
 	}
 }
 
-const MUTED: &str = "text-sm leading-relaxed text-stone-500 dark:text-stone-400";
-const CARD: &str = "gap-3 p-4 rounded-2xl border border-stone-200 bg-[#fffdf7] \
-                    dark:border-stone-700 dark:bg-[#252520]";
-const CONTROL: &str = "px-4 py-3 rounded-xl bg-stone-100 text-stone-800 dark:bg-stone-700 \
-                       dark:text-stone-100 text-sm";
-const PRIMARY: &str = "px-4 py-3 rounded-xl bg-[#ffd43b] text-stone-900 text-sm font-semibold";
-const HEADING: &str = "text-base font-semibold text-stone-900 dark:text-stone-100";
-const BODY: &str = "text-sm leading-relaxed text-stone-800 dark:text-stone-100";
-const PROBLEM: &str = "text-sm leading-relaxed text-red-700 dark:text-red-300";
-const CODE: &str = "p-3 rounded-xl bg-stone-100 text-stone-900 dark:bg-stone-800 \
-                    dark:text-stone-100 text-xs leading-relaxed";
-
-/// The whole screen.
+/// The whole screen. One stage is built at a time, keyed so a pairing step
+/// keeps its typed link and a snapshot does not rebuild the stage beneath it.
 #[component]
 pub fn Screen(state: State) -> Element {
-	ScrollView()
-		.class("flex-1 bg-[#fbf6ea] dark:bg-[#1b1a17]")
+	let splash = state.splash;
+	View()
+		.class(theme::SCREEN)
+		.child(
+			ScrollView().class("flex-1").child(
+				View()
+					.class(theme::CONTENT)
+					.child(storage_card(&state))
+					.child(stage_view(&state)),
+			),
+		)
+		// The splash must be a direct child: `Show` would wrap it in a
+		// zero-height region, and its `absolute inset-0` would then cover
+		// that wrapper instead of the screen.
+		.children(splash.get().then(splash::splash))
+}
+
+/// Which stage the screen shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Stage {
+	/// The welcome screen, before the owner asks to pair.
+	Welcome,
+	/// Pairing: the link and the approval code.
+	Pair,
+	/// Paired, or paired and waiting for the vault to answer.
+	Home,
+}
+
+/// The stage a link and the owner's choice lead to.
+fn stage(link: &Link, pairing: bool) -> Stage {
+	match link {
+		Link::Unpaired if !pairing => Stage::Welcome,
+		Link::Unpaired | Link::Connecting | Link::Pending { .. } => Stage::Pair,
+		Link::Unreachable { .. } | Link::Revoked | Link::Ready => Stage::Home,
+	}
+}
+
+fn stage_view(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let pairing = state.pairing;
+	let state = state.clone();
+	For(
+		move || vec![stage(&snapshot.get().link, pairing.get())],
+		Clone::clone,
+		move |stage| {
+			match stage {
+				Stage::Welcome => welcome_view(&state),
+				Stage::Pair => pair_stage(&state),
+				Stage::Home => home_view(&state),
+			}
+		},
+	)
+}
+
+/// The first thing a new owner sees: what Quant is, and the three promises
+/// that make it worth handing over a phone.
+fn welcome_view(state: &State) -> Element {
+	let start = state.clone();
+	View()
+		.class("gap-8 pt-6")
+		.child(
+			theme::logo("w-[88px] h-[88px]")
+				.entering(Presence::fade().scale(0.9).spring(Spring::GENTLE)),
+		)
 		.child(
 			View()
-				.class("gap-4 px-5 pt-safe-offset-6 pb-safe-offset-8")
-				.child(header(&state))
-				.child(storage_card(&state))
-				.child(vault_card(&state))
-				.child(wearables_card(&state))
-				.child(permissions_card(&state))
-				.child(collecting_card(&state))
-				.child(delivery_card(&state)),
+				.class("gap-3")
+				.child(Text("YOUR PRIVATE MEMORY").class(theme::EYEBROW))
+				.child(
+					Text("Measure your life. Keep it yours.")
+						.class(theme::DISPLAY)
+						.test_id("welcome"),
+				)
+				.child(
+					Text(
+						"Quant turns this phone into a quiet sensor for the encrypted vault on \
+						 your computer.",
+					)
+					.class(theme::BODY),
+				),
+		)
+		.child(
+			View()
+				.class("gap-3")
+				.child(promise(
+					0,
+					Icon::Pulse,
+					"Collects quietly",
+					"Where you go, the apps you use, your battery and health readings, gathered \
+					 in the background.",
+				))
+				.child(promise(
+					1,
+					Icon::Lock,
+					"Sealed on your computer",
+					"Readings travel encrypted to your vault. This phone can add to it, never \
+					 read it back.",
+				))
+				.child(promise(
+					2,
+					Icon::Key,
+					"You decide who reads",
+					"AI agents see only what you grant, for as long as you allow, and every read \
+					 is logged.",
+				)),
+		)
+		.child(
+			View()
+				.class("gap-3")
+				.child(
+					Button("Connect to my vault")
+						.class(theme::PRIMARY)
+						.test_id("get-started")
+						.on_press(move || {
+							start.problem.set(None);
+							start.pairing.set(true);
+						}),
+				)
+				.child(
+					Text("You'll need the computer where Quant keeps your vault.")
+						.class(theme::CAPTION),
+				),
 		)
 }
 
-fn header(state: &State) -> Element {
+/// One of the welcome screen's three promises, rising into place in turn.
+fn promise(n: u8, icon: Icon, title: &'static str, text: &'static str) -> Element {
+	View()
+		.class("flex-row items-start gap-4 p-4 rounded-2xl bg-[#17143A]")
+		.entering(
+			Presence::fade()
+				.slide_by(0.0, 18.0)
+				.spring(Spring::GENTLE)
+				.delay(150.0 + 120.0 * f32::from(n)),
+		)
+		.child(theme::tile(icon))
+		.child(
+			View()
+				.class("flex-1 gap-1")
+				.child(Text(title).class(theme::LABEL))
+				.child(Text(text).class(theme::MUTED)),
+		)
+}
+
+/// Pairing: the link, then the code the owner approves.
+fn pair_stage(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let problem = state.problem;
 	let message = move || {
@@ -319,31 +465,147 @@ fn header(state: &State) -> Element {
 			.or_else(|| snapshot.notice.map(|notice| notice.text))
 			.filter(|text| !text.is_empty() && *text != snapshot.headline)
 	};
+	let back = state.clone();
 	View()
-		.class("gap-2 pb-2")
+		.class("gap-6 pt-2")
+		.child(Show(
+			move || snapshot.get().link == Link::Unpaired,
+			move || {
+				let back = back.clone();
+				Button("Back")
+					.class(theme::QUIET)
+					.test_id("back")
+					.on_press(move || {
+						back.problem.set(None);
+						back.pairing.set(false);
+					})
+			},
+		))
+		.child(vault_card(state))
+		.child(Show(
+			move || message().is_some(),
+			move || {
+				Text(move || message().unwrap_or_default())
+					.class(theme::PROBLEM)
+					.test_id("notice")
+			},
+		))
+}
+
+/// Paired: the mark, the state of the vault, and everything this phone
+/// records, in one stack.
+fn home_view(state: &State) -> Element {
+	View()
+		.class("gap-5")
+		.child(top_bar(state))
+		.child(hero(state))
+		.child(vault_card(state))
+		.child(permissions_card(state))
+		.child(delivery_card(state))
+		// The watch card sits above the source list rather than last: with
+		// every permission still unasked, the cards above it already fill a
+		// 3200-point test viewport, and the unchanged wearables test must be
+		// able to reach its buttons.
+		.child(wearables_card(state))
+		.child(collecting_card(state))
+}
+
+/// The mark and wordmark on the left, whether the phone is recording on the
+/// right.
+fn top_bar(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	View()
+		.class("flex-row items-center justify-between")
 		.child(
 			View()
-				.class("flex-row items-center justify-between gap-4")
-				.child(
-					Text("quant")
-						.class("text-3xl font-semibold text-stone-900 dark:text-stone-100"),
-				)
-				.child(
-					Text("YOUR PRIVATE MEMORY")
-						.class("text-[10px] text-stone-500 dark:text-stone-400"),
-				),
+				.class("flex-row items-center gap-2")
+				.child(theme::logo("w-8 h-8"))
+				.child(theme::wordmark("w-[68px] h-[24px]")),
 		)
+		.child(For(
+			move || vec![snapshot.get().collecting],
+			Clone::clone,
+			status_pill,
+		))
+}
+
+/// The recording or paused pill.
+fn status_pill(collecting: bool) -> Element {
+	let (pill, dot, label, ink) = if collecting {
+		(
+			"flex-row items-center gap-2 px-3 py-1.5 rounded-full bg-[#2B1C3A]",
+			"w-2 h-2 rounded-full bg-[#FF7A59] animate-pulse",
+			"RECORDING",
+			"text-xs font-semibold text-[#FF9C82]",
+		)
+	} else {
+		(
+			"flex-row items-center gap-2 px-3 py-1.5 rounded-full bg-[#221E4F]",
+			"w-2 h-2 rounded-full bg-[#6F68A8]",
+			"PAUSED",
+			"text-xs font-semibold text-[#A9A3D6]",
+		)
+	};
+	View()
+		.class(pill)
+		.child(View().class(dot))
+		.child(Text(label).class(ink))
+}
+
+/// What the phone is doing now, and the switch that starts or stops it.
+fn hero(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let problem = state.problem;
+	let message = move || {
+		let snapshot = snapshot.get();
+		problem
+			.get()
+			.or_else(|| snapshot.notice.map(|notice| notice.text))
+			.filter(|text| !text.is_empty() && *text != snapshot.headline)
+	};
+	let toggle = state.clone();
+	View()
+		.class(theme::HERO)
 		.child(
 			Text(move || snapshot.get().headline)
-				.class("text-base font-medium text-stone-700 dark:text-stone-200")
+				.class(theme::TITLE)
 				.test_id("headline"),
 		)
 		.child(Show(
 			move || message().is_some(),
 			move || {
 				Text(move || message().unwrap_or_default())
-					.class(MUTED)
+					.class(theme::MUTED)
 					.test_id("notice")
+			},
+		))
+		.child(For(
+			move || vec![snapshot.get().collecting],
+			Clone::clone,
+			move |collecting| {
+				let toggle = toggle.clone();
+				View()
+					.class(
+						"flex-row items-center justify-between gap-3 pt-4 border-t \
+						 border-[#3A3380]",
+					)
+					.child(
+						View()
+							.class("flex-1 gap-1")
+							.child(Text("Collect on this phone").class(theme::LABEL))
+							.child(
+								Text("Readings wait here, encrypted, until your vault takes them.")
+									.class(theme::CAPTION),
+							),
+					)
+					.child(
+						Switch(collecting)
+							.accessibility_label("Collect on this phone")
+							.test_id("collecting")
+							.on_toggle(move |enabled| {
+								toggle.send(Command::Collect { enabled });
+							}),
+					)
 			},
 		))
 }
@@ -361,25 +623,30 @@ fn storage_card(state: &State) -> Element {
 			};
 			let state = state.clone();
 			View()
-				.class(CARD)
-				.child(Text("This phone's storage can't be opened").class(HEADING))
+				.class(theme::CARD)
+				.child(
+					View()
+						.class("flex-row items-center gap-3")
+						.child(theme::tile_bad(Icon::Lock))
+						.child(Text("This phone's storage can't be opened").class(theme::HEADING)),
+				)
 				.child(
 					Text(format!(
 						"Readings wait in an encrypted store whose key lives in this phone's \
 						 keystore, and the two no longer match. ({reason})"
 					))
-					.class(MUTED),
+					.class(theme::MUTED),
 				)
 				.child(
 					Text(
 						"Starting over deletes anything this phone has not delivered yet. What \
 						 your vault already holds is untouched.",
 					)
-					.class(MUTED),
+					.class(theme::MUTED),
 				)
 				.child(
 					Button("Start storage over")
-						.class(CONTROL)
+						.class(theme::SECONDARY)
 						.test_id("reset-storage")
 						.on_press(move || state.act(Action::ResetStorage)),
 				)
@@ -413,153 +680,229 @@ fn vault_card(state: &State) -> Element {
 }
 
 fn vault_view(state: &State, part: &VaultPart) -> Element {
-	let card = View().class(CARD);
 	let place = part.vault.clone().unwrap_or_default();
 	match &part.link {
-		Link::Unpaired => pair_view(state, card),
+		Link::Unpaired => pair_view(state),
 		Link::Connecting => {
-			card.child(
-				Text("Connecting to your vault…")
-					.class(HEADING)
-					.test_id("vault"),
-			)
-			.child(Text(place).class(MUTED))
-		}
-		Link::Unreachable { reason } => {
-			let (again, forget) = (state.clone(), state.clone());
-			card.child(
-				Text("Your vault is out of reach")
-					.class(HEADING)
-					.test_id("vault"),
-			)
-			.child(
-				Text(format!(
-					"Readings keep waiting on this phone and go out when it answers. {place} \
-					 ({reason})"
-				))
-				.class(MUTED),
-			)
-			.child(
-				View()
-					.class("flex-row flex-wrap gap-2")
-					.child(
-						Button("Try again")
-							.class(PRIMARY)
-							.test_id("retry")
-							.on_press(move || again.send(Command::Upload)),
-					)
-					.child(forget_button(&forget, "Use another link")),
-			)
+			View()
+				.class(theme::CARD)
+				.child(
+					View()
+						.class("flex-row items-center gap-3")
+						.child(ActivityIndicator(true))
+						.child(
+							Text("Connecting to your vault…")
+								.class(theme::HEADING)
+								.test_id("vault"),
+						),
+				)
+				.child(Text(place).class(theme::MUTED))
 		}
 		Link::Pending { code } => {
 			let again = state.clone();
-			card.child(Text("Approve this phone").class(HEADING).test_id("vault"))
+			View()
+				.class("gap-2")
+				.child(Text("STEP 2 OF 2").class(theme::EYEBROW))
 				.child(
-					Text(code.clone())
-						.class("text-2xl font-semibold text-stone-900 dark:text-stone-100")
-						.test_id("code"),
+					Text("Approve this phone")
+						.class(theme::TITLE)
+						.test_id("vault"),
+				)
+				.child(
+					View()
+						.class(format!("{} items-center", theme::HERO))
+						.child(Text("PAIRING CODE").class(theme::CAPTION))
+						.child(
+							Text(code.clone())
+								.class("text-4xl font-bold text-[#F4F1FF]")
+								.test_id("code"),
+						),
 				)
 				.child(
 					Text(
 						"On your computer, check the code matches and approve it. The phone can \
 						 then add to your vault; it can never read from it.",
 					)
-					.class(MUTED),
+					.class(theme::MUTED),
 				)
 				.children(
 					part.approve
 						.clone()
-						.map(|command| Text(command).class(CODE).test_id("approve")),
+						.map(|command| Text(command).class(theme::CODE).test_id("approve")),
 				)
 				.child(
 					View()
-						.class("flex-row flex-wrap gap-2")
+						.class("gap-2")
 						.child(
 							Button("I approved it")
-								.class(PRIMARY)
+								.class(theme::PRIMARY)
 								.test_id("retry")
 								.on_press(move || again.send(Command::Upload)),
 						)
-						.child(forget_button(state, "Use another link")),
+						.child(forget_button(state, "Use another link", theme::SECONDARY)),
+				)
+		}
+		Link::Unreachable { reason } => {
+			let again = state.clone();
+			View()
+				.class(theme::CARD)
+				.child(
+					View()
+						.class("flex-row items-center gap-3")
+						.child(theme::tile_warn(Icon::Sync))
+						.child(
+							View()
+								.class("flex-1 gap-1")
+								.child(
+									Text("Your vault is out of reach")
+										.class(theme::LABEL)
+										.test_id("vault"),
+								)
+								.child(
+									Text(format!(
+										"Readings keep waiting on this phone and go out when it \
+										 answers. {place} ({reason})"
+									))
+									.class(theme::MUTED),
+								),
+						),
+				)
+				.child(
+					View()
+						.class("gap-2")
+						.child(
+							Button("Try again")
+								.class(theme::PRIMARY)
+								.test_id("retry")
+								.on_press(move || again.send(Command::Upload)),
+						)
+						.child(forget_button(state, "Use another link", theme::SECONDARY)),
 				)
 		}
 		Link::Revoked => {
-			card.child(
-				Text("Your vault no longer accepts this phone")
-					.class(HEADING)
-					.test_id("vault"),
-			)
-			.child(
-				Text(
-					"Its access was revoked or ran out. Forget the vault, then pair again with a \
-					 new link. What is waiting stays on this phone.",
+			View()
+				.class(theme::CARD)
+				.child(
+					View()
+						.class("flex-row items-center gap-3")
+						.child(theme::tile_bad(Icon::Lock))
+						.child(
+							View()
+								.class("flex-1 gap-1")
+								.child(
+									Text("Your vault no longer accepts this phone")
+										.class(theme::LABEL)
+										.test_id("vault"),
+								)
+								.child(
+									Text(
+										"Its access was revoked or ran out. Forget the vault, \
+										 then pair again with a new link. What is waiting stays \
+										 on this phone.",
+									)
+									.class(theme::MUTED),
+								),
+						),
 				)
-				.class(MUTED),
-			)
-			.child(forget_button(state, "Forget this vault"))
+				.child(forget_button(state, "Forget this vault", theme::SECONDARY))
 		}
 		Link::Ready => {
-			card.child(
-				Text("Connected to your vault")
-					.class(HEADING)
-					.test_id("vault"),
-			)
-			.child(
-				Text(format!(
-					"{place} · This phone adds to your vault and can read nothing back."
-				))
-				.class(MUTED),
-			)
-			.child(forget_button(state, "Forget this vault"))
+			View()
+				.class(theme::CARD)
+				.child(
+					View()
+						.class("flex-row items-center gap-3")
+						.child(theme::tile_ok(Icon::Shield))
+						.child(
+							View()
+								.class("flex-1 gap-1")
+								.child(
+									Text("Connected to your vault")
+										.class(theme::LABEL)
+										.test_id("vault"),
+								)
+								.child(
+									Text(format!(
+										"{place} · This phone adds to your vault and can read \
+										 nothing back."
+									))
+									.class(theme::MUTED),
+								),
+						),
+				)
+				.child(forget_button(state, "Forget this vault", theme::QUIET))
 		}
 	}
 }
 
-fn pair_view(state: &State, card: Element) -> Element {
+/// The two steps that pair this phone: run the command, paste the link.
+fn pair_view(state: &State) -> Element {
 	let link = state.link;
 	let connect = state.clone();
-	card.child(
-		Text("Connect to your vault")
-			.class(HEADING)
-			.test_id("vault"),
-	)
-	.child(
-		Text(
-			"On the computer that holds your vault, run `quant link`. Paste the link it prints \
-			 here. It starts with quant://link.",
+	View()
+		.class("gap-2")
+		.child(Text("STEP 1 OF 2").class(theme::EYEBROW))
+		.child(
+			Text("Connect to your vault")
+				.class(theme::TITLE)
+				.test_id("vault"),
 		)
-		.class(MUTED),
-	)
-	.child(
-		TextInput()
-			.class("px-3 py-3 rounded-xl border border-stone-300 dark:border-stone-600 text-sm")
-			.value(link.get())
-			.placeholder("quant://link?addr=…")
-			.accessibility_label("Pairing link")
-			.test_id("link")
-			.on_change(move |text: &str| link.set(text.to_owned())),
-	)
-	.child(
-		Button("Connect")
-			.class(PRIMARY)
-			.test_id("connect")
-			.on_press(move || {
-				let link = connect.link.get();
-				if link.trim().is_empty() {
-					connect
-						.problem
-						.set(Some("Paste the link `quant link` prints first".to_owned()));
-				} else {
-					connect.send(Command::Pair { link });
-				}
-			}),
-	)
+		.child(
+			View()
+				.class(theme::CARD)
+				.child(step(1, "On your computer, run"))
+				.child(Text("quant link").class(theme::CODE)),
+		)
+		.child(
+			View()
+				.class(theme::CARD)
+				.child(step(
+					2,
+					"Paste the link it prints. It starts with quant://link.",
+				))
+				.child(
+					TextInput()
+						.class(theme::INPUT)
+						.value(link.get())
+						.placeholder("quant://link?addr=…")
+						.accessibility_label("Pairing link")
+						.test_id("link")
+						.on_change(move |text: &str| link.set(text.to_owned())),
+				)
+				.child(
+					Button("Connect")
+						.class(theme::PRIMARY)
+						.test_id("connect")
+						.on_press(move || {
+							let link = connect.link.get();
+							if link.trim().is_empty() {
+								connect.problem.set(Some(
+									"Paste the link `quant link` prints first".to_owned(),
+								));
+							} else {
+								connect.send(Command::Pair { link });
+							}
+						}),
+				),
+		)
 }
 
-fn forget_button(state: &State, label: &'static str) -> Element {
+/// One numbered step in the pairing instructions.
+fn step(n: u8, text: &'static str) -> Element {
+	View()
+		.class("flex-row items-center gap-3")
+		.child(
+			View()
+				.class("w-8 h-8 rounded-full items-center justify-center bg-[#251F5C]")
+				.child(Text(n.to_string()).class("text-sm font-bold text-[#9D90FF]")),
+		)
+		.child(Text(text).class(theme::BODY).class("flex-1"))
+}
+
+fn forget_button(state: &State, label: &'static str, class: &'static str) -> Element {
 	let state = state.clone();
 	Button(label)
-		.class(CONTROL)
+		.class(class)
 		.test_id("forget")
 		.on_press(move || {
 			state.link.set(String::new());
@@ -570,7 +913,6 @@ fn forget_button(state: &State, label: &'static str) -> Element {
 /// What the collecting card shows, as a region key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CollectingPart {
-	collecting: bool,
 	sources: Vec<SourceRow>,
 	collector: Option<String>,
 }
@@ -578,45 +920,30 @@ struct CollectingPart {
 fn collecting_card(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let collector = state.collector;
-	let state = state.clone();
 	For(
 		move || {
 			let s = snapshot.get();
 			vec![CollectingPart {
-				collecting: s.collecting,
 				sources: s.sources,
 				collector: collector.get(),
 			}]
 		},
 		Clone::clone,
 		move |part| {
-			let toggle = state.clone();
 			View()
-				.class(CARD)
-				.child(
-					View()
-						.class("flex-row items-center justify-between gap-3")
-						.child(Text("Collect on this phone").class(HEADING))
-						.child(
-							Switch(part.collecting)
-								.accessibility_label("Collect on this phone")
-								.test_id("collecting")
-								.on_toggle(move |enabled| {
-									toggle.send(Command::Collect { enabled });
-								}),
-						),
-				)
+				.class(theme::CARD)
+				.child(Text("What this phone records").class(theme::HEADING))
 				.children(
 					part.collector
 						.clone()
-						.map(|problem| Text(problem).class(PROBLEM).test_id("collector")),
+						.map(|problem| Text(problem).class(theme::PROBLEM).test_id("collector")),
 				)
 				.children(
 					part.sources
 						.iter()
 						.filter(|row| {
 							cfg!(feature = "watch")
-								|| row.source != quant_model::phone::Source::Wearable
+								|| row.source != Source::Wearable
 								|| row.readings > 0
 								|| row.problem.is_some()
 						})
@@ -634,18 +961,33 @@ fn source_row(row: &SourceRow) -> Element {
 		(n, None) => format!("{n} readings"),
 	};
 	View()
-		.class("gap-1 pt-3 border-t border-stone-200 dark:border-stone-700")
+		.class(theme::ROW)
 		.child(
 			View()
-				.class("flex-row items-center justify-between gap-3")
-				.child(Text(row.source.label()).class(BODY))
-				.child(Text(count).class(MUTED)),
+				.class("flex-row items-center gap-3")
+				.child(theme::tile(source_icon(row.source)))
+				.child(Text(row.source.label()).class(theme::LABEL).class("flex-1"))
+				.child(Text(count).class(theme::CAPTION)),
 		)
 		.children(
 			row.problem
 				.clone()
-				.map(|problem| Text(problem).class(PROBLEM)),
+				.map(|problem| Text(problem).class(theme::PROBLEM)),
 		)
+}
+
+/// The line icon that names a source in its row.
+fn source_icon(source: Source) -> Icon {
+	match source {
+		Source::Location => Icon::Pin,
+		Source::Usage => Icon::Apps,
+		Source::Power => Icon::Battery,
+		Source::Health => Icon::Heart,
+		Source::Wearable => Icon::Watch,
+		Source::Motion => Icon::Motion,
+		Source::WatchSync => Icon::Sync,
+		Source::Ble => Icon::Bluetooth,
+	}
 }
 
 fn permissions_card(state: &State) -> Element {
@@ -662,9 +1004,22 @@ fn permissions_card(state: &State) -> Element {
 			if steps.is_empty() {
 				return View();
 			}
+			let granted = steps
+				.iter()
+				.filter(|step| permissions.get(**step) == Grant::Granted)
+				.count();
+			let total = steps.len();
 			View()
-				.class(CARD)
-				.child(Text("What this phone may collect").class(HEADING))
+				.class(theme::CARD)
+				.child(
+					Text(if granted == total {
+						"Permissions"
+					} else {
+						"Finish setup"
+					})
+					.class(theme::HEADING),
+				)
+				.child(Text(format!("{granted} of {total} allowed")).class(theme::CAPTION))
 				.children(
 					steps
 						.into_iter()
@@ -678,28 +1033,37 @@ fn permission_row(state: &State, step: Step, grant: Grant) -> Element {
 	let state = state.clone();
 	let granted = grant == Grant::Granted;
 	View()
-		.class("gap-2 pt-3 border-t border-stone-200 dark:border-stone-700")
+		.class(theme::ROW)
 		.child(
 			View()
-				.class("flex-row items-center justify-between gap-3")
-				.child(Text(step.title()).class(BODY))
+				.class("flex-row items-center gap-3")
+				.child(if granted {
+					theme::tile_ok(Icon::Check)
+				} else {
+					theme::tile(step.icon())
+				})
 				.child(
-					Text(if granted {
-						"Allowed"
-					} else {
-						"Not allowed yet"
-					})
-					.class(MUTED)
-					.test_id(format!("grant-{}", step.id())),
+					View()
+						.class("flex-1 gap-0.5")
+						.child(Text(step.title()).class(theme::LABEL))
+						.child(
+							Text(if granted {
+								"Allowed"
+							} else {
+								"Not allowed yet"
+							})
+							.class(theme::CAPTION)
+							.test_id(format!("grant-{}", step.id())),
+						),
 				),
 		)
-		.children((!granted).then(|| Text(step.why()).class(MUTED)))
+		.children((!granted).then(|| Text(step.why()).class(theme::MUTED)))
 		.children((!granted).then(|| {
 			Button(step.ask())
 				.class(if step == Step::Location {
-					PRIMARY
+					theme::PRIMARY
 				} else {
-					CONTROL
+					theme::SECONDARY
 				})
 				.test_id(format!("allow-{}", step.id()))
 				.on_press(move || state.act(Action::Allow(step)))
@@ -741,18 +1105,27 @@ fn delivery_card(state: &State) -> Element {
 				|when| format!("Last delivered {when}"),
 			);
 			View()
-				.class(CARD)
-				.child(Text("Delivery").class(HEADING))
-				.child(Text(waiting).class(BODY).test_id("waiting"))
-				.child(Text(delivered).class(MUTED).test_id("delivered"))
-				.children(
-					part.problem
-						.clone()
-						.map(|problem| Text(problem).class(PROBLEM).test_id("upload-problem")),
+				.class(theme::CARD)
+				.child(Text("Delivery").class(theme::HEADING))
+				.child(
+					View()
+						.class("flex-row items-center gap-4")
+						.child(Text(part.waiting.to_string()).class(theme::STAT))
+						.child(
+							View()
+								.class("flex-1 gap-1")
+								.child(Text(waiting).class(theme::BODY).test_id("waiting"))
+								.child(Text(delivered).class(theme::MUTED).test_id("delivered")),
+						),
 				)
+				.children(part.problem.clone().map(|problem| {
+					Text(problem)
+						.class(theme::PROBLEM)
+						.test_id("upload-problem")
+				}))
 				.children((part.ready && part.waiting > 0).then(|| {
 					Button("Deliver now")
-						.class(CONTROL)
+						.class(theme::SECONDARY)
 						.test_id("upload")
 						.on_press(move || upload.send(Command::Upload))
 				}))
@@ -810,23 +1183,33 @@ fn wearables_card(state: &State) -> Element {
 				format!("Bluetooth sensors: {}", part.ble_devices.join(", "))
 			};
 			View()
-				.class(CARD)
-				.child(Text("Watches and sensors").class(HEADING))
-				.child(Text(watch_line).class(BODY).test_id("watch-status"))
-				.children(vitals.map(|line| Text(line).class(MUTED).test_id("phone-vitals")))
-				.child(Text(ble_line).class(MUTED).test_id("ble-status"))
+				.class(theme::CARD)
+				.child(Text("Watches and sensors").class(theme::HEADING))
 				.child(
 					View()
-						.class("flex-row flex-wrap gap-2")
+						.class("flex-row items-center gap-3")
+						.child(theme::tile(Icon::Watch))
+						.child(
+							Text(watch_line)
+								.class(theme::BODY)
+								.class("flex-1")
+								.test_id("watch-status"),
+						),
+				)
+				.children(vitals.map(|line| Text(line).class(theme::MUTED).test_id("phone-vitals")))
+				.child(Text(ble_line).class(theme::MUTED).test_id("ble-status"))
+				.child(
+					View()
+						.class("gap-2")
 						.children(part.vault_ready.then(|| {
 							Button("Pair watch with vault")
-								.class(CONTROL)
+								.class(theme::SECONDARY)
 								.test_id("push-watch-link")
 								.on_press(move || push.act(Action::PushPairLinkToWatch))
 						}))
 						.child(
 							Button("Scan Bluetooth sensors")
-								.class(CONTROL)
+								.class(theme::SECONDARY)
 								.test_id("scan-ble")
 								.on_press(move || scan.act(Action::ScanBleSensors)),
 						),
@@ -843,7 +1226,6 @@ mod tests {
 	use leptoskit_testing::Queries;
 	use leptoskit_testing::WidgetTester;
 	use quant_model::Notice;
-	use quant_model::phone::Source;
 
 	use super::*;
 
@@ -907,7 +1289,10 @@ mod tests {
 			sources: rows(0),
 			..Snapshot::default()
 		});
-		tester.get_by_text("Not connected to your vault").unwrap();
+		tester
+			.get_by_text("Measure your life. Keep it yours.")
+			.unwrap();
+		tester.tap(&Finder::test_id("get-started")).unwrap();
 		tester.get_by_text("Connect to your vault").unwrap();
 
 		// An empty field explains itself instead of asking the service.
@@ -923,6 +1308,44 @@ mod tests {
 		assert_eq!(
 			*done.lock().unwrap(),
 			[Action::Command(Command::Pair { link: link.into() })]
+		);
+	}
+
+	#[test]
+	fn the_welcome_screen_leads_to_pairing_and_back() {
+		let (mut tester, _, done) = harness(Snapshot {
+			headline: "Not connected to your vault".into(),
+			collecting: true,
+			sources: rows(0),
+			..Snapshot::default()
+		});
+		tester.tap(&Finder::test_id("get-started")).unwrap();
+		tester.get_by_text("STEP 1 OF 2").unwrap();
+
+		tester.tap(&Finder::test_id("back")).unwrap();
+		tester
+			.get_by_text("Measure your life. Keep it yours.")
+			.unwrap();
+		assert!(tester.query_by_text("STEP 1 OF 2").unwrap().is_none());
+		assert!(done.lock().unwrap().is_empty());
+	}
+
+	#[test]
+	fn the_splash_covers_the_screen_until_it_is_cleared() {
+		let (mut tester, state, _) = harness(ready());
+		state.splash.set(true);
+		tester.pump();
+		tester
+			.get_by_text("Your life, measured. Yours alone.")
+			.unwrap();
+
+		state.splash.set(false);
+		tester.pump();
+		assert!(
+			tester
+				.query_by_text("Your life, measured. Yours alone.")
+				.unwrap()
+				.is_none()
 		);
 	}
 

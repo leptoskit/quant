@@ -18,6 +18,17 @@ image = "assets/brand/icon-square.svg"
 [app.icons.macos]
 image = "assets/brand/icon.svg"
 
+# The cold-start screen: the mark on the app's night background. The phone
+# app's first frame draws the same mark in the same place and animates it.
+[app.launch_screen]
+background = "#0E0C24"
+image = "assets/brand/splash.svg"
+image_size = 200
+
+[app.launch_screen.android_12]
+background = "#0E0C24"
+icon_background = "#0E0C24"
+
 [frontends.app]
 package = "quant_app"
 render = "csr"

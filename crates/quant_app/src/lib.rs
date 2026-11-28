@@ -13,6 +13,7 @@
 
 pub mod bridge;
 pub mod phone;
+pub mod theme;
 pub mod ui;
 pub mod watch;
 
@@ -58,6 +59,9 @@ mod entry {
 	fn phone() {
 		use std::sync::OnceLock;
 
+		#[cfg(not(feature = "watch"))]
+		use leptoskit::prelude::Set;
+
 		use super::phone::State;
 		use super::phone::collect;
 
@@ -72,10 +76,23 @@ mod entry {
 		}));
 		let _ = slot.set(state.clone());
 		collect::start(&state);
+
 		#[cfg(feature = "watch")]
 		leptoskit::guest::mount(move || super::watch::WatchScreen(state.clone()));
 		#[cfg(not(feature = "watch"))]
-		leptoskit::guest::mount(move || super::phone::Screen(state.clone()));
+		{
+			// The phone is always night, so system controls such as the
+			// collecting switch draw dark.
+			leptoskit::appearance::set(leptoskit::appearance::Appearance::Dark);
+			state.splash.set(true);
+			let splash = state.splash;
+			leptoskit::guest::spawn(async move {
+				// A missing timer must never leave the overlay up.
+				let _ = leptoskit::guest::sleep(std::time::Duration::from_millis(2200)).await;
+				splash.set(false);
+			});
+			leptoskit::guest::mount(move || super::phone::Screen(state.clone()));
+		}
 	}
 
 	/// The desktop window.
