@@ -4,6 +4,7 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use quant_client::Endpoint;
+use quant_core::Family;
 use quant_model::phone::Link;
 use quant_model::phone::Storage;
 
@@ -29,12 +30,18 @@ pub fn headline(link: &Link, storage: &Storage, collecting: bool, waiting: u64) 
 }
 
 /// The command the owner runs on their computer to approve a device with
-/// explicit `scopes`.
+/// explicit `scopes`. A wildcard is quoted so zsh does not try to expand it.
 pub fn approve_for(code: &str, scopes: &[&str]) -> String {
 	let mut command = format!("quant approve {code}");
 	for scope in scopes {
 		command.push_str(" --scope ");
-		command.push_str(scope);
+		if scope.contains('*') {
+			command.push('\'');
+			command.push_str(scope);
+			command.push('\'');
+		} else {
+			command.push_str(scope);
+		}
 	}
 	command
 }
@@ -60,6 +67,86 @@ fn host(url: &str) -> &str {
 /// A time of day, "15:30".
 pub fn clock(at: Timestamp, tz: &TimeZone) -> String {
 	at.to_zoned(tz.clone()).strftime("%H:%M").to_string()
+}
+
+/// A stream's short name: `health.resting_heart_rate` reads "Resting heart
+/// rate", and common short forms keep their capitals.
+pub fn stream_label(id: &str) -> String {
+	let leaf = id.rsplit('.').next().unwrap_or(id);
+	leaf.split('_')
+		.enumerate()
+		.map(|(index, word)| {
+			match word {
+				"hrv" => "HRV".to_owned(),
+				"sdnn" => "SDNN".to_owned(),
+				"rmssd" => "RMSSD".to_owned(),
+				"spo2" => "SpO2".to_owned(),
+				"ecg" => "ECG".to_owned(),
+				"bpm" => "BPM".to_owned(),
+				_ if index == 0 => {
+					let mut chars = word.chars();
+					match chars.next() {
+						Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+						None => String::new(),
+					}
+				}
+				_ => word.to_owned(),
+			}
+		})
+		.collect::<Vec<_>>()
+		.join(" ")
+}
+
+/// A family's name on the screen.
+pub fn family_label(family: Family) -> &'static str {
+	match family {
+		Family::Screen => "Screen",
+		Family::Audio => "Audio",
+		Family::Apps => "Apps",
+		Family::Input => "Input",
+		Family::Health => "Health",
+		Family::Motion => "Motion",
+		Family::Location => "Location",
+		Family::Device => "Device",
+		Family::Comms => "Comms",
+		Family::Sensor => "Sensors",
+		Family::Memory => "Memory",
+	}
+}
+
+/// One line of prose, collapsed to a bounded length.
+pub fn shorten(text: &str, max: usize) -> String {
+	let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+	if text.chars().count() <= max {
+		return text;
+	}
+	let mut short: String = text.chars().take(max.saturating_sub(1)).collect();
+	short.push('…');
+	short
+}
+
+/// A span of seconds as "45s", "12m", "2h 5m", or "3h".
+pub fn duration(seconds: f64) -> String {
+	if !seconds.is_finite() || seconds <= 0.0 {
+		return "0m".to_owned();
+	}
+	#[allow(
+		clippy::cast_possible_truncation,
+		clippy::cast_precision_loss,
+		clippy::cast_sign_loss
+	)]
+	let total = seconds.round().min(u64::MAX as f64) as u64;
+	let hours = total / 3600;
+	let minutes = (total % 3600) / 60;
+	if hours > 0 && minutes > 0 {
+		format!("{hours}h {minutes}m")
+	} else if hours > 0 {
+		format!("{hours}h")
+	} else if minutes > 0 {
+		format!("{minutes}m")
+	} else {
+		format!("{total}s")
+	}
 }
 
 /// A time relative to `now`: "Today 14:03", "Yesterday 09:12", or
@@ -146,6 +233,10 @@ mod tests {
 			"quant approve K7QD-M2XA --scope health:write --scope motion:write --scope \
 			 location:write --scope device:write --scope sensor:write"
 		);
+		assert_eq!(
+			approve_for("K7QD-M2XA", &["*:summary"]),
+			"quant approve K7QD-M2XA --scope '*:summary'"
+		);
 	}
 
 	#[test]
@@ -182,5 +273,30 @@ mod tests {
 			"Yesterday 09:12"
 		);
 		assert_eq!(clock(now, &tz), "18:00");
+	}
+
+	#[test]
+	fn streams_and_families_read_as_screen_labels() {
+		assert_eq!(stream_label("health.heart_rate"), "Heart rate");
+		assert_eq!(stream_label("health.hrv_sdnn"), "HRV SDNN");
+		assert_eq!(stream_label("health.spo2"), "SpO2");
+		assert_eq!(
+			stream_label("sensor.ble.running_cadence"),
+			"Running cadence"
+		);
+		assert_eq!(family_label(quant_core::Family::Health), "Health");
+		assert_eq!(family_label(quant_core::Family::Sensor), "Sensors");
+	}
+
+	#[test]
+	fn prose_and_durations_stay_bounded_and_readable() {
+		assert_eq!(shorten("  one   two  ", 20), "one two");
+		assert_eq!(shorten("abcdefgh", 5), "abcd…");
+		assert_eq!(duration(0.0), "0m");
+		assert_eq!(duration(f64::NAN), "0m");
+		assert_eq!(duration(45.0), "45s");
+		assert_eq!(duration(12.0 * 60.0), "12m");
+		assert_eq!(duration(2.0 * 3600.0 + 5.0 * 60.0), "2h 5m");
+		assert_eq!(duration(3.0 * 3600.0), "3h");
 	}
 }

@@ -44,6 +44,7 @@ use quant_core::DeviceId;
 use quant_crypto::VaultKey;
 use quant_model::Notice;
 use quant_model::phone::Command;
+use quant_model::phone::CompanionCapability;
 use quant_model::phone::Link;
 use quant_model::phone::PHONE_SCOPES;
 use quant_model::phone::Reading;
@@ -52,12 +53,19 @@ use quant_model::phone::ReplyData;
 use quant_model::phone::Snapshot;
 use quant_model::phone::Source;
 use quant_model::phone::SourceRow;
+use quant_model::phone::StatsAccess;
+use quant_model::phone::StatsReply;
+use quant_model::phone::StatsState;
+use quant_model::phone::StatsWindow;
 use quant_model::phone::Storage;
 use quant_model::phone::WATCH_SCOPES;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
+use crate::companion;
+use crate::companion::Companion;
 use crate::saved::Saved;
+use crate::stats;
 use crate::words;
 
 /// The shortest wait between two deliveries, and the first wait after one
@@ -137,6 +145,11 @@ impl Config {
 
 	fn identity(&self) -> PathBuf {
 		self.data.join("phone.identity.json")
+	}
+
+	/// The opt-in companion's own signing key, never the collector's.
+	fn companion_identity(&self) -> PathBuf {
+		self.data.join("phone.companion.identity.json")
 	}
 
 	fn spool(&self) -> PathBuf {
@@ -337,6 +350,10 @@ struct Worker {
 	link_pause: Pause,
 	spool: Option<Spool>,
 	storage: Storage,
+	/// The opt-in companion identity, loaded only when stats are opened.
+	companion: Option<Client>,
+	/// Where the opt-in companion stands. Collection never reads it.
+	stats: StatsState,
 	power: PowerMonitor,
 	sources: BTreeMap<Source, Counter>,
 	delivered: Option<Timestamp>,
@@ -362,6 +379,20 @@ impl Worker {
 				)
 			}
 		};
+		// An identity from an earlier launch makes the stats state unknown,
+		// not ready: the grant is checked only when the screen asks. Nothing
+		// here talks to the vault or touches the collector.
+		let stats = StatsState {
+			access: if saved.link.is_none() {
+				StatsAccess::Unpaired
+			} else if config.companion_identity().exists() {
+				StatsAccess::Checking
+			} else {
+				StatsAccess::NotRequested
+			},
+			approve: None,
+			problem: None,
+		};
 		let mut worker = Self {
 			link: if saved.link.is_some() {
 				Link::Connecting
@@ -376,6 +407,8 @@ impl Worker {
 			link_pause: Pause::default(),
 			spool: None,
 			storage: Storage::Locked,
+			companion: None,
+			stats,
 			power: PowerMonitor::new(),
 			sources: BTreeMap::new(),
 			delivered: None,
@@ -476,6 +509,13 @@ impl Worker {
 				})?;
 				return Ok(Some(ReplyData::PairLink { link }));
 			}
+			Command::RequestStats => self.request_stats().await?,
+			Command::ForgetStats => self.forget_stats()?,
+			Command::VaultStats { window } => {
+				return Ok(Some(ReplyData::VaultStats {
+					stats: self.vault_stats(window).await,
+				}));
+			}
 		}
 		Ok(None)
 	}
@@ -487,6 +527,17 @@ impl Worker {
 		if self.saved.link.as_deref() != Some(link) || self.link == Link::Revoked {
 			// Another vault or a revoked grant needs a fresh client identity.
 			self.forget_identity()?;
+			if self.saved.link.as_deref() != Some(link) {
+				// The companion belongs to the vault it was approved against.
+				// Switching vaults clears its key as well; it is never
+				// silently re-paired or carried across. A removal problem
+				// never blocks the collector from pairing.
+				if let Err(problem) = self.clear_companion() {
+					self.say(problem, true);
+				}
+				self.stats.problem = None;
+				self.set_stats(StatsAccess::NotRequested, CompanionCapability::StatsSummary);
+			}
 			self.saved.link = Some(link.to_owned());
 			self.save()?;
 		}
@@ -501,16 +552,19 @@ impl Worker {
 
 	fn forget(&mut self) -> Result<(), String> {
 		self.forget_identity()?;
+		let companion = self.clear_companion();
 		self.saved.link = None;
 		self.save()?;
 		self.link = Link::Unpaired;
 		self.link_checked = None;
 		self.upload_problem = None;
+		self.stats.problem = None;
+		self.set_stats(StatsAccess::Unpaired, CompanionCapability::StatsSummary);
 		self.say(
 			"Forgot the vault. What is waiting stays on this phone.",
 			false,
 		);
-		Ok(())
+		companion
 	}
 
 	fn forget_identity(&mut self) -> Result<(), String> {
@@ -524,6 +578,464 @@ impl Worker {
 				))
 			}
 		}
+	}
+
+	/// Load the opt-in companion client. This never creates one: a summary
+	/// can only use an identity the owner already approved.
+	fn companion_client(&mut self, link: &str) -> Result<Client, String> {
+		if self.companion.is_none() {
+			let path = self.config.companion_identity();
+			let identity = match Identity::load(&path) {
+				Ok(identity) => identity,
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+					return Err("Stats access has not been requested on this phone".to_owned());
+				}
+				Err(error) => {
+					return Err(format!(
+						"This phone's stats identity could not be read: {error}"
+					));
+				}
+			};
+			self.companion = Some(Client::new(endpoint(link)?, identity));
+		}
+		Ok(self.companion.as_ref().expect("just set").clone())
+	}
+
+	/// Make the companion's own signing key. This is called only by an
+	/// explicit [`Command::RequestStats`], never by collection or a query.
+	fn create_companion_identity(&mut self) -> Result<(), String> {
+		let link = self
+			.saved
+			.link
+			.clone()
+			.ok_or_else(|| "Connect to your vault first".to_owned())?;
+		let endpoint = endpoint(&link)?;
+		let path = self.config.companion_identity();
+		let identity = Identity::generate(format!("{} (stats)", self.config.name));
+		identity
+			.save(&path)
+			.map_err(|error| format!("This phone's stats identity could not be saved: {error}"))?;
+		self.stats.approve = None;
+		self.companion = Some(Client::new(endpoint, identity));
+		Ok(())
+	}
+
+	/// Remove the companion's signing key and forget its client. The
+	/// collector's key, the spool, and everything waiting are untouched.
+	fn clear_companion(&mut self) -> Result<(), String> {
+		self.companion = None;
+		self.stats.approve = None;
+		match std::fs::remove_file(self.config.companion_identity()) {
+			Ok(()) => Ok(()),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+			Err(error) => {
+				Err(format!(
+					"This phone's stats identity could not be removed: {error}"
+				))
+			}
+		}
+	}
+
+	fn set_stats(&mut self, access: StatsAccess, capability: CompanionCapability) {
+		self.stats.approve = match &access {
+			StatsAccess::Pending { code } => Some(words::approve_for(code, capability.scopes())),
+			_ => None,
+		};
+		self.stats.access = access;
+	}
+
+	/// Forget a companion whose grant is gone. Access stays visible as
+	/// revoked, and a new key is made only by a later explicit request.
+	fn lose_companion(
+		&mut self,
+		capability: CompanionCapability,
+		problem: String,
+	) -> Result<(), String> {
+		let cleared = self.clear_companion();
+		self.set_stats(StatsAccess::Revoked, capability);
+		self.stats.problem = Some(match &cleared {
+			Ok(()) => problem,
+			Err(error) => format!("{problem}. {error}"),
+		});
+		cleared
+	}
+
+	/// Ask the owner to approve the stats companion, or report where an
+	/// earlier request stands. It never widens, replaces, or silently
+	/// re-pairs an identity.
+	async fn request_stats(&mut self) -> Result<(), String> {
+		let capability = CompanionCapability::StatsSummary;
+		if self.saved.link.is_none() {
+			self.set_stats(StatsAccess::Unpaired, capability);
+			return Err("Connect to your vault first".to_owned());
+		}
+		let link = self.saved.link.clone().expect("checked");
+		if !self.config.companion_identity().exists() {
+			// The only path that makes a new companion key: an explicit
+			// request after no request, a forget, or a lost grant.
+			self.create_companion_identity()?;
+		}
+		let client = self.companion_client(&link)?;
+		if client.identity().client.is_none() {
+			return self.pair_companion(capability).await;
+		}
+		match client.me().await {
+			Ok(me) if me.status == ClientStatus::Active => {
+				match me.grant {
+					Some(grant) if grant.check_live(Timestamp::now()).is_ok() => {
+						self.stats.problem = None;
+						if companion::allows(&grant, capability) {
+							self.set_stats(StatsAccess::Ready, capability);
+						} else {
+							self.stats.problem = Some(
+								"The vault has not shared any streams with this phone".to_owned(),
+							);
+							self.set_stats(StatsAccess::Restricted, capability);
+						}
+						Ok(())
+					}
+					Some(_) => {
+						self.lose_companion(
+							capability,
+							"The vault's stats grant has run out".to_owned(),
+						)?;
+						Ok(())
+					}
+					None => {
+						self.lose_companion(
+							capability,
+							"The vault's stats grant is gone".to_owned(),
+						)?;
+						Ok(())
+					}
+				}
+			}
+			Ok(me) if me.status == ClientStatus::Pending => self.pair_companion(capability).await,
+			Ok(_) => {
+				self.lose_companion(
+					capability,
+					"The vault no longer accepts the stats companion".to_owned(),
+				)?;
+				Ok(())
+			}
+			Err(error) if error.code() == Some("unauthenticated") => {
+				self.lose_companion(
+					capability,
+					"The vault does not recognise this phone's stats access".to_owned(),
+				)?;
+				Ok(())
+			}
+			Err(error) => {
+				let reason = stats_problem(&error);
+				self.stats.problem = Some(reason.clone());
+				self.set_stats(
+					StatsAccess::Unreachable {
+						reason: reason.clone(),
+					},
+					capability,
+				);
+				Err(reason)
+			}
+		}
+	}
+
+	/// Pair the existing companion key with the capability's scopes. A
+	/// pending request is read back with the same key; a revoked one is
+	/// never replaced here.
+	async fn pair_companion(&mut self, capability: CompanionCapability) -> Result<(), String> {
+		let link = self
+			.saved
+			.link
+			.clone()
+			.ok_or_else(|| "Connect to your vault first".to_owned())?;
+		let mut client = self.companion_client(&link)?;
+		let scopes: Vec<String> = capability
+			.scopes()
+			.iter()
+			.map(|scope| (*scope).to_owned())
+			.collect();
+		let pairing = match client.pair(ClientKind::Device, &scopes, None).await {
+			Ok(pairing) => pairing,
+			Err(error) => {
+				let reason = stats_problem(&error);
+				self.companion = Some(client);
+				self.stats.problem = Some(reason.clone());
+				self.set_stats(
+					StatsAccess::Unreachable {
+						reason: reason.clone(),
+					},
+					capability,
+				);
+				return Err(reason);
+			}
+		};
+		let path = self.config.companion_identity();
+		self.companion = Some(client);
+		// Always persist the answer: a file written before the first pairing
+		// reply has no client id yet, and a pending refresh must repair it.
+		if let Err(error) = self
+			.companion
+			.as_ref()
+			.expect("just set")
+			.identity()
+			.save(&path)
+		{
+			return Err(format!(
+				"This phone's stats identity could not be saved: {error}"
+			));
+		}
+		match pairing.status {
+			ClientStatus::Pending => {
+				self.stats.problem = None;
+				self.set_stats(
+					StatsAccess::Pending {
+						code: pairing.pairing_code,
+					},
+					capability,
+				);
+				Ok(())
+			}
+			ClientStatus::Revoked => {
+				self.lose_companion(
+					capability,
+					"The vault refused the stats companion".to_owned(),
+				)
+			}
+			ClientStatus::Active => {
+				// The pairing answer can be active while the grant is gone
+				// or was approved without any readable stream.
+				let client = self.companion_client(&link)?;
+				match client.me().await {
+					Ok(me) if me.grant.is_some() => {
+						let grant = me.grant.expect("checked");
+						if grant.check_live(Timestamp::now()).is_err() {
+							self.lose_companion(
+								capability,
+								"The vault's stats grant has run out".to_owned(),
+							)
+						} else if companion::allows(&grant, capability) {
+							self.stats.problem = None;
+							self.set_stats(StatsAccess::Ready, capability);
+							Ok(())
+						} else {
+							self.stats.problem = Some(
+								"The vault has not shared any streams with this phone".to_owned(),
+							);
+							self.set_stats(StatsAccess::Restricted, capability);
+							Ok(())
+						}
+					}
+					Ok(_) => {
+						self.lose_companion(
+							capability,
+							"The vault approved no stats grant".to_owned(),
+						)
+					}
+					Err(error) if error.code() == Some("unauthenticated") => {
+						self.lose_companion(
+							capability,
+							"The vault does not recognise this phone's stats access".to_owned(),
+						)
+					}
+					Err(error) => {
+						// A transient read failure is not a lost grant; keep
+						// the key so a later request can recover.
+						let reason = stats_problem(&error);
+						self.stats.problem = Some(reason.clone());
+						self.set_stats(
+							StatsAccess::Unreachable {
+								reason: reason.clone(),
+							},
+							capability,
+						);
+						Err(reason)
+					}
+				}
+			}
+		}
+	}
+
+	/// Check the companion's live grant before a summary. This never pairs,
+	/// never asks for the owner's passphrase, and never touches collection.
+	async fn refresh_stats_access(&mut self, capability: CompanionCapability) -> StatsAccess {
+		if self.saved.link.is_none() {
+			self.stats.problem = Some("Connect to your vault first".to_owned());
+			return StatsAccess::Unpaired;
+		}
+		// A lost grant stays lost until the owner explicitly asks again.
+		// Reading a summary never makes a new companion key.
+		if self.stats.access == StatsAccess::Revoked {
+			return StatsAccess::Revoked;
+		}
+		let link = self.saved.link.clone().expect("checked");
+		if !self.config.companion_identity().exists() {
+			self.stats.problem = None;
+			return StatsAccess::NotRequested;
+		}
+		let client = match self.companion_client(&link) {
+			Ok(client) => client,
+			Err(problem) => {
+				self.stats.problem = Some(problem.clone());
+				return StatsAccess::Unreachable { reason: problem };
+			}
+		};
+		if client.identity().client.is_none() {
+			self.stats.problem = None;
+			return StatsAccess::NotRequested;
+		}
+		match client.me().await {
+			Ok(me) if me.status == ClientStatus::Active => {
+				match me.grant {
+					Some(grant) if grant.check_live(Timestamp::now()).is_ok() => {
+						self.stats.problem = None;
+						if companion::allows(&grant, capability) {
+							StatsAccess::Ready
+						} else {
+							self.stats.problem = Some(
+								"The vault has not shared any streams with this phone".to_owned(),
+							);
+							StatsAccess::Restricted
+						}
+					}
+					Some(_) => {
+						let _ = self.lose_companion(
+							capability,
+							"The vault's stats grant has run out".to_owned(),
+						);
+						StatsAccess::Revoked
+					}
+					None => {
+						let _ = self.lose_companion(
+							capability,
+							"The vault's stats grant is gone".to_owned(),
+						);
+						StatsAccess::Revoked
+					}
+				}
+			}
+			Ok(me) if me.status == ClientStatus::Pending => {
+				// The same pending key, read back so the screen can show
+				// the owner's approval command.
+				if let Err(problem) = self.pair_companion(capability).await {
+					self.stats.problem = Some(problem);
+				}
+				self.stats.access.clone()
+			}
+			Ok(_) => {
+				let _ = self.lose_companion(
+					capability,
+					"The vault no longer accepts the stats companion".to_owned(),
+				);
+				StatsAccess::Revoked
+			}
+			Err(error) if error.code() == Some("unauthenticated") => {
+				let _ = self.lose_companion(
+					capability,
+					"The vault does not recognise this phone's stats access".to_owned(),
+				);
+				StatsAccess::Revoked
+			}
+			Err(error) => {
+				let reason = stats_problem(&error);
+				self.stats.problem = Some(reason.clone());
+				StatsAccess::Unreachable { reason }
+			}
+		}
+	}
+
+	/// Open the companion for one capability. Follow-on features (messaging,
+	/// for example) call this with their own [`CompanionCapability`], so each
+	/// one reuses the same approved identity, approval flow, and clearing
+	/// rules without borrowing another capability's permission.
+	async fn companion_for(
+		&mut self,
+		capability: CompanionCapability,
+	) -> Result<Companion, StatsAccess> {
+		let access = self.refresh_stats_access(capability).await;
+		self.set_stats(access.clone(), capability);
+		if access == StatsAccess::Ready
+			&& let Some(client) = self.companion.clone()
+		{
+			return Ok(Companion::new(capability, client));
+		}
+		Err(access)
+	}
+
+	/// Read a bounded summary, reporting access, approval, offline, or empty
+	/// states instead of failing the phone's collection.
+	async fn vault_stats(&mut self, window: StatsWindow) -> StatsReply {
+		let capability = CompanionCapability::StatsSummary;
+		let companion = match self.companion_for(capability).await {
+			Ok(companion) => companion,
+			Err(access) => {
+				return StatsReply {
+					access,
+					approve: self.stats.approve.clone(),
+					problem: self.stats.problem.clone(),
+					summary: None,
+				};
+			}
+		};
+		match stats::summary(companion.client(), window, &self.config.tz).await {
+			Ok(summary) => {
+				self.stats.problem = None;
+				self.set_stats(StatsAccess::Ready, capability);
+				StatsReply {
+					access: StatsAccess::Ready,
+					approve: None,
+					problem: None,
+					summary: Some(summary),
+				}
+			}
+			Err(error) => {
+				let problem = stats_problem(&error);
+				let access = match &error {
+					ClientError::Unreachable { .. } => {
+						self.stats.problem = Some(problem.clone());
+						StatsAccess::Unreachable {
+							reason: problem.clone(),
+						}
+					}
+					ClientError::Api { error, .. }
+						if matches!(error.code.as_str(), "unauthenticated" | "forbidden") =>
+					{
+						let _ = self.lose_companion(capability, problem.clone());
+						StatsAccess::Revoked
+					}
+					ClientError::NotPaired => {
+						let _ = self.clear_companion();
+						self.stats.problem = Some(problem.clone());
+						StatsAccess::NotRequested
+					}
+					_ => {
+						self.stats.problem = Some(problem.clone());
+						StatsAccess::Ready
+					}
+				};
+				self.set_stats(access.clone(), capability);
+				StatsReply {
+					access,
+					approve: self.stats.approve.clone(),
+					problem: Some(problem),
+					summary: None,
+				}
+			}
+		}
+	}
+
+	fn forget_stats(&mut self) -> Result<(), String> {
+		self.clear_companion()?;
+		self.stats.problem = None;
+		self.set_stats(
+			if self.saved.link.is_some() {
+				StatsAccess::NotRequested
+			} else {
+				StatsAccess::Unpaired
+			},
+			CompanionCapability::StatsSummary,
+		);
+		self.say("Stats access removed from this phone", false);
+		Ok(())
 	}
 
 	fn open_storage(&mut self, key: &str, fresh: bool) -> Result<(), String> {
@@ -1154,6 +1666,7 @@ impl Worker {
 			waiting,
 			delivered: self.delivered.map(|at| words::when(at, now, tz)),
 			upload_problem: self.upload_problem.clone(),
+			stats: self.stats.clone(),
 			sources,
 			notice: self.notice.as_ref().map(|(notice, _)| notice.clone()),
 			latest_heart_rate_bpm: self.latest_heart_rate_bpm,
@@ -1396,6 +1909,22 @@ fn problem(error: &ClientError) -> String {
 			format!("Not allowed: {}", error.message)
 		}
 		ClientError::Api { error, .. } if !error.message.is_empty() => error.message.clone(),
+		error => error.to_string(),
+	}
+}
+
+/// A stats read's reason, kept apart from collection's own problem text.
+fn stats_problem(error: &ClientError) -> String {
+	match error {
+		ClientError::Unreachable { .. } => "The vault is out of reach".to_owned(),
+		ClientError::Api { error, .. } if error.code == "unauthenticated" => {
+			"The vault does not recognise this phone's stats access".to_owned()
+		}
+		ClientError::Api { error, .. } if error.code == "forbidden" => {
+			"The vault does not allow stats on this phone".to_owned()
+		}
+		ClientError::Api { error, .. } if !error.message.is_empty() => error.message.clone(),
+		ClientError::NotPaired => "The stats companion has not paired".to_owned(),
 		error => error.to_string(),
 	}
 }
