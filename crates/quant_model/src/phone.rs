@@ -7,6 +7,13 @@
 //! the service unread, as a [`Reading`]; the service decodes it, queues it, and
 //! delivers it to the vault. The screen never sees a signing key, and nothing
 //! it hands over is trusted until the service has decoded it.
+//!
+//! The collector is write-only. When the owner asks for it, the service also
+//! keeps an opt-in companion identity with its own key and grant, approved
+//! through the same pairing workflow, so the screen can show bounded
+//! aggregates of the vault. The companion never widens the collector's
+//! scopes, never handles the owner's passphrase, and a failure to read it
+//! never stops recording, queueing, or delivery.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,7 +49,8 @@ pub const READING: u32 = 3;
 /// The write scopes the phone pairs with: where it has been, which apps were
 /// in front, its screen, battery and thermal state, plus health and motion
 /// readings from `HealthKit` / Health Connect and paired BLE sensors. None of
-/// them lets the phone read anything back.
+/// them lets the collector read anything back; stats use the separate,
+/// opt-in companion identity in [`STATS_SCOPES`].
 pub const PHONE_SCOPES: [&str; 6] = [
 	"location:write",
 	"apps:write",
@@ -60,6 +68,139 @@ pub const WATCH_SCOPES: [&str; 5] = [
 	"device:write",
 	"sensor:write",
 ];
+
+/// The scopes the opt-in stats companion asks for: aggregates of every
+/// stream the owner chose to share, never records, text, or media.
+pub const STATS_SCOPES: [&str; 1] = ["*:summary"];
+
+/// The scope the opt-in Ask companion asks for: sending questions to approved
+/// agents and reading their actual replies, never reading vault streams
+/// directly.
+pub const ASK_SCOPES: [&str; 1] = ["companion:write"];
+
+/// One capability the opt-in companion identity can ask the owner to
+/// approve.
+///
+/// The companion has its own signing key and its own grant, separate from
+/// the write-only collector's. Capabilities are separately selectable on that
+/// identity; approving one never grants another without explicit owner
+/// approval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionCapability {
+	/// Read bounded aggregates from the streams the owner shares.
+	StatsSummary,
+	/// Send questions to approved agents and read their actual replies.
+	AskAgents,
+}
+
+impl CompanionCapability {
+	/// Every capability this build can request, in approval order.
+	pub const ALL: [Self; 2] = [Self::StatsSummary, Self::AskAgents];
+
+	/// The scopes this capability asks the owner for. A capability never
+	/// widens another one's request.
+	pub fn scopes(self) -> &'static [&'static str] {
+		match self {
+			Self::StatsSummary => &STATS_SCOPES,
+			Self::AskAgents => &ASK_SCOPES,
+		}
+	}
+
+	/// The capability's name on the screen.
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::StatsSummary => "Stats",
+			Self::AskAgents => "Ask",
+		}
+	}
+}
+
+/// The stretch a stats summary covers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsWindow {
+	/// The last 24 hours.
+	#[default]
+	Day,
+	/// The last 7 days.
+	Week,
+}
+
+impl StatsWindow {
+	/// Every window the screen can ask for.
+	pub const ALL: [Self; 2] = [Self::Day, Self::Week];
+
+	/// How far back the window reaches, in milliseconds.
+	pub fn span_ms(self) -> i64 {
+		match self {
+			Self::Day => 24 * 60 * 60 * 1000,
+			Self::Week => 7 * 24 * 60 * 60 * 1000,
+		}
+	}
+
+	/// How the window reads on the screen.
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::Day => "Past 24 hours",
+			Self::Week => "Past 7 days",
+		}
+	}
+}
+
+/// Where the opt-in stats companion stands with the vault.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum StatsAccess {
+	/// No vault is paired yet, so there is nothing to read from.
+	Unpaired,
+	/// The owner has not asked this phone for stats.
+	#[default]
+	NotRequested,
+	/// A companion identity exists and its grant has not been checked since
+	/// launch. Asking for a summary resolves this.
+	Checking,
+	/// Waiting for the owner to approve the companion.
+	Pending {
+		/// The pairing code the owner approves.
+		code: String,
+	},
+	/// Approved, and allowed to read at least one stream.
+	Ready,
+	/// Approved, but the grant shares no stream this capability can read.
+	Restricted,
+	/// The owner refused or revoked the companion, or its grant ran out.
+	Revoked,
+	/// The vault, or this phone's companion identity, could not be read.
+	Unreachable {
+		/// Why.
+		reason: String,
+	},
+}
+
+/// What the screen knows about one opt-in companion capability without asking
+/// the vault.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StatsState {
+	/// How this capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the last request or query stopped, when it did.
+	pub problem: Option<String>,
+}
+
+/// An explicit capability change on an already active companion identity,
+/// waiting for the owner to approve the updated grant on their computer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionChange {
+	/// The companion identity's pairing code on the vault.
+	pub code: String,
+	/// The capabilities requested for the updated grant.
+	pub capabilities: Vec<CompanionCapability>,
+	/// The exact command the owner runs to approve the updated grant.
+	pub approve: String,
+}
 
 /// How often the screen asks the service to look again and upload.
 pub const TICK_SECONDS: u64 = 60;
@@ -93,6 +234,26 @@ pub struct Snapshot {
 	pub delivered: Option<String>,
 	/// Why the last delivery stopped, when it did.
 	pub upload_problem: Option<String>,
+	/// The opt-in stats companion. Collection and delivery never depend on
+	/// it.
+	#[serde(default)]
+	pub stats: StatsState,
+	/// The opt-in Ask companion (`companion:write`) on the same companion
+	/// identity. Collection and delivery never depend on it.
+	#[serde(default)]
+	pub ask: StatsState,
+	/// A requested capability change on an already active companion identity,
+	/// waiting for explicit owner approval.
+	#[serde(default)]
+	pub companion_change: Option<CompanionChange>,
+	/// Bumped whenever the paired vault or companion identity/grant changes,
+	/// so the screen drops cached session data and ignores stale responses.
+	#[serde(default)]
+	pub vault_generation: u64,
+	/// Per-launch random prefix used by the screen to mint collision-free
+	/// idempotency keys for companion messages.
+	#[serde(default)]
+	pub session_nonce: String,
 	/// What each source has handed over since the app started.
 	pub sources: Vec<SourceRow>,
 	/// The result of the last action.
@@ -228,6 +389,340 @@ pub struct SourceRow {
 	pub problem: Option<String>,
 }
 
+/// Whether a stream holds discrete records or numeric samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsKind {
+	/// Discrete records.
+	Event,
+	/// Numeric samples.
+	Series,
+}
+
+/// The most streams one summary lists.
+pub const MAX_STATS_STREAMS: usize = 24;
+/// The most streams whose detail is read in one summary.
+pub const MAX_STATS_DETAILS: usize = 8;
+/// The most channels one numeric stream lists.
+pub const MAX_STATS_CHANNELS: usize = 8;
+/// The most buckets one numeric stream lists.
+pub const MAX_STATS_BUCKETS: usize = 12;
+/// The most groups one duration breakdown lists.
+pub const MAX_STATS_GROUPS: usize = 8;
+
+/// One channel's aggregates across a range. `samples` is the number of
+/// readings, never the sum of their values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsChannel {
+	/// Channel name, such as `bpm` or `steps`.
+	pub name: String,
+	/// Unit, such as `bpm`, `count`, or `m`.
+	pub unit: String,
+	/// Number of samples behind the statistics.
+	pub samples: u64,
+	/// Smallest value, when there is a sample.
+	pub min: Option<f64>,
+	/// Largest value, when there is a sample.
+	pub max: Option<f64>,
+	/// Mean value, when there is a sample.
+	pub mean: Option<f64>,
+}
+
+/// One channel's aggregates inside one bucket.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsBucketChannel {
+	/// Channel name.
+	pub name: String,
+	/// Unit, such as `bpm`, `count`, or `m`.
+	pub unit: String,
+	/// Number of samples in the bucket.
+	pub samples: u64,
+	/// Smallest value.
+	pub min: f64,
+	/// Largest value.
+	pub max: f64,
+	/// Mean value.
+	pub mean: f64,
+}
+
+/// One bucket of a numeric stream.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsBucket {
+	/// The bucket's start, as the screen words it.
+	pub start: String,
+	/// The bucket's start, in Unix milliseconds.
+	pub start_ms: i64,
+	/// Every channel with a sample in this bucket.
+	pub channels: Vec<StatsBucketChannel>,
+}
+
+/// One group's share of time in an event stream.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsDuration {
+	/// The group, such as an app or sleep stage.
+	pub group: Option<String>,
+	/// Records in the group.
+	pub count: u64,
+	/// Seconds the group covered.
+	pub seconds: f64,
+	/// The same span, as the screen words it, such as "1h 20m".
+	pub duration: String,
+}
+
+/// How much detail one stream's summary carries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StatsDetail {
+	/// Bucketed numeric aggregates, with each channel's unit.
+	Numeric {
+		/// Every channel, including ones with no samples in the range.
+		channels: Vec<StatsChannel>,
+		/// The buckets that hold samples.
+		buckets: Vec<StatsBucket>,
+		/// Whether channels were left out by the display bound.
+		channels_truncated: bool,
+		/// Whether buckets were left out by the display bound.
+		buckets_truncated: bool,
+	},
+	/// Time spent per group in an event stream whose spec names summary
+	/// keys.
+	Durations {
+		/// The attribute the groups are.
+		group_by: String,
+		/// Groups, longest first.
+		groups: Vec<StatsDuration>,
+		/// Whether groups were left out by the display bound.
+		truncated: bool,
+	},
+	/// Only the record count is shown.
+	Counted,
+	/// Readable, but the summary's detail budget was already spent.
+	Bounded,
+}
+
+/// One stream in a bounded summary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsStream {
+	/// The stream id, such as `health.heart_rate`.
+	pub stream: String,
+	/// The stream's short name on the screen.
+	pub label: String,
+	/// The family's name on the screen.
+	pub family: String,
+	/// One line explaining the stream.
+	pub description: String,
+	/// Records or numeric samples.
+	pub kind: StatsKind,
+	/// Records for event streams, samples for series streams. Never a sum
+	/// of their values.
+	pub count: u64,
+	/// The unit for `count`: `records` or `samples`.
+	pub count_unit: String,
+	/// First reading, as the screen words it.
+	pub first: Option<String>,
+	/// Last reading, as the screen words it.
+	pub last: Option<String>,
+	/// First reading, in Unix milliseconds.
+	pub first_ms: Option<i64>,
+	/// Last reading, in Unix milliseconds.
+	pub last_ms: Option<i64>,
+	/// The detail the vault allowed.
+	pub detail: StatsDetail,
+}
+
+/// A bounded, display-ready summary of what the paired vault holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VaultStats {
+	/// The window that was asked for.
+	pub window: StatsWindow,
+	/// How the window reads, such as "Past 24 hours".
+	pub span: String,
+	/// The effective range's start, as the screen words it. The vault may
+	/// clip it to the companion grant's lookback.
+	pub from: String,
+	/// The effective range's end, as the screen words it.
+	pub to: String,
+	/// The effective range's start, in Unix milliseconds.
+	pub from_ms: i64,
+	/// The effective range's end, in Unix milliseconds.
+	pub to_ms: i64,
+	/// The streams the companion can read, including empty ones.
+	pub streams: Vec<StatsStream>,
+	/// Whether readable streams were left out by the display bound.
+	pub truncated: bool,
+	/// Whether some stream detail was left out by the detail bound.
+	pub details_truncated: bool,
+	/// Starting offset of this page within the permitted stream catalog.
+	#[serde(default)]
+	pub offset: usize,
+	/// Total permitted streams in the catalog.
+	#[serde(default)]
+	pub total_streams: usize,
+	/// Next catalog offset when more permitted streams follow this page.
+	#[serde(default)]
+	pub next_offset: Option<usize>,
+	/// When the vault answered, as the screen words it.
+	pub fetched: String,
+}
+
+/// The answer to a stats request: where access stands, and the summary
+/// when the vault answered.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsReply {
+	/// How the companion stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request or summary stopped, when it did.
+	pub problem: Option<String>,
+	/// The bounded summary, when the vault answered.
+	pub summary: Option<VaultStats>,
+}
+
+/// The answer to [`Command::VaultStreamDetail`]: on-demand detail for one
+/// permitted stream with bounded channel and duration-group paging.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StreamDetailReply {
+	/// How the stats capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// The window that was asked for.
+	pub window: StatsWindow,
+	/// How the window reads, such as "Past 24 hours".
+	pub span: String,
+	/// The effective range's start, as the screen words it.
+	pub from: Option<String>,
+	/// The effective range's end, as the screen words it.
+	pub to: Option<String>,
+	/// The effective range's start, in Unix milliseconds.
+	pub from_ms: Option<i64>,
+	/// The effective range's end, in Unix milliseconds.
+	pub to_ms: Option<i64>,
+	/// When the vault answered, as the screen words it.
+	pub fetched: Option<String>,
+	/// The stream's detail, when the vault answered.
+	pub stream: Option<StatsStream>,
+	/// Starting offset of the returned channels within numeric detail.
+	#[serde(default)]
+	pub channel_offset: usize,
+	/// Total channels on this stream.
+	#[serde(default)]
+	pub total_channels: usize,
+	/// Next channel offset when more channels follow this page.
+	#[serde(default)]
+	pub next_channel_offset: Option<usize>,
+	/// Starting offset of the returned duration groups.
+	#[serde(default)]
+	pub group_offset: usize,
+	/// Total duration groups on this stream.
+	#[serde(default)]
+	pub total_groups: usize,
+	/// Next group offset when more duration groups follow this page.
+	#[serde(default)]
+	pub next_group_offset: Option<usize>,
+}
+
+/// One approved agent the companion may message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionAgentRow {
+	/// The agent client's id string.
+	pub id: String,
+	/// The name the owner approved.
+	pub name: String,
+	/// Product/model detail the agent declared at pairing, when present.
+	#[serde(default)]
+	pub detail: Option<String>,
+}
+
+/// Where one companion message stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionReplyStatus {
+	/// Waiting in the addressed agent's Quant inbox for an actual reply.
+	Waiting,
+	/// Answered by the addressed agent.
+	Answered,
+	/// Closed without an answer (expired or access withdrawn).
+	Closed,
+}
+
+/// One question this companion sent to an approved agent and any actual reply.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionMessageRow {
+	/// The message id string.
+	pub id: String,
+	/// The addressed agent's id string.
+	pub to_id: String,
+	/// The addressed agent's name.
+	pub to_name: String,
+	/// The question submitted.
+	pub question: String,
+	/// When it was submitted, as the screen words it.
+	pub submitted: String,
+	/// When it was submitted, in Unix milliseconds.
+	pub submitted_ms: i64,
+	/// Where it stands.
+	pub status: CompanionReplyStatus,
+	/// The agent's actual reply, once answered. Never manufactured.
+	#[serde(default)]
+	pub answer: Option<String>,
+	/// When the agent answered, as the screen words it.
+	#[serde(default)]
+	pub answered: Option<String>,
+	/// When the agent answered, in Unix milliseconds.
+	#[serde(default)]
+	pub answered_ms: Option<i64>,
+	/// Record ids cited by the reply.
+	#[serde(default)]
+	pub citations: Vec<String>,
+}
+
+/// The answer to [`Command::CompanionAgents`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionAgentsReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// Approved agents this phone may address.
+	pub agents: Vec<CompanionAgentRow>,
+}
+
+/// The answer to [`Command::CompanionMessages`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionMessagesReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// This companion's own messages, newest first.
+	pub messages: Vec<CompanionMessageRow>,
+	/// When the vault answered, as the screen words it.
+	#[serde(default)]
+	pub fetched: Option<String>,
+}
+
+/// The answer to [`Command::SendCompanionMessage`] and
+/// [`Command::CompanionMessage`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionMessageReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// The message, when the vault answered.
+	pub message: Option<CompanionMessageRow>,
+}
+
 /// Something the screen asks the service to do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -291,10 +786,90 @@ pub enum Command {
 	/// Ask for the saved vault pairing link so the phone can forward it to a
 	/// paired watch over `watch-sync`. Answers [`ReplyData::PairLink`].
 	ExportPairLink,
+	/// Ask the owner to approve the opt-in stats companion. This is the
+	/// only way the companion identity is ever requested; collection never
+	/// asks for it on its own.
+	RequestStats,
+	/// Ask the owner to approve or update the selected companion capabilities
+	/// on this phone's companion identity.
+	RequestCompanion {
+		/// Selected capabilities (stats, ask, or both).
+		capabilities: Vec<CompanionCapability>,
+	},
+	/// Check the live companion grant against the vault without creating a
+	/// new identity or widening scopes.
+	RefreshCompanion,
+	/// Dismiss an unapproved capability change prompt while keeping the
+	/// current companion grant intact.
+	CancelCompanionChange,
+	/// Forget the stats companion and its signing key. The collector's
+	/// identity, the encrypted spool, and everything waiting are untouched.
+	ForgetStats,
+	/// Forget the companion identity and its signing key (alias for
+	/// [`Command::ForgetStats`]).
+	ForgetCompanion,
+	/// Read a bounded summary through the approved stats companion. Answers
+	/// [`ReplyData::VaultStats`] with its access, approval, offline, or empty
+	/// state.
+	VaultStats {
+		/// Which window to summarise.
+		window: StatsWindow,
+	},
+	/// Read one bounded page of the permitted stream catalog with effective
+	/// range, counts, and first/last timestamps. Answers
+	/// [`ReplyData::VaultStats`].
+	VaultCatalog {
+		/// Which window to summarise.
+		window: StatsWindow,
+		/// Starting index in the sorted stream catalog.
+		offset: usize,
+		/// Maximum streams to return in this page (clamped by the service).
+		limit: usize,
+	},
+	/// Read on-demand detail for one permitted stream, with bounded channel
+	/// and duration-group paging. Answers [`ReplyData::VaultStreamDetail`].
+	VaultStreamDetail {
+		/// The stream id, such as `health.heart_rate` or a custom stream.
+		stream: String,
+		/// Which window to read.
+		window: StatsWindow,
+		/// Starting channel index for numeric streams.
+		#[serde(default)]
+		channel_offset: usize,
+		/// Starting duration-group index for event streams.
+		#[serde(default)]
+		group_offset: usize,
+	},
+	/// List approved agents this companion may address. Answers
+	/// [`ReplyData::CompanionAgents`].
+	CompanionAgents,
+	/// List this companion's own messages and actual replies. Answers
+	/// [`ReplyData::CompanionMessages`].
+	CompanionMessages {
+		/// Maximum messages to return (bounded by the daemon).
+		#[serde(default)]
+		limit: Option<usize>,
+	},
+	/// Send a question to one approved agent with an idempotency key.
+	/// Answers [`ReplyData::CompanionMessage`].
+	SendCompanionMessage {
+		/// Target approved agent id string.
+		to: String,
+		/// Question text.
+		question: String,
+		/// Idempotency key retained across unresolved retries.
+		dedupe: String,
+	},
+	/// Fetch one of this companion's messages and any actual reply. Answers
+	/// [`ReplyData::CompanionMessage`].
+	CompanionMessage {
+		/// Message id string.
+		id: String,
+	},
 }
 
 /// Extra data a [`Command`]'s [`Reply`] can carry.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReplyData {
 	/// A fresh spool key, base64.
@@ -324,11 +899,37 @@ pub enum ReplyData {
 		/// Pairing link URI.
 		link: String,
 	},
+	/// The answer to [`Command::VaultStats`] and [`Command::VaultCatalog`].
+	VaultStats {
+		/// Where access stands, and the bounded summary when it answered.
+		stats: StatsReply,
+	},
+	/// The answer to [`Command::VaultStreamDetail`].
+	VaultStreamDetail {
+		/// Where access stands, and the stream detail when it answered.
+		detail: Box<StreamDetailReply>,
+	},
+	/// The answer to [`Command::CompanionAgents`].
+	CompanionAgents {
+		/// Where access stands, and the approved agent directory.
+		reply: CompanionAgentsReply,
+	},
+	/// The answer to [`Command::CompanionMessages`].
+	CompanionMessages {
+		/// Where access stands, and this companion's messages.
+		reply: CompanionMessagesReply,
+	},
+	/// The answer to [`Command::SendCompanionMessage`] and
+	/// [`Command::CompanionMessage`].
+	CompanionMessage {
+		/// Where access stands, and the message.
+		reply: CompanionMessageReply,
+	},
 }
 
 /// The answer to a [`Command`] or a reading. Details arrive in the next
 /// [`Snapshot`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Reply {
 	/// Whether it worked.
 	pub ok: bool,
@@ -755,5 +1356,182 @@ mod tests {
 	fn the_phone_asks_only_for_write_scopes() {
 		assert!(PHONE_SCOPES.iter().all(|scope| scope.ends_with(":write")));
 		assert!(WATCH_SCOPES.iter().all(|scope| scope.ends_with(":write")));
+	}
+
+	#[test]
+	fn the_companion_capabilities_keep_separate_scopes() {
+		assert_eq!(CompanionCapability::StatsSummary.scopes(), ["*:summary"]);
+		assert_eq!(CompanionCapability::AskAgents.scopes(), ["companion:write"]);
+		assert_eq!(
+			CompanionCapability::ALL,
+			[
+				CompanionCapability::StatsSummary,
+				CompanionCapability::AskAgents
+			]
+		);
+		assert!(
+			CompanionCapability::StatsSummary
+				.scopes()
+				.iter()
+				.all(|scope| scope.ends_with(":summary"))
+		);
+		assert_eq!(CompanionCapability::StatsSummary.label(), "Stats");
+		assert_eq!(CompanionCapability::AskAgents.label(), "Ask");
+	}
+
+	#[test]
+	fn stats_windows_are_bounded_and_readable() {
+		assert_eq!(StatsWindow::Day.span_ms(), 24 * 60 * 60 * 1000);
+		assert_eq!(StatsWindow::Week.span_ms(), 7 * 24 * 60 * 60 * 1000);
+		assert_eq!(StatsWindow::default(), StatsWindow::Day);
+		assert_eq!(StatsWindow::Day.label(), "Past 24 hours");
+		assert_eq!(StatsWindow::ALL.len(), 2);
+	}
+
+	#[test]
+	fn stats_and_ask_commands_and_replies_round_trip_as_tagged_json() {
+		let command = Command::VaultStats {
+			window: StatsWindow::Week,
+		};
+		let json = serde_json::to_string(&command).unwrap();
+		assert_eq!(json, r#"{"command":"vault_stats","window":"week"}"#);
+		assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+
+		for extra in [
+			Command::RequestCompanion {
+				capabilities: vec![
+					CompanionCapability::StatsSummary,
+					CompanionCapability::AskAgents,
+				],
+			},
+			Command::RefreshCompanion,
+			Command::CancelCompanionChange,
+			Command::ForgetCompanion,
+			Command::VaultCatalog {
+				window: StatsWindow::Day,
+				offset: 24,
+				limit: 24,
+			},
+			Command::VaultStreamDetail {
+				stream: "health.heart_rate".into(),
+				window: StatsWindow::Week,
+				channel_offset: 8,
+				group_offset: 0,
+			},
+			Command::CompanionAgents,
+			Command::CompanionMessages { limit: Some(50) },
+			Command::SendCompanionMessage {
+				to: "agent-1".into(),
+				question: "How did I sleep?".into(),
+				dedupe: "m-abc12345-1".into(),
+			},
+			Command::CompanionMessage { id: "msg-1".into() },
+		] {
+			let encoded = serde_json::to_string(&extra).unwrap();
+			assert_eq!(serde_json::from_str::<Command>(&encoded).unwrap(), extra);
+		}
+
+		let reply = Reply::data(ReplyData::VaultStats {
+			stats: StatsReply {
+				access: StatsAccess::Pending {
+					code: "K7QD-M2XA".into(),
+				},
+				approve: Some("quant approve K7QD-M2XA --scope '*:summary'".into()),
+				problem: None,
+				summary: Some(VaultStats {
+					window: StatsWindow::Day,
+					span: StatsWindow::Day.label().into(),
+					from: "Yesterday 14:03".into(),
+					to: "Today 13:07".into(),
+					from_ms: 1,
+					to_ms: 2,
+					streams: vec![StatsStream {
+						stream: "health.steps".into(),
+						label: "Steps".into(),
+						family: "Health".into(),
+						description: "Steps counted per interval.".into(),
+						kind: StatsKind::Series,
+						count: 12,
+						count_unit: "samples".into(),
+						first: None,
+						last: None,
+						first_ms: None,
+						last_ms: None,
+						detail: StatsDetail::Numeric {
+							channels: vec![StatsChannel {
+								name: "steps".into(),
+								unit: "count".into(),
+								samples: 12,
+								min: Some(4.0),
+								max: Some(30.0),
+								mean: Some(12.5),
+							}],
+							buckets: vec![StatsBucket {
+								start: "Today 12:00".into(),
+								start_ms: 2,
+								channels: vec![StatsBucketChannel {
+									name: "steps".into(),
+									unit: "count".into(),
+									samples: 4,
+									min: 4.0,
+									max: 30.0,
+									mean: 12.5,
+								}],
+							}],
+							channels_truncated: false,
+							buckets_truncated: false,
+						},
+					}],
+					truncated: false,
+					details_truncated: false,
+					offset: 0,
+					total_streams: 1,
+					next_offset: None,
+					fetched: "Today 13:07".into(),
+				}),
+			},
+		});
+		let json = serde_json::to_string(&reply).unwrap();
+		assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
+
+		let ask_reply = Reply::data(ReplyData::CompanionMessage {
+			reply: CompanionMessageReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				message: Some(CompanionMessageRow {
+					id: "msg-1".into(),
+					to_id: "agent-1".into(),
+					to_name: "Coach".into(),
+					question: "What was my heart rate?".into(),
+					submitted: "Today 13:00".into(),
+					submitted_ms: 1000,
+					status: CompanionReplyStatus::Answered,
+					answer: Some("Average was 72 bpm.".into()),
+					answered: Some("Today 13:02".into()),
+					answered_ms: Some(2000),
+					citations: vec!["rec-1".into()],
+				}),
+			},
+		});
+		let json = serde_json::to_string(&ask_reply).unwrap();
+		assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), ask_reply);
+	}
+
+	#[test]
+	fn a_snapshot_without_companion_fields_still_loads() {
+		let mut json = serde_json::to_value(Snapshot::default()).unwrap();
+		let object = json.as_object_mut().unwrap();
+		object.remove("stats");
+		object.remove("ask");
+		object.remove("companion_change");
+		object.remove("vault_generation");
+		object.remove("session_nonce");
+		let snapshot: Snapshot = serde_json::from_value(json).unwrap();
+		assert_eq!(snapshot.stats, StatsState::default());
+		assert_eq!(snapshot.ask, StatsState::default());
+		assert_eq!(snapshot.companion_change, None);
+		assert_eq!(snapshot.vault_generation, 0);
+		assert_eq!(snapshot.session_nonce, "");
 	}
 }

@@ -6637,6 +6637,7 @@ dependencies = [
  "leptoskit_plugin_wearable",
  "leptoskit_sensor",
  "leptoskit_wasm",
+ "quant_access",
  "quant_api",
  "quant_client",
  "quant_collector",
