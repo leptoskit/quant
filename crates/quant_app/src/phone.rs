@@ -71,6 +71,69 @@ pub enum Grant {
 	Unavailable,
 }
 
+/// Progress of one bounded companion read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LoadState {
+	/// Nothing has been requested, or a reset cleared the result.
+	#[default]
+	Idle,
+	/// The first read is in flight.
+	Loading,
+	/// A read has completed and no refresh is in flight.
+	Loaded,
+	/// A read has completed and a refresh is in flight.
+	Refreshing,
+}
+
+impl LoadState {
+	/// Whether a read is in flight.
+	pub(crate) fn loading(self) -> bool {
+		matches!(self, Self::Loading | Self::Refreshing)
+	}
+
+	/// Whether a read has completed at least once.
+	pub(crate) fn loaded(self) -> bool {
+		matches!(self, Self::Loaded | Self::Refreshing)
+	}
+
+	/// Mark a read as started, keeping an earlier result visible while it
+	/// refreshes.
+	pub(crate) fn begin(&mut self) {
+		*self = if self.loaded() {
+			Self::Refreshing
+		} else {
+			Self::Loading
+		};
+	}
+
+	/// Mark a read as finished; `succeeded` says whether its result is usable.
+	pub(crate) fn finish(&mut self, succeeded: bool) {
+		*self = if succeeded || self.loaded() {
+			Self::Loaded
+		} else {
+			Self::Idle
+		};
+	}
+
+	/// Mark a read as finished without a usable result, keeping an earlier one.
+	pub(crate) fn cancel(&mut self) {
+		*self = if self.loaded() {
+			Self::Loaded
+		} else {
+			Self::Idle
+		};
+	}
+
+	/// Record a successful result without disturbing a read already in flight.
+	pub(crate) fn mark_loaded(&mut self) {
+		*self = if self.loading() {
+			Self::Refreshing
+		} else {
+			Self::Loaded
+		};
+	}
+}
+
 /// A `quant://link` the operating system delivered, held for the owner to
 /// review.
 ///
@@ -676,7 +739,7 @@ impl State {
 				match snapshot.stats.access {
 					StatsAccess::Ready => {
 						let ui = self.vault_ui.get_untracked();
-						if !ui.loaded && !ui.loading_catalog {
+						if ui.catalog_state == LoadState::Idle {
 							self.reload_vault();
 						}
 					}
@@ -689,8 +752,8 @@ impl State {
 				match snapshot.ask.access {
 					StatsAccess::Ready => {
 						let ui = self.ask_ui.get_untracked();
-						if (!ui.agents_loaded && !ui.loading_agents)
-							|| (!ui.messages_loaded && !ui.loading_messages)
+						if ui.agents_state == LoadState::Idle
+							|| ui.messages_state == LoadState::Idle
 						{
 							self.reload_ask();
 						}
@@ -714,13 +777,12 @@ impl State {
 			ui.detail_seq = ui.detail_seq.wrapping_add(1);
 			catalog_req = ui.catalog_seq;
 			detail_req = ui.detail_seq;
-			ui.loading_catalog = true;
+			ui.catalog_state = LoadState::Loading;
 			ui.loading_more = false;
-			ui.loaded = false;
 			ui.streams.clear();
 			ui.next_offset = None;
 			ui.error = None;
-			selected = ui.selected_stream.clone();
+			selected.clone_from(&ui.selected_stream);
 			if selected.is_some() {
 				ui.loading_detail = true;
 				ui.detail = None;
@@ -756,7 +818,7 @@ impl State {
 		let mut req = 0;
 		self.vault_ui.update(|ui| {
 			window = ui.window;
-			selected = ui.selected_stream.clone();
+			selected.clone_from(&ui.selected_stream);
 			if selected.is_some() {
 				ui.detail_seq = ui.detail_seq.wrapping_add(1);
 				req = ui.detail_seq;
@@ -765,7 +827,7 @@ impl State {
 			} else {
 				ui.catalog_seq = ui.catalog_seq.wrapping_add(1);
 				req = ui.catalog_seq;
-				ui.loading_catalog = true;
+				ui.catalog_state.begin();
 				ui.loading_more = false;
 				ui.error = None;
 			}
@@ -869,7 +931,7 @@ impl State {
 			if ui.loading_detail {
 				return;
 			}
-			stream = ui.selected_stream.clone();
+			stream.clone_from(&ui.selected_stream);
 			window = ui.window;
 			if stream.is_some() {
 				ui.detail_seq = ui.detail_seq.wrapping_add(1);
@@ -901,7 +963,7 @@ impl State {
 			if ui.loading_detail {
 				return;
 			}
-			stream = ui.selected_stream.clone();
+			stream.clone_from(&ui.selected_stream);
 			window = ui.window;
 			if stream.is_some() {
 				ui.detail_seq = ui.detail_seq.wrapping_add(1);
@@ -929,13 +991,16 @@ impl State {
 			if ui.catalog_seq != request_id {
 				return;
 			}
-			ui.loading_catalog = false;
+			let summary = reply.summary;
+			let succeeded = summary
+				.as_ref()
+				.is_some_and(|summary| summary.window == ui.window);
+			ui.catalog_state.finish(succeeded);
 			ui.loading_more = false;
-			if let Some(summary) = reply.summary {
+			if let Some(summary) = summary {
 				if summary.window != ui.window {
 					return;
 				}
-				ui.loaded = true;
 				ui.from = Some(summary.from);
 				ui.to = Some(summary.to);
 				ui.fetched = Some(summary.fetched);
@@ -1052,8 +1117,8 @@ impl State {
 			ui.messages_seq = ui.messages_seq.wrapping_add(1);
 			agents_req = ui.agents_seq;
 			messages_req = ui.messages_seq;
-			ui.loading_agents = true;
-			ui.loading_messages = true;
+			ui.agents_state.begin();
+			ui.messages_state.begin();
 			ui.load_error = None;
 			limit = ui.message_limit.max(50);
 		});
@@ -1074,7 +1139,7 @@ impl State {
 		self.ask_ui.update(|ui| {
 			ui.messages_seq = ui.messages_seq.wrapping_add(1);
 			req = ui.messages_seq;
-			ui.loading_messages = true;
+			ui.messages_state.begin();
 			limit = ui.message_limit.max(50);
 		});
 		self.act(Action::LoadAskMessages {
@@ -1091,7 +1156,7 @@ impl State {
 			ui.message_limit = limit;
 			ui.messages_seq = ui.messages_seq.wrapping_add(1);
 			req = ui.messages_seq;
-			ui.loading_messages = true;
+			ui.messages_state.begin();
 		});
 		self.act(Action::LoadAskMessages {
 			limit,
@@ -1115,7 +1180,7 @@ impl State {
 	pub fn set_ask_draft(&self, text: &str) {
 		self.ask_ui.update(|ui| {
 			if ui.draft_question != text {
-				ui.draft_question = text.to_owned();
+				text.clone_into(&mut ui.draft_question);
 				ui.draft_dedupe = None;
 				ui.send_error = None;
 			}
@@ -1204,9 +1269,9 @@ impl State {
 			if ui.agents_seq != request_id {
 				return;
 			}
-			ui.loading_agents = false;
-			if reply.access == StatsAccess::Ready && reply.problem.is_none() {
-				ui.agents_loaded = true;
+			let succeeded = reply.access == StatsAccess::Ready && reply.problem.is_none();
+			ui.agents_state.finish(succeeded);
+			if succeeded {
 				ui.agents = reply.agents;
 				ui.load_error = None;
 				let still_valid = ui
@@ -1229,9 +1294,9 @@ impl State {
 			if ui.messages_seq != request_id {
 				return;
 			}
-			ui.loading_messages = false;
-			if reply.access == StatsAccess::Ready && reply.problem.is_none() {
-				ui.messages_loaded = true;
+			let succeeded = reply.access == StatsAccess::Ready && reply.problem.is_none();
+			ui.messages_state.finish(succeeded);
+			if succeeded {
 				ui.messages = reply.messages;
 				ui.fetched = reply.fetched;
 				ui.load_error = None;
@@ -1254,7 +1319,7 @@ impl State {
 				ui.draft_question.clear();
 				ui.draft_dedupe = None;
 				ui.send_error = None;
-				ui.messages_loaded = true;
+				ui.messages_state.mark_loaded();
 				if let Some(slot) = ui.messages.iter_mut().find(|m| m.id == message.id) {
 					*slot = message;
 				} else {

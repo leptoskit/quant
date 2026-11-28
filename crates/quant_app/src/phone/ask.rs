@@ -22,6 +22,7 @@ use quant_model::phone::CompanionMessageRow;
 use quant_model::phone::CompanionReplyStatus;
 use quant_model::phone::StatsAccess;
 
+use super::LoadState;
 use super::State;
 use super::companion;
 use crate::theme;
@@ -39,14 +40,10 @@ pub struct AskUiState {
 	/// Monotonic counter for minting unique idempotency keys within this
 	/// launch.
 	pub draft_counter: u64,
-	/// Whether the agent directory is loading.
-	pub loading_agents: bool,
-	/// Whether messages are loading.
-	pub loading_messages: bool,
-	/// Whether at least one agents fetch has completed.
-	pub agents_loaded: bool,
-	/// Whether at least one messages fetch has completed.
-	pub messages_loaded: bool,
+	/// Progress of the agent directory read.
+	pub agents_state: LoadState,
+	/// Progress of the messages read.
+	pub messages_state: LoadState,
 	/// Approved agents returned by `companion_agents`.
 	pub agents: Vec<CompanionAgentRow>,
 	/// This companion's own messages returned by `companion_messages`.
@@ -76,10 +73,8 @@ impl AskUiState {
 		self.agents_seq = self.agents_seq.wrapping_add(1);
 		self.messages_seq = self.messages_seq.wrapping_add(1);
 		self.send_seq = self.send_seq.wrapping_add(1);
-		self.loading_agents = false;
-		self.loading_messages = false;
-		self.agents_loaded = false;
-		self.messages_loaded = false;
+		self.agents_state = LoadState::Idle;
+		self.messages_state = LoadState::Idle;
 		self.agents.clear();
 		self.messages.clear();
 		self.fetched = None;
@@ -98,8 +93,8 @@ impl AskUiState {
 	pub fn clear_transient_offline(&mut self) {
 		self.agents_seq = self.agents_seq.wrapping_add(1);
 		self.messages_seq = self.messages_seq.wrapping_add(1);
-		self.loading_agents = false;
-		self.loading_messages = false;
+		self.agents_state.cancel();
+		self.messages_state.cancel();
 		self.sending = false;
 	}
 
@@ -135,10 +130,8 @@ pub(crate) fn ask_segment(state: &State) -> Element {
 				vec![AskViewKey {
 					agents: ui.agents,
 					messages: ui.messages,
-					loading_agents: ui.loading_agents,
-					loading_messages: ui.loading_messages,
-					agents_loaded: ui.agents_loaded,
-					messages_loaded: ui.messages_loaded,
+					agents_state: ui.agents_state,
+					messages_state: ui.messages_state,
 					fetched: ui.fetched,
 					recipient_id: ui.recipient_id,
 					sending: ui.sending,
@@ -161,10 +154,8 @@ pub(crate) fn ask_segment(state: &State) -> Element {
 struct AskViewKey {
 	agents: Vec<CompanionAgentRow>,
 	messages: Vec<CompanionMessageRow>,
-	loading_agents: bool,
-	loading_messages: bool,
-	agents_loaded: bool,
-	messages_loaded: bool,
+	agents_state: LoadState,
+	messages_state: LoadState,
 	fetched: Option<String>,
 	recipient_id: Option<String>,
 	sending: bool,
@@ -252,7 +243,7 @@ fn agent_directory_card(state: &State, ui: &AskUiState) -> Element {
 		.class(theme::CARD)
 		.child(Text("Approved agents").class(theme::HEADING));
 
-	if ui.loading_agents && !ui.agents_loaded {
+	if ui.agents_state.loading() && !ui.agents_state.loaded() {
 		return card.child(
 			View()
 				.class("flex-row items-center gap-3")
@@ -366,7 +357,7 @@ fn messages_card(state: &State, ui: &AskUiState) -> Element {
 		.class(theme::CARD)
 		.child(Text("Your questions and replies").class(theme::HEADING));
 
-	if ui.loading_messages && !ui.messages_loaded {
+	if ui.messages_state.loading() && !ui.messages_state.loaded() {
 		return card.child(
 			View()
 				.class("flex-row items-center gap-3")
@@ -458,7 +449,7 @@ fn message_row(state: &State, msg: &CompanionMessageRow) -> Element {
 								.class(theme::QUIET)
 								.test_id(format!("msg-followup-{}", msg.id))
 								.on_press(move || {
-									followup.prepare_ask_followup(followup_agent.clone())
+									followup.prepare_ask_followup(followup_agent.clone());
 								}),
 						),
 				);

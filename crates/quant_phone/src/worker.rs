@@ -578,9 +578,10 @@ impl Worker {
 				group_offset,
 			} => {
 				return Ok(Some(ReplyData::VaultStreamDetail {
-					detail: self
-						.vault_stream_detail(&stream, window, channel_offset, group_offset)
-						.await,
+					detail: Box::new(
+						self.vault_stream_detail(&stream, window, channel_offset, group_offset)
+							.await,
+					),
 				}));
 			}
 			Command::CompanionAgents => {
@@ -779,9 +780,9 @@ impl Worker {
 		let scopes = companion::scopes_for(&capabilities, None);
 		let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
 		let approve = words::approve_for(code, &scope_refs);
-		self.companion_requested = capabilities.clone();
+		self.companion_requested.clone_from(&capabilities);
 		if self.saved.companion_requested != capabilities {
-			self.saved.companion_requested = capabilities.clone();
+			self.saved.companion_requested.clone_from(&capabilities);
 			let _ = self.save();
 		}
 		self.companion_change = None;
@@ -838,9 +839,7 @@ impl Worker {
 			let want_ask = change
 				.capabilities
 				.contains(&CompanionCapability::AskAgents);
-			if want_stats == has_stats && want_ask == has_ask {
-				self.companion_change = None;
-			} else if change.code != pairing_code {
+			if (want_stats == has_stats && want_ask == has_ask) || change.code != pairing_code {
 				self.companion_change = None;
 			}
 		}
@@ -852,13 +851,13 @@ impl Worker {
 		}
 	}
 
-	fn set_unreachable(&mut self, reason: String) {
+	fn set_unreachable(&mut self, reason: &str) {
 		for capability in CompanionCapability::ALL {
 			let state = self.capability_state_mut(capability);
 			state.approve = None;
-			state.problem = Some(reason.clone());
+			state.problem = Some(reason.to_owned());
 			state.access = StatsAccess::Unreachable {
-				reason: reason.clone(),
+				reason: reason.to_owned(),
 			};
 		}
 	}
@@ -900,12 +899,12 @@ impl Worker {
 			// The only path that makes a new companion key: an explicit
 			// request after no request, a forget, or a lost grant.
 			self.create_companion_identity()?;
-			self.companion_requested = capabilities.clone();
+			self.companion_requested.clone_from(&capabilities);
 			return self.pair_companion(&capabilities).await;
 		}
 		let client = self.companion_client(&link)?;
 		if client.identity().client.is_none() {
-			self.companion_requested = capabilities.clone();
+			self.companion_requested.clone_from(&capabilities);
 			return self.pair_companion(&capabilities).await;
 		}
 		let pairing_code = client.identity().key().public().pairing_code();
@@ -943,7 +942,7 @@ impl Worker {
 				}
 			}
 			Ok(me) if me.status == ClientStatus::Pending => {
-				self.companion_requested = capabilities.clone();
+				self.companion_requested.clone_from(&capabilities);
 				self.pair_companion(&capabilities).await
 			}
 			Ok(_) => {
@@ -960,7 +959,7 @@ impl Worker {
 			}
 			Err(error) => {
 				let reason = companion_problem(&error, CompanionCapability::StatsSummary);
-				self.set_unreachable(reason.clone());
+				self.set_unreachable(&reason);
 				Err(reason)
 			}
 		}
@@ -982,7 +981,7 @@ impl Worker {
 			Err(error) => {
 				let reason = companion_problem(&error, CompanionCapability::StatsSummary);
 				self.companion = Some(client);
-				self.set_unreachable(reason.clone());
+				self.set_unreachable(&reason);
 				return Err(reason);
 			}
 		};
@@ -1036,7 +1035,7 @@ impl Worker {
 						// A transient read failure is not a lost grant; keep
 						// the key so a later request can recover.
 						let reason = companion_problem(&error, CompanionCapability::StatsSummary);
-						self.set_unreachable(reason.clone());
+						self.set_unreachable(&reason);
 						Err(reason)
 					}
 				}
@@ -1067,7 +1066,7 @@ impl Worker {
 		let client = match self.companion_client(&link) {
 			Ok(client) => client,
 			Err(problem) => {
-				self.set_unreachable(problem.clone());
+				self.set_unreachable(&problem);
 				return StatsAccess::Unreachable { reason: problem };
 			}
 		};
@@ -1120,7 +1119,7 @@ impl Worker {
 			}
 			Err(error) => {
 				let reason = companion_problem(&error, capability);
-				self.set_unreachable(reason.clone());
+				self.set_unreachable(&reason);
 				StatsAccess::Unreachable { reason }
 			}
 		}
@@ -1149,7 +1148,7 @@ impl Worker {
 		let problem = companion_problem(error, capability);
 		let access = match error {
 			ClientError::Unreachable { .. } => {
-				self.set_unreachable(problem.clone());
+				self.set_unreachable(&problem);
 				StatsAccess::Unreachable {
 					reason: problem.clone(),
 				}

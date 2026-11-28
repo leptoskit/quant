@@ -209,7 +209,7 @@ async fn ask_autorefresh(state: State) {
 			continue;
 		}
 		let ui = state.ask_ui.get_untracked();
-		if ui.has_waiting() && !ui.loading_messages {
+		if ui.has_waiting() && !ui.messages_state.loading() {
 			state.refresh_ask_messages();
 		}
 	}
@@ -288,7 +288,7 @@ pub fn act(state: &State, action: Action) {
 				})
 				.await;
 				let detail = match reply.data {
-					Some(ReplyData::VaultStreamDetail { detail }) => detail,
+					Some(ReplyData::VaultStreamDetail { detail }) => *detail,
 					_ => {
 						StreamDetailReply {
 							access: state.snapshot.get_untracked().stats.access,

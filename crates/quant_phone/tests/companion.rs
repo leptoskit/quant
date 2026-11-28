@@ -297,7 +297,7 @@ fn stats_reply(reply: &Reply) -> StatsReply {
 
 fn detail_reply(reply: &Reply) -> StreamDetailReply {
 	match &reply.data {
-		Some(ReplyData::VaultStreamDetail { detail }) => detail.clone(),
+		Some(ReplyData::VaultStreamDetail { detail }) => detail.as_ref().clone(),
 		other => panic!("expected stream detail reply, got {other:?}"),
 	}
 }

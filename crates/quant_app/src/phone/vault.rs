@@ -24,6 +24,7 @@ use quant_model::phone::StatsDuration;
 use quant_model::phone::StatsStream;
 use quant_model::phone::StatsWindow;
 
+use super::LoadState;
 use super::State;
 use super::companion;
 use crate::theme;
@@ -36,12 +37,10 @@ pub struct VaultUiState {
 	pub window: StatsWindow,
 	/// Monotonic sequence for catalog page requests; stale replies are ignored.
 	pub catalog_seq: u64,
-	/// Whether a catalog page request is in flight.
-	pub loading_catalog: bool,
+	/// Progress of the first catalog page for the current range.
+	pub catalog_state: LoadState,
 	/// Whether a "load more" page request is in flight.
 	pub loading_more: bool,
-	/// Whether at least one catalog response succeeded for the current range.
-	pub loaded: bool,
 	/// Effective range start reported by the vault.
 	pub from: Option<String>,
 	/// Effective range end reported by the vault.
@@ -88,9 +87,8 @@ impl VaultUiState {
 	pub fn clear_session(&mut self) {
 		self.catalog_seq = self.catalog_seq.wrapping_add(1);
 		self.detail_seq = self.detail_seq.wrapping_add(1);
-		self.loading_catalog = false;
+		self.catalog_state = LoadState::Idle;
 		self.loading_more = false;
-		self.loaded = false;
 		self.from = None;
 		self.to = None;
 		self.fetched = None;
@@ -133,9 +131,8 @@ pub(crate) fn vault_segment(state: &State) -> Element {
 				let ui = vault_ui.get();
 				vec![VaultViewKey {
 					window: ui.window,
-					loading_catalog: ui.loading_catalog,
+					catalog_state: ui.catalog_state,
 					loading_more: ui.loading_more,
-					loaded: ui.loaded,
 					from: ui.from,
 					to: ui.to,
 					fetched: ui.fetched,
@@ -173,9 +170,8 @@ pub(crate) fn vault_segment(state: &State) -> Element {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct VaultViewKey {
 	window: StatsWindow,
-	loading_catalog: bool,
+	catalog_state: LoadState,
 	loading_more: bool,
-	loaded: bool,
 	from: Option<String>,
 	to: Option<String>,
 	fetched: Option<String>,
@@ -266,11 +262,11 @@ fn catalog_view(state: &State, ui: &VaultUiState) -> Element {
 				ui.from.as_deref(),
 				ui.to.as_deref(),
 				ui.fetched.as_deref(),
-				ui.loaded.then_some(ui.total_streams),
+				ui.catalog_state.loaded().then_some(ui.total_streams),
 			)),
 	);
 
-	if ui.loading_catalog && !ui.loaded {
+	if ui.catalog_state.loading() && !ui.catalog_state.loaded() {
 		root = root.child(
 			View().class(theme::CARD).child(
 				View()
@@ -310,7 +306,7 @@ fn catalog_view(state: &State, ui: &VaultUiState) -> Element {
 		);
 	}
 
-	if ui.loaded && ui.streams.is_empty() {
+	if ui.catalog_state.loaded() && ui.streams.is_empty() {
 		return root.child(
 			View()
 				.class(theme::CARD)

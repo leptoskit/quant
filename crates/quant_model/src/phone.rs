@@ -907,7 +907,7 @@ pub enum ReplyData {
 	/// The answer to [`Command::VaultStreamDetail`].
 	VaultStreamDetail {
 		/// Where access stands, and the stream detail when it answered.
-		detail: StreamDetailReply,
+		detail: Box<StreamDetailReply>,
 	},
 	/// The answer to [`Command::CompanionAgents`].
 	CompanionAgents {
