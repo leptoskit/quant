@@ -6,20 +6,28 @@
 //! keep their text.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use leptoskit::native::reactive::For;
 use leptoskit::native::reactive::Show;
 use leptoskit::prelude::Button;
 use leptoskit::prelude::Checkbox;
+use leptoskit::prelude::Color;
+use leptoskit::prelude::Dimension;
 use leptoskit::prelude::Element;
 use leptoskit::prelude::Get;
 use leptoskit::prelude::PasswordInput;
+use leptoskit::prelude::PathData;
 use leptoskit::prelude::RwSignal;
 use leptoskit::prelude::ScrollView;
 use leptoskit::prelude::Set;
 use leptoskit::prelude::Text;
 use leptoskit::prelude::TextInput;
+use leptoskit::prelude::Vector;
+use leptoskit::prelude::VectorPath;
 use leptoskit::prelude::View;
+use leptoskit::prelude::ViewBox;
 use leptoskit::prelude::component;
 use quant_model::AuditRow;
 use quant_model::Command;
@@ -29,7 +37,11 @@ use quant_model::Moment;
 use quant_model::OwnerDeviceRow;
 use quant_model::OwnerView;
 use quant_model::PendingClient;
+use quant_model::PhoneLink;
+use quant_model::PhoneQr;
 use quant_model::QuestionRow;
+use quant_model::Reply;
+use quant_model::ReplyData;
 use quant_model::ScopeChoice;
 use quant_model::Snapshot;
 use quant_model::SourceRow;
@@ -94,6 +106,20 @@ pub struct TouchIdAvailability {
 	pub reason: Option<String>,
 }
 
+/// What the window shows for pairing a phone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PhonePanel {
+	/// Nothing asked for yet.
+	#[default]
+	Closed,
+	/// Waiting for the service to make the link.
+	Loading,
+	/// The link and the QR code drawn from it.
+	Ready(PhoneLink),
+	/// Why there is no link, and the next step.
+	Unavailable(String),
+}
+
 /// The window's state.
 #[derive(Clone)]
 pub struct State {
@@ -113,6 +139,9 @@ pub struct State {
 	pub problem: RwSignal<Option<String>>,
 	/// This Mac's Touch ID hardware and enrollment.
 	pub touch_id: RwSignal<TouchIdAvailability>,
+	/// The phone-pairing card.
+	pub phone: RwSignal<PhonePanel>,
+	phone_generation: Arc<AtomicU64>,
 	send: Send,
 }
 
@@ -128,8 +157,20 @@ impl State {
 			approvals: RwSignal::new(Vec::new()),
 			problem: RwSignal::new(None),
 			touch_id: RwSignal::new(TouchIdAvailability::default()),
+			phone: RwSignal::new(PhonePanel::Closed),
+			phone_generation: Arc::new(AtomicU64::new(0)),
 			send,
 		}
+	}
+
+	/// Share the phone-link request counter with the guest bridge callback.
+	pub fn set_phone_generation(&mut self, generation: Arc<AtomicU64>) {
+		self.phone_generation = generation;
+	}
+
+	/// The current phone-link request generation.
+	pub fn phone_generation(&self) -> u64 {
+		self.phone_generation.load(Ordering::SeqCst)
 	}
 
 	fn send(&self, command: Command) {
@@ -168,6 +209,13 @@ const CONTROL: &str = "px-3 py-2 rounded-lg bg-stone-100 text-stone-800 dark:bg-
 const PRIMARY: &str = "px-3 py-2 rounded-lg bg-[#ffd43b] text-stone-900 text-xs font-semibold";
 const HEADING: &str = "text-sm font-semibold text-stone-900 dark:text-stone-100";
 const BODY: &str = "text-sm leading-relaxed text-stone-800 dark:text-stone-100";
+
+/// The steps under the pairing QR code.
+const PHONE_SCAN: &str = "Open the camera on your phone and point it at this code.";
+const PHONE_FALLBACK: &str = "If the camera can't open `quant://` links, select the link below \
+                              and copy it into the Quant app on your phone.";
+const PHONE_APPROVE: &str =
+	"When the phone appears under Agents, check its pairing code matches, then approve it.";
 
 /// The whole window.
 #[component]
@@ -303,7 +351,9 @@ struct StatusPart {
 fn status_tab(state: &State) -> Element {
 	let snapshot = state.snapshot;
 	let state = state.clone();
-	For(
+	// The phone card sits outside the snapshot region so copying the link
+	// keeps its selection while the status refreshes.
+	View().class("gap-3").child(phone_card(&state)).child(For(
 		move || {
 			let s = snapshot.get();
 			vec![StatusPart {
@@ -318,7 +368,7 @@ fn status_tab(state: &State) -> Element {
 		},
 		Clone::clone,
 		move |part| status_view(&state, &part),
-	)
+	))
 }
 
 fn status_view(state: &State, part: &StatusPart) -> Element {
@@ -417,6 +467,137 @@ fn link_card(part: &StatusPart) -> Element {
 		.class(CARD)
 		.child(Text(title).class(HEADING).test_id("link"))
 		.children((!detail.is_empty()).then(|| Text(detail).class(MUTED)))
+}
+
+fn phone_card(state: &State) -> Element {
+	let phone = state.phone;
+	let state = state.clone();
+	For(
+		move || vec![phone.get()],
+		Clone::clone,
+		move |panel| phone_card_for(&state, panel),
+	)
+}
+
+fn phone_card_for(state: &State, panel: PhonePanel) -> Element {
+	let connect = state.clone();
+	let hide = state.clone();
+	let open = panel != PhonePanel::Closed;
+	let mut view = View()
+		.class(CARD)
+		.child(Text("Phones").class(HEADING))
+		.child(
+			Text(
+				"Pair the Quant app on your phone with this vault. Your memory stays on this Mac.",
+			)
+			.class(MUTED),
+		)
+		.child(
+			View()
+				.class("flex-row flex-wrap gap-2")
+				.child(
+					Button("Connect a phone")
+						.class(PRIMARY)
+						.test_id("connect-phone")
+						.on_press(move || start_phone_link(&connect)),
+				)
+				.children(open.then(|| {
+					Button("Hide")
+						.class(CONTROL)
+						.test_id("phone-hide")
+						.on_press(move || close_phone_link(&hide))
+				})),
+		);
+	if open {
+		view = view.child(phone_panel(panel));
+	}
+	view
+}
+
+fn phone_panel(panel: PhonePanel) -> Element {
+	match panel {
+		PhonePanel::Closed => View(),
+		PhonePanel::Loading => {
+			Text("Making a pairing link…")
+				.class(MUTED)
+				.test_id("phone-loading")
+		}
+		PhonePanel::Unavailable(reason) => {
+			View()
+				.class("gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950")
+				.child(Text(reason).class(BODY).test_id("phone-unavailable"))
+		}
+		PhonePanel::Ready(link) => phone_ready(&link),
+	}
+}
+
+fn phone_ready(link: &PhoneLink) -> Element {
+	let mut view = View().class("gap-3");
+	match link.qr.as_ref() {
+		Some(qr) => {
+			if let Some(element) = qr_element(qr) {
+				view = view
+					.child(View().class("flex-row justify-center").child(element))
+					.child(Text(PHONE_SCAN).class(BODY))
+					.child(Text(PHONE_FALLBACK).class(MUTED));
+			} else {
+				view = view.child(
+					Text("This QR code can't be drawn. Select and copy the link below instead.")
+						.class(MUTED)
+						.test_id("phone-qr-broken"),
+				);
+			}
+		}
+		None => {
+			view = view.child(
+				Text("This link is too long for a QR code. Select and copy it below.")
+					.class(MUTED)
+					.test_id("phone-no-qr"),
+			);
+		}
+	}
+	view.child(Text(PHONE_APPROVE).class(MUTED)).child(
+		TextInput()
+			.class("text-xs")
+			.value(link.link.clone())
+			.read_only(true)
+			.accessibility_label("Pairing link")
+			.test_id("phone-link"),
+	)
+}
+
+/// Draw a QR code in two vector paths: a white field covering the quiet zone
+/// and one compound black path for every dark module. Whole points per module
+/// keep the edges sharp on a Retina display while fitting the 620×780 window.
+fn qr_element(qr: &PhoneQr) -> Option<Element> {
+	if qr.side == 0 || qr.path.is_empty() {
+		return None;
+	}
+	let side = f32::from(qr.side);
+	let view_box = ViewBox::new(0.0, 0.0, side, side).ok()?;
+	let background = PathData::rect(0.0, 0.0, side, side).ok()?;
+	let modules = PathData::parse(&qr.path).ok()?;
+	if modules.is_empty() {
+		return None;
+	}
+	let pixels = f32::from(qr.side.saturating_mul(qr_pixels_per_module(qr.side)));
+	Some(
+		Vector(view_box)
+			.class("bg-white")
+			.aria_label("Pairing QR code")
+			.test_id("phone-qr")
+			.with_style(|style| {
+				style.width = Dimension::Points(pixels);
+				style.height = Dimension::Points(pixels);
+			})
+			.path(VectorPath::new(background).fill(Color::rgba(255, 255, 255, 255)))
+			.path(VectorPath::new(modules).fill(Color::rgba(0, 0, 0, 255))),
+	)
+}
+
+/// A code around 200 points wide, with a whole number of points per module.
+fn qr_pixels_per_module(side: u16) -> u16 {
+	(200 / side.max(1)).clamp(2, 5)
 }
 
 fn sources_card(state: &State, sources: &[SourceRow], paused: bool) -> Element {
@@ -1269,6 +1450,41 @@ fn turn_off_touch_id(state: &State) {
 	leptoskit::guest::spawn(touch_id::delete_key());
 }
 
+fn start_phone_link(state: &State) {
+	state.phone_generation.fetch_add(1, Ordering::SeqCst);
+	state.phone.set(PhonePanel::Loading);
+	state.send(Command::PhoneLink);
+}
+
+fn close_phone_link(state: &State) {
+	state.phone_generation.fetch_add(1, Ordering::SeqCst);
+	state.phone.set(PhonePanel::Closed);
+}
+
+/// Apply a `Command::PhoneLink` reply if no newer request or Hide superseded
+/// it.
+pub fn finish_phone_link(
+	phone: RwSignal<PhonePanel>,
+	current: &AtomicU64,
+	generation: u64,
+	reply: Reply,
+) {
+	if current.load(Ordering::SeqCst) != generation {
+		return;
+	}
+	let panel = match reply.data {
+		Some(ReplyData::PhoneLink(link)) if reply.ok => PhonePanel::Ready(link),
+		_ => {
+			PhonePanel::Unavailable(
+				reply
+					.error
+					.unwrap_or_else(|| "Quant didn't return a pairing link. Try again.".to_owned()),
+			)
+		}
+	};
+	phone.set(panel);
+}
+
 fn revoke_device(state: &State, id: &str, this_mac: bool) {
 	state.send(Command::RevokeDevice {
 		device: id.to_owned(),
@@ -1697,5 +1913,168 @@ mod tests {
 		tester
 			.get_by_text("This Mac has no Touch ID sensor.")
 			.unwrap();
+	}
+
+	fn phone() -> PhoneLink {
+		PhoneLink {
+			link: "quant://link?addr=192.168.1.4:7717&fp=abc123&vault=v1".into(),
+			qr: Some(PhoneQr {
+				side: 29,
+				path: "M4 4h7v1h-7ZM4 5h1v5h-1ZM10 5h1v5h-1ZM4 10h7v1h-7Z".into(),
+			}),
+		}
+	}
+
+	fn desktop_harness(snapshot: Snapshot) -> (WidgetTester, State, Arc<Mutex<Vec<Command>>>) {
+		let (mut tester, state, sent) = harness(snapshot);
+		// Match `[targets.desktop.native]` in `leptoskit.toml`.
+		tester.resize(620.0, 780.0).unwrap();
+		(tester, state, sent)
+	}
+
+	#[test]
+	fn connect_a_phone_works_at_the_real_desktop_viewport() {
+		let (mut tester, state, sent) = desktop_harness(ready());
+		tester.tap(&Finder::test_id("connect-phone")).unwrap();
+		assert_eq!(state.phone.get(), PhonePanel::Loading);
+		assert_eq!(sent.lock().unwrap().as_slice(), [Command::PhoneLink]);
+		tester.get_by_test_id("phone-loading").unwrap();
+
+		let generation = state.phone_generation();
+		finish_phone_link(
+			state.phone,
+			&state.phone_generation,
+			generation,
+			Reply {
+				ok: true,
+				error: None,
+				data: Some(ReplyData::PhoneLink(phone())),
+			},
+		);
+		tester.pump();
+
+		let field = tester.get_by_test_id("phone-link").unwrap();
+		assert_eq!(
+			field.props.value.as_deref(),
+			Some("quant://link?addr=192.168.1.4:7717&fp=abc123&vault=v1")
+		);
+		assert_eq!(field.props.read_only, Some(true));
+		assert!(field.frame.width > 0.0 && field.frame.width <= 620.0);
+		tester.get_by_text(PHONE_SCAN).unwrap();
+		tester.get_by_text(PHONE_FALLBACK).unwrap();
+		tester.get_by_text(PHONE_APPROVE).unwrap();
+
+		let qr = tester.get_by_test_id("phone-qr").unwrap();
+		let drawing = qr.props.drawing.as_ref().unwrap();
+		assert_eq!(drawing.view_box().width(), 29.0);
+		assert_eq!(drawing.view_box().height(), 29.0);
+		// White background + single compound black module path.
+		assert_eq!(drawing.paths().len(), 2);
+		// Whole points per module: 29 * 5 = 145, fitting the 620x780 window.
+		assert_eq!(qr.frame.width, 145.0);
+		assert_eq!(qr.frame.height, 145.0);
+		assert!(qr.frame.y + qr.frame.height < 780.0);
+
+		tester.tap(&Finder::test_id("phone-hide")).unwrap();
+		assert_eq!(state.phone.get(), PhonePanel::Closed);
+	}
+
+	#[test]
+	fn missing_or_unrenderable_qr_omits_camera_instructions() {
+		let (mut tester, state, _) = desktop_harness(ready());
+		state.phone.set(PhonePanel::Ready(PhoneLink {
+			link: "quant://link?addr=192.168.1.4:7717&fp=abc123&vault=v1".into(),
+			qr: None,
+		}));
+		tester.pump();
+		tester.get_by_test_id("phone-no-qr").unwrap();
+		tester.get_by_test_id("phone-link").unwrap();
+		tester.get_by_text(PHONE_APPROVE).unwrap();
+		assert!(tester.find(&Finder::text(PHONE_SCAN)).is_err());
+		assert!(tester.find(&Finder::text(PHONE_FALLBACK)).is_err());
+
+		state.phone.set(PhonePanel::Ready(PhoneLink {
+			link: "quant://link?addr=192.168.1.4:7717&fp=abc123&vault=v1".into(),
+			qr: Some(PhoneQr {
+				side: 29,
+				path: "not valid svg path".into(),
+			}),
+		}));
+		tester.pump();
+		tester.get_by_test_id("phone-qr-broken").unwrap();
+		tester.get_by_test_id("phone-link").unwrap();
+		tester.get_by_text(PHONE_APPROVE).unwrap();
+		assert!(tester.find(&Finder::text(PHONE_SCAN)).is_err());
+		assert!(tester.find(&Finder::text(PHONE_FALLBACK)).is_err());
+	}
+
+	#[test]
+	fn hiding_and_reopening_ignores_stale_phone_link_replies() {
+		let (mut tester, state, _) = desktop_harness(ready());
+		tester.tap(&Finder::test_id("connect-phone")).unwrap();
+		let first = state.phone_generation();
+		tester.tap(&Finder::test_id("phone-hide")).unwrap();
+		tester.tap(&Finder::test_id("connect-phone")).unwrap();
+		let second = state.phone_generation();
+		assert_ne!(first, second);
+
+		// First reply arrives late: must be ignored.
+		finish_phone_link(
+			state.phone,
+			&state.phone_generation,
+			first,
+			Reply {
+				ok: false,
+				error: Some("stale error".into()),
+				data: None,
+			},
+		);
+		assert_eq!(state.phone.get(), PhonePanel::Loading);
+
+		// Second reply arrives: applied.
+		finish_phone_link(
+			state.phone,
+			&state.phone_generation,
+			second,
+			Reply {
+				ok: true,
+				error: None,
+				data: Some(ReplyData::PhoneLink(phone())),
+			},
+		);
+		assert!(matches!(state.phone.get(), PhonePanel::Ready(_)));
+	}
+
+	#[test]
+	fn a_local_only_vault_shows_the_next_step() {
+		let (mut tester, state, _) = desktop_harness(ready());
+		tester.tap(&Finder::test_id("connect-phone")).unwrap();
+		let generation = state.phone_generation();
+		let next = "Run `quant service install --tcp 0.0.0.0:7717`, then try again.";
+		finish_phone_link(
+			state.phone,
+			&state.phone_generation,
+			generation,
+			Reply {
+				ok: false,
+				error: Some(next.into()),
+				data: None,
+			},
+		);
+		tester.pump();
+		tester.get_by_text(next).unwrap();
+	}
+
+	#[test]
+	fn a_phone_panel_leaves_agent_approval_working() {
+		let (mut tester, state, sent) = desktop_harness(unlocked());
+		state.phone.set(PhonePanel::Ready(phone()));
+		tester.pump();
+		tester.tap(&Finder::test_id("tab-Agents")).unwrap();
+		tester.tap(&Finder::test_id("approve-K7QD-M2XA")).unwrap();
+		assert!(matches!(
+			sent.lock().unwrap().as_slice(),
+			[Command::Approve { .. }]
+		));
 	}
 }

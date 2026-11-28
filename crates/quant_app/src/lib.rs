@@ -98,8 +98,12 @@ mod entry {
 	/// The desktop window.
 	#[cfg(not(feature = "phone"))]
 	fn desktop() {
+		use std::sync::atomic::AtomicU64;
+		use std::sync::atomic::Ordering;
+
 		use leptoskit::prelude::RwSignal;
 		use leptoskit::prelude::Set;
+		use quant_model::Command;
 
 		use super::State;
 		use super::bridge;
@@ -108,7 +112,19 @@ mod entry {
 		use super::ui;
 
 		let problem: RwSignal<Option<String>> = RwSignal::new(None);
+		let phone: RwSignal<ui::PhonePanel> = RwSignal::new(ui::PhonePanel::Closed);
+		let phone_generation = Arc::new(AtomicU64::new(0));
+		let phone_gen = Arc::clone(&phone_generation);
 		let send: ui::Send = Arc::new(move |command| {
+			if matches!(command, Command::PhoneLink) {
+				let generation = phone_gen.load(Ordering::SeqCst);
+				let phone_gen = Arc::clone(&phone_gen);
+				leptoskit::guest::spawn(async move {
+					let reply = bridge::send(&Command::PhoneLink).await;
+					ui::finish_phone_link(phone, &phone_gen, generation, reply);
+				});
+				return;
+			}
 			leptoskit::guest::spawn(async move {
 				let reply = bridge::send(&command).await;
 				if !reply.ok {
@@ -118,6 +134,8 @@ mod entry {
 		});
 		let mut state = State::new(send);
 		state.problem = problem;
+		state.phone = phone;
+		state.set_phone_generation(phone_generation);
 		#[cfg(not(feature = "ui-preview"))]
 		{
 			leptoskit::guest::spawn(follow(state.clone()));

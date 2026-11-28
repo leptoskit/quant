@@ -47,6 +47,8 @@ pub struct State {
 	pub started_at: Timestamp,
 	/// The TLS certificate fingerprint, once a network listener is up.
 	pub tls_fingerprint: RwLock<Option<String>>,
+	/// The socket address the TLS listener bound to, once up.
+	pub tls_address: RwLock<Option<std::net::SocketAddr>>,
 	/// The rendezvous key the daemon proves itself to relays with.
 	pub relay_key: quant_relay::RelayKey,
 }
@@ -178,6 +180,7 @@ impl State {
 			capture_control: crate::capture::Control::default(),
 			started_at: Timestamp::now(),
 			tls_fingerprint: RwLock::new(None),
+			tls_address: RwLock::new(None),
 			relay_key,
 		};
 		// The rolling buffer's retention follows the capture settings, not

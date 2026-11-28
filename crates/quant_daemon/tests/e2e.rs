@@ -648,6 +648,10 @@ async fn devices_connect_over_tls_only_to_the_pinned_certificate() {
 		hello.tls_fingerprint.as_deref(),
 		Some(again.fingerprint().as_str())
 	);
+	assert_eq!(
+		hello.tls_address.as_deref(),
+		Some(address.to_string().as_str())
+	);
 
 	let mut phone = Client::new(pinned, Identity::generate("Pixel"));
 	let pairing = phone

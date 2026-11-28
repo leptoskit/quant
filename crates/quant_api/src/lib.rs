@@ -194,6 +194,9 @@ pub struct Hello {
 	/// connect over the network.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tls_fingerprint: Option<String>,
+	/// The `host:port` the daemon's TLS listener bound to, once up.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tls_address: Option<String>,
 	/// The relay the daemon keeps a listener on, when the owner set one.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub relay: Option<String>,
@@ -1340,5 +1343,26 @@ mod tests {
 		);
 		assert_eq!(Permission::from_detail("microphone error: busy"), None);
 		assert_eq!(Permission::from_detail("paused: idle"), None);
+	}
+
+	#[test]
+	fn hello_deserializes_without_tls_address_for_backward_compatibility() {
+		let legacy =
+			r#"{"service":"quant","version":"0.1.0","vault_id":"v1","tls_fingerprint":"abc"}"#;
+		let parsed: Hello = serde_json::from_str(legacy).unwrap();
+		assert_eq!(parsed.tls_fingerprint.as_deref(), Some("abc"));
+		assert_eq!(parsed.tls_address, None);
+		assert!(
+			!serde_json::to_string(&parsed)
+				.unwrap()
+				.contains("tls_address")
+		);
+
+		let with_addr = Hello {
+			tls_address: Some("0.0.0.0:9000".into()),
+			..parsed
+		};
+		let json = serde_json::to_string(&with_addr).unwrap();
+		assert_eq!(serde_json::from_str::<Hello>(&json).unwrap(), with_addr);
 	}
 }

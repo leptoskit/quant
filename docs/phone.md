@@ -167,6 +167,20 @@ reach it.
 quant service install --tcp 0.0.0.0:7717
 ```
 
+On this Mac you can skip the terminal. Open Quant's window, choose **Status**,
+and press **Connect a phone**. It shows the same `quant://link` that
+`quant link` prints, with the QR code drawn on this Mac, and a read-only field
+holding the link for a camera or scanner that cannot open `quant://` links.
+When the phone appears under **Agents**, check that its pairing code matches
+the one on the phone, then approve it.
+
+The window never starts or changes the daemon. If the card says Quant is not
+listening for phones, or is bound only to loopback, run
+`quant service install --tcp 0.0.0.0:7717` (or
+`quant daemon --tcp 0.0.0.0:7717`) yourself, then open the card again. The link
+uses the TLS bind address and port the daemon actually advertises (including
+non-default ports and bracketed IPv6 hosts), rather than guessing port 7717.
+
 **Over Wi-Fi.** With the phone on the same network, run `quant link`. It
 prints a link that starts with `quant://link`. Get that text onto the phone
 and paste it into the app, then tap Connect.
@@ -336,8 +350,9 @@ quant series device.battery --from -6h
   away ends collection until it is opened again; the notification going away
   is the sign. Collection does not restart after a reboot until you open the
   app.
-- **Pairing is by pasted link.** The app cannot scan the QR code `quant link`
-  prints or open `quant://` links yet.
+- **Pairing is by pasted link.** The desktop window can draw the same link as
+  a QR code, but the phone app cannot scan a code or open `quant://` links
+  itself yet, so paste the link into its field.
 - **Background timers are unproven.** Location and delivery are driven by
   plugin replies and the background service's wake, so they do not depend on
   the screen's timer. The periodic app usage read does. If Android holds that
