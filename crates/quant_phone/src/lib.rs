@@ -22,6 +22,7 @@
 //! service's worker thread sleeps until the screen or the platform's
 //! background wake gives it something to do.
 
+mod ask;
 mod companion;
 mod saved;
 mod service;

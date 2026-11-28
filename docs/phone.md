@@ -1,9 +1,26 @@
 # Quant on a phone
 
-The phone app is a collector. It records where the phone is, which apps were
-in front, and its battery and thermal state, and delivers that to your vault.
-It has no vault of its own and can read nothing back: it pairs with write
-scopes only.
+The phone app starts as a write-only collector. It records where the phone is,
+which apps were in front, its battery and thermal state, and health or sensor
+readings, and delivers them to your vault. By default it pairs with write scopes
+only and keeps recording offline without needing any read access.
+
+When you explicitly opt in, the phone can also request a separate companion
+identity (with its own signing key and owner-approved grant) for two optional
+tabs beside **Phone**:
+
+- **Vault** (`*:summary` or narrower read scopes you approve): browse every
+  permitted stream—including custom streams—grouped by family, switch between
+  24-hour and 7-day ranges, and open any stream on demand for numeric values
+  with declared units, duration breakdowns, or record counts. Never raw records,
+  text, or media, and never an owner passphrase.
+- **Ask** (`companion:write`): choose an approved agent from your vault's agent
+  directory, send a question to its targeted inbox, and read its actual reply
+  and citations once the agent pulls and answers it.
+
+Either capability can be enabled on its own (stats-only, ask-only, or both),
+and changing capabilities requires explicit owner approval on your computer.
+Collection, queueing, and delivery never depend on companion access.
 
 It is the `android` and `ios` targets of the same Leptoskit application as
 the desktop window. Nothing has been published; this page covers building it
@@ -167,15 +184,16 @@ reach it.
 quant service install --tcp 0.0.0.0:7717
 ```
 
-**Over Wi-Fi.** With the phone on the same network, run `quant link`. It
-prints a link that starts with `quant://link`. Get that text onto the phone:
-open it from a message to yourself, another app, or the phone's own camera or
-QR reader, and Quant shows what the link names. Paste it into the app if you
-prefer. Either way, tap Connect.
+**Over Wi-Fi.** With the phone on the same network, open desktop Quant (or run
+`quant link`). Scan the QR code shown by desktop Quant with the phone's own
+camera, or open the `quant://link` from a message or another app; Quant shows
+the vault destination for review before sending anything. Pasting the link into
+the app remains available as a fallback. Either way, tap Connect.
 
 Opening the link only offers the Connect card. Quant does not pair, replace a
 paired vault, start or stop collection, or discard readings until you tap
-Connect, and the vault still asks you to approve the phone's code.
+Connect, and the vault still asks you to approve the phone's code in desktop
+Quant or with `quant approve`.
 
 **Over the USB cable.** No shared network is needed while the cable is in.
 Tap the link field in the app, then:
@@ -215,6 +233,42 @@ Mac's clipboard for it.
 The link carries the vault's certificate fingerprint. The phone talks to
 nothing whose certificate does not match it, directly or through a relay, and
 refuses any address that does not come as a pairing link.
+
+## Vault stats and Ask (optional companion)
+
+After pairing, the phone screen shows three segments: **Phone**, **Vault**, and
+**Ask**. A recording-only user can stay on **Phone** without enabling either
+companion capability, and opening **Vault** or **Ask** never triggers OS
+collection permission prompts.
+
+To enable **Vault**, **Ask**, or both:
+
+1. Open **Vault** or **Ask**, turn on **View stats** or **Ask agents**, and tap
+   **Request access**. Quant generates a separate companion signing key and
+   shows one pairing code and approval command.
+2. On your computer, open **Agents** → **Waiting for approval** in desktop Quant
+   and approve the code with the scopes you want (or run the printed
+   `quant approve ...` command):
+   - `*:summary` (or narrower stream/family summary scopes) for **Vault**.
+   - `companion:write` for **Ask**.
+3. Tap **I approved it** on the phone.
+
+Changing access later prepares an explicit `quant approve` update for that same
+companion code so existing access stays on until you approve the change.
+
+- **Vault** pages through every permitted stream in the vault catalog (including
+  custom streams) and loads per-stream numeric channels, units, buckets, or
+  duration groups on demand. Sample counts are never turned into totals, and
+  units come strictly from each stream's declared schema.
+- **Ask** lists approved agents from your vault's companion directory and sends
+  questions with an idempotency key retained across retries. Approved agents
+  retrieve questions when they check their Quant inbox; Quant never infers
+  whether an agent is online and never invents a reply when none has been
+  submitted.
+
+Vault results, typed questions, and agent replies are kept strictly in memory
+and cleared whenever companion access or the paired vault changes. They are
+never written to the encrypted spool or local disk.
 
 ## Permissions
 
@@ -315,10 +369,15 @@ Everything is in the app's private data directory.
   `secure-store` plugin. If the keystore fails to answer, the app does not
   make a new key, because a new key means discarding readings the old one
   sealed. If the key is truly gone, the screen offers to start storage over.
-- `phone.identity.json` is the phone's signing key and client id. It lets the
-  phone add to the vault and read nothing.
+- `phone.identity.json` is the write-only collector's signing key and client
+  id. It lets the phone add to the vault and read nothing.
+- `phone.companion.identity.json` is created only if you explicitly request
+  **Vault** or **Ask** access. It holds the companion's separate signing key
+  and client id, and is deleted when you remove companion access, switch vaults,
+  or revoke its grant. No stats summaries, typed questions, or agent replies
+  are written to disk.
 - `phone.json` is the device id, the pairing link, whether collecting is on,
-  and the app usage watermark.
+  and the app usage and health sync watermarks.
 
 The app opts out of Android backup and device-to-device transfer. A restored
 copy would be a second phone claiming to be the first, with a spool it could

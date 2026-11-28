@@ -73,29 +73,37 @@ pub const WATCH_SCOPES: [&str; 5] = [
 /// stream the owner chose to share, never records, text, or media.
 pub const STATS_SCOPES: [&str; 1] = ["*:summary"];
 
+/// The scope the opt-in Ask companion asks for: sending questions to approved
+/// agents and reading their actual replies, never reading vault streams
+/// directly.
+pub const ASK_SCOPES: [&str; 1] = ["companion:write"];
+
 /// One capability the opt-in companion identity can ask the owner to
 /// approve.
 ///
 /// The companion has its own signing key and its own grant, separate from
-/// the write-only collector's. Follow-on features add a variant here with
-/// their own scopes; the request, approval, revocation, and clearing
-/// workflow stays exactly the same.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// the write-only collector's. Capabilities are separately selectable on that
+/// identity; approving one never grants another without explicit owner
+/// approval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompanionCapability {
 	/// Read bounded aggregates from the streams the owner shares.
 	StatsSummary,
+	/// Send questions to approved agents and read their actual replies.
+	AskAgents,
 }
 
 impl CompanionCapability {
 	/// Every capability this build can request, in approval order.
-	pub const ALL: [Self; 1] = [Self::StatsSummary];
+	pub const ALL: [Self; 2] = [Self::StatsSummary, Self::AskAgents];
 
 	/// The scopes this capability asks the owner for. A capability never
 	/// widens another one's request.
 	pub fn scopes(self) -> &'static [&'static str] {
 		match self {
 			Self::StatsSummary => &STATS_SCOPES,
+			Self::AskAgents => &ASK_SCOPES,
 		}
 	}
 
@@ -103,6 +111,7 @@ impl CompanionCapability {
 	pub fn label(self) -> &'static str {
 		match self {
 			Self::StatsSummary => "Stats",
+			Self::AskAgents => "Ask",
 		}
 	}
 }
@@ -169,16 +178,28 @@ pub enum StatsAccess {
 	},
 }
 
-/// What the screen knows about the opt-in stats companion without asking
+/// What the screen knows about one opt-in companion capability without asking
 /// the vault.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StatsState {
-	/// How the companion stands.
+	/// How this capability stands.
 	pub access: StatsAccess,
 	/// The command that approves the companion, while it waits.
 	pub approve: Option<String>,
-	/// Why the last request or summary stopped, when it did.
+	/// Why the last request or query stopped, when it did.
 	pub problem: Option<String>,
+}
+
+/// An explicit capability change on an already active companion identity,
+/// waiting for the owner to approve the updated grant on their computer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionChange {
+	/// The companion identity's pairing code on the vault.
+	pub code: String,
+	/// The capabilities requested for the updated grant.
+	pub capabilities: Vec<CompanionCapability>,
+	/// The exact command the owner runs to approve the updated grant.
+	pub approve: String,
 }
 
 /// How often the screen asks the service to look again and upload.
@@ -217,6 +238,22 @@ pub struct Snapshot {
 	/// it.
 	#[serde(default)]
 	pub stats: StatsState,
+	/// The opt-in Ask companion (`companion:write`) on the same companion
+	/// identity. Collection and delivery never depend on it.
+	#[serde(default)]
+	pub ask: StatsState,
+	/// A requested capability change on an already active companion identity,
+	/// waiting for explicit owner approval.
+	#[serde(default)]
+	pub companion_change: Option<CompanionChange>,
+	/// Bumped whenever the paired vault or companion identity/grant changes,
+	/// so the screen drops cached session data and ignores stale responses.
+	#[serde(default)]
+	pub vault_generation: u64,
+	/// Per-launch random prefix used by the screen to mint collision-free
+	/// idempotency keys for companion messages.
+	#[serde(default)]
+	pub session_nonce: String,
 	/// What each source has handed over since the app started.
 	pub sources: Vec<SourceRow>,
 	/// The result of the last action.
@@ -515,6 +552,15 @@ pub struct VaultStats {
 	pub truncated: bool,
 	/// Whether some stream detail was left out by the detail bound.
 	pub details_truncated: bool,
+	/// Starting offset of this page within the permitted stream catalog.
+	#[serde(default)]
+	pub offset: usize,
+	/// Total permitted streams in the catalog.
+	#[serde(default)]
+	pub total_streams: usize,
+	/// Next catalog offset when more permitted streams follow this page.
+	#[serde(default)]
+	pub next_offset: Option<usize>,
 	/// When the vault answered, as the screen words it.
 	pub fetched: String,
 }
@@ -531,6 +577,150 @@ pub struct StatsReply {
 	pub problem: Option<String>,
 	/// The bounded summary, when the vault answered.
 	pub summary: Option<VaultStats>,
+}
+
+/// The answer to [`Command::VaultStreamDetail`]: on-demand detail for one
+/// permitted stream with bounded channel and duration-group paging.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StreamDetailReply {
+	/// How the stats capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// The window that was asked for.
+	pub window: StatsWindow,
+	/// How the window reads, such as "Past 24 hours".
+	pub span: String,
+	/// The effective range's start, as the screen words it.
+	pub from: Option<String>,
+	/// The effective range's end, as the screen words it.
+	pub to: Option<String>,
+	/// The effective range's start, in Unix milliseconds.
+	pub from_ms: Option<i64>,
+	/// The effective range's end, in Unix milliseconds.
+	pub to_ms: Option<i64>,
+	/// When the vault answered, as the screen words it.
+	pub fetched: Option<String>,
+	/// The stream's detail, when the vault answered.
+	pub stream: Option<StatsStream>,
+	/// Starting offset of the returned channels within numeric detail.
+	#[serde(default)]
+	pub channel_offset: usize,
+	/// Total channels on this stream.
+	#[serde(default)]
+	pub total_channels: usize,
+	/// Next channel offset when more channels follow this page.
+	#[serde(default)]
+	pub next_channel_offset: Option<usize>,
+	/// Starting offset of the returned duration groups.
+	#[serde(default)]
+	pub group_offset: usize,
+	/// Total duration groups on this stream.
+	#[serde(default)]
+	pub total_groups: usize,
+	/// Next group offset when more duration groups follow this page.
+	#[serde(default)]
+	pub next_group_offset: Option<usize>,
+}
+
+/// One approved agent the companion may message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionAgentRow {
+	/// The agent client's id string.
+	pub id: String,
+	/// The name the owner approved.
+	pub name: String,
+	/// Product/model detail the agent declared at pairing, when present.
+	#[serde(default)]
+	pub detail: Option<String>,
+}
+
+/// Where one companion message stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionReplyStatus {
+	/// Waiting in the addressed agent's Quant inbox for an actual reply.
+	Waiting,
+	/// Answered by the addressed agent.
+	Answered,
+	/// Closed without an answer (expired or access withdrawn).
+	Closed,
+}
+
+/// One question this companion sent to an approved agent and any actual reply.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CompanionMessageRow {
+	/// The message id string.
+	pub id: String,
+	/// The addressed agent's id string.
+	pub to_id: String,
+	/// The addressed agent's name.
+	pub to_name: String,
+	/// The question submitted.
+	pub question: String,
+	/// When it was submitted, as the screen words it.
+	pub submitted: String,
+	/// When it was submitted, in Unix milliseconds.
+	pub submitted_ms: i64,
+	/// Where it stands.
+	pub status: CompanionReplyStatus,
+	/// The agent's actual reply, once answered. Never manufactured.
+	#[serde(default)]
+	pub answer: Option<String>,
+	/// When the agent answered, as the screen words it.
+	#[serde(default)]
+	pub answered: Option<String>,
+	/// When the agent answered, in Unix milliseconds.
+	#[serde(default)]
+	pub answered_ms: Option<i64>,
+	/// Record ids cited by the reply.
+	#[serde(default)]
+	pub citations: Vec<String>,
+}
+
+/// The answer to [`Command::CompanionAgents`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionAgentsReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// Approved agents this phone may address.
+	pub agents: Vec<CompanionAgentRow>,
+}
+
+/// The answer to [`Command::CompanionMessages`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionMessagesReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// This companion's own messages, newest first.
+	pub messages: Vec<CompanionMessageRow>,
+	/// When the vault answered, as the screen words it.
+	#[serde(default)]
+	pub fetched: Option<String>,
+}
+
+/// The answer to [`Command::SendCompanionMessage`] and
+/// [`Command::CompanionMessage`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionMessageReply {
+	/// How the Ask capability stands.
+	pub access: StatsAccess,
+	/// The command that approves the companion, while it waits.
+	pub approve: Option<String>,
+	/// Why the request stopped, when it did.
+	pub problem: Option<String>,
+	/// The message, when the vault answered.
+	pub message: Option<CompanionMessageRow>,
 }
 
 /// Something the screen asks the service to do.
@@ -600,15 +790,81 @@ pub enum Command {
 	/// only way the companion identity is ever requested; collection never
 	/// asks for it on its own.
 	RequestStats,
+	/// Ask the owner to approve or update the selected companion capabilities
+	/// on this phone's companion identity.
+	RequestCompanion {
+		/// Selected capabilities (stats, ask, or both).
+		capabilities: Vec<CompanionCapability>,
+	},
+	/// Check the live companion grant against the vault without creating a
+	/// new identity or widening scopes.
+	RefreshCompanion,
+	/// Dismiss an unapproved capability change prompt while keeping the
+	/// current companion grant intact.
+	CancelCompanionChange,
 	/// Forget the stats companion and its signing key. The collector's
 	/// identity, the encrypted spool, and everything waiting are untouched.
 	ForgetStats,
+	/// Forget the companion identity and its signing key (alias for
+	/// [`Command::ForgetStats`]).
+	ForgetCompanion,
 	/// Read a bounded summary through the approved stats companion. Answers
 	/// [`ReplyData::VaultStats`] with its access, approval, offline, or empty
 	/// state.
 	VaultStats {
 		/// Which window to summarise.
 		window: StatsWindow,
+	},
+	/// Read one bounded page of the permitted stream catalog with effective
+	/// range, counts, and first/last timestamps. Answers
+	/// [`ReplyData::VaultStats`].
+	VaultCatalog {
+		/// Which window to summarise.
+		window: StatsWindow,
+		/// Starting index in the sorted stream catalog.
+		offset: usize,
+		/// Maximum streams to return in this page (clamped by the service).
+		limit: usize,
+	},
+	/// Read on-demand detail for one permitted stream, with bounded channel
+	/// and duration-group paging. Answers [`ReplyData::VaultStreamDetail`].
+	VaultStreamDetail {
+		/// The stream id, such as `health.heart_rate` or a custom stream.
+		stream: String,
+		/// Which window to read.
+		window: StatsWindow,
+		/// Starting channel index for numeric streams.
+		#[serde(default)]
+		channel_offset: usize,
+		/// Starting duration-group index for event streams.
+		#[serde(default)]
+		group_offset: usize,
+	},
+	/// List approved agents this companion may address. Answers
+	/// [`ReplyData::CompanionAgents`].
+	CompanionAgents,
+	/// List this companion's own messages and actual replies. Answers
+	/// [`ReplyData::CompanionMessages`].
+	CompanionMessages {
+		/// Maximum messages to return (bounded by the daemon).
+		#[serde(default)]
+		limit: Option<usize>,
+	},
+	/// Send a question to one approved agent with an idempotency key.
+	/// Answers [`ReplyData::CompanionMessage`].
+	SendCompanionMessage {
+		/// Target approved agent id string.
+		to: String,
+		/// Question text.
+		question: String,
+		/// Idempotency key retained across unresolved retries.
+		dedupe: String,
+	},
+	/// Fetch one of this companion's messages and any actual reply. Answers
+	/// [`ReplyData::CompanionMessage`].
+	CompanionMessage {
+		/// Message id string.
+		id: String,
 	},
 }
 
@@ -643,10 +899,31 @@ pub enum ReplyData {
 		/// Pairing link URI.
 		link: String,
 	},
-	/// The answer to [`Command::VaultStats`].
+	/// The answer to [`Command::VaultStats`] and [`Command::VaultCatalog`].
 	VaultStats {
 		/// Where access stands, and the bounded summary when it answered.
 		stats: StatsReply,
+	},
+	/// The answer to [`Command::VaultStreamDetail`].
+	VaultStreamDetail {
+		/// Where access stands, and the stream detail when it answered.
+		detail: Box<StreamDetailReply>,
+	},
+	/// The answer to [`Command::CompanionAgents`].
+	CompanionAgents {
+		/// Where access stands, and the approved agent directory.
+		reply: CompanionAgentsReply,
+	},
+	/// The answer to [`Command::CompanionMessages`].
+	CompanionMessages {
+		/// Where access stands, and this companion's messages.
+		reply: CompanionMessagesReply,
+	},
+	/// The answer to [`Command::SendCompanionMessage`] and
+	/// [`Command::CompanionMessage`].
+	CompanionMessage {
+		/// Where access stands, and the message.
+		reply: CompanionMessageReply,
 	},
 }
 
@@ -1082,11 +1359,15 @@ mod tests {
 	}
 
 	#[test]
-	fn the_stats_companion_asks_for_aggregates_only() {
+	fn the_companion_capabilities_keep_separate_scopes() {
 		assert_eq!(CompanionCapability::StatsSummary.scopes(), ["*:summary"]);
+		assert_eq!(CompanionCapability::AskAgents.scopes(), ["companion:write"]);
 		assert_eq!(
 			CompanionCapability::ALL,
-			[CompanionCapability::StatsSummary]
+			[
+				CompanionCapability::StatsSummary,
+				CompanionCapability::AskAgents
+			]
 		);
 		assert!(
 			CompanionCapability::StatsSummary
@@ -1095,6 +1376,7 @@ mod tests {
 				.all(|scope| scope.ends_with(":summary"))
 		);
 		assert_eq!(CompanionCapability::StatsSummary.label(), "Stats");
+		assert_eq!(CompanionCapability::AskAgents.label(), "Ask");
 	}
 
 	#[test]
@@ -1107,13 +1389,47 @@ mod tests {
 	}
 
 	#[test]
-	fn stats_commands_and_replies_round_trip_as_tagged_json() {
+	fn stats_and_ask_commands_and_replies_round_trip_as_tagged_json() {
 		let command = Command::VaultStats {
 			window: StatsWindow::Week,
 		};
 		let json = serde_json::to_string(&command).unwrap();
 		assert_eq!(json, r#"{"command":"vault_stats","window":"week"}"#);
 		assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+
+		for extra in [
+			Command::RequestCompanion {
+				capabilities: vec![
+					CompanionCapability::StatsSummary,
+					CompanionCapability::AskAgents,
+				],
+			},
+			Command::RefreshCompanion,
+			Command::CancelCompanionChange,
+			Command::ForgetCompanion,
+			Command::VaultCatalog {
+				window: StatsWindow::Day,
+				offset: 24,
+				limit: 24,
+			},
+			Command::VaultStreamDetail {
+				stream: "health.heart_rate".into(),
+				window: StatsWindow::Week,
+				channel_offset: 8,
+				group_offset: 0,
+			},
+			Command::CompanionAgents,
+			Command::CompanionMessages { limit: Some(50) },
+			Command::SendCompanionMessage {
+				to: "agent-1".into(),
+				question: "How did I sleep?".into(),
+				dedupe: "m-abc12345-1".into(),
+			},
+			Command::CompanionMessage { id: "msg-1".into() },
+		] {
+			let encoded = serde_json::to_string(&extra).unwrap();
+			assert_eq!(serde_json::from_str::<Command>(&encoded).unwrap(), extra);
+		}
 
 		let reply = Reply::data(ReplyData::VaultStats {
 			stats: StatsReply {
@@ -1168,20 +1484,54 @@ mod tests {
 					}],
 					truncated: false,
 					details_truncated: false,
+					offset: 0,
+					total_streams: 1,
+					next_offset: None,
 					fetched: "Today 13:07".into(),
 				}),
 			},
 		});
 		let json = serde_json::to_string(&reply).unwrap();
 		assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
+
+		let ask_reply = Reply::data(ReplyData::CompanionMessage {
+			reply: CompanionMessageReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				message: Some(CompanionMessageRow {
+					id: "msg-1".into(),
+					to_id: "agent-1".into(),
+					to_name: "Coach".into(),
+					question: "What was my heart rate?".into(),
+					submitted: "Today 13:00".into(),
+					submitted_ms: 1000,
+					status: CompanionReplyStatus::Answered,
+					answer: Some("Average was 72 bpm.".into()),
+					answered: Some("Today 13:02".into()),
+					answered_ms: Some(2000),
+					citations: vec!["rec-1".into()],
+				}),
+			},
+		});
+		let json = serde_json::to_string(&ask_reply).unwrap();
+		assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), ask_reply);
 	}
 
 	#[test]
-	fn a_snapshot_without_stats_still_loads() {
+	fn a_snapshot_without_companion_fields_still_loads() {
 		let mut json = serde_json::to_value(Snapshot::default()).unwrap();
-		json.as_object_mut().unwrap().remove("stats");
+		let object = json.as_object_mut().unwrap();
+		object.remove("stats");
+		object.remove("ask");
+		object.remove("companion_change");
+		object.remove("vault_generation");
+		object.remove("session_nonce");
 		let snapshot: Snapshot = serde_json::from_value(json).unwrap();
 		assert_eq!(snapshot.stats, StatsState::default());
-		assert_eq!(snapshot.stats.access, StatsAccess::NotRequested);
+		assert_eq!(snapshot.ask, StatsState::default());
+		assert_eq!(snapshot.companion_change, None);
+		assert_eq!(snapshot.vault_generation, 0);
+		assert_eq!(snapshot.session_nonce, "");
 	}
 }

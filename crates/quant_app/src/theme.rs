@@ -52,6 +52,24 @@ pub const SECONDARY: &str =
 /// A third action: a text-weight button that leaves the layout alone.
 pub const QUIET: &str =
 	"px-4 py-3 rounded-xl text-[#A9A3D6] text-sm font-medium active:bg-[#221E4F]";
+/// Compact secondary action for inline toolbars, segment headers, and cards.
+pub const COMPACT: &str =
+	"px-3.5 py-2 rounded-xl bg-[#221E4F] text-[#E4E0FA] text-sm font-medium active:bg-[#2C2763]";
+/// Compact primary action for inline toggles and active chips.
+pub const COMPACT_ACTIVE: &str =
+	"px-3.5 py-2 rounded-xl bg-[#6B5BF5] text-white text-sm font-semibold active:bg-[#5A4AE6]";
+/// A badge showing an active/answered state.
+pub const BADGE_OK: &str =
+	"px-2.5 py-1 rounded-full bg-[#123A30] text-xs font-semibold text-[#5BE0B3]";
+/// A badge showing a waiting/pending state.
+pub const BADGE_WARN: &str =
+	"px-2.5 py-1 rounded-full bg-[#3D2E14] text-xs font-semibold text-[#FFC46B]";
+/// A badge showing a muted/closed or neutral state.
+pub const BADGE_MUTED: &str =
+	"px-2.5 py-1 rounded-full bg-[#221E4F] text-xs font-semibold text-[#A9A3D6]";
+/// A badge showing a revoked/error state.
+pub const BADGE_BAD: &str =
+	"px-2.5 py-1 rounded-full bg-[#3D1626] text-xs font-semibold text-[#FF8FA3]";
 /// A text field where the owner pastes a pairing link.
 pub const INPUT: &str =
 	"px-4 py-4 rounded-2xl border border-[#3A3380] bg-[#0B0A1D] text-base text-[#F4F1FF]";
@@ -253,6 +271,12 @@ pub enum Icon {
 	Check,
 	/// A left chevron.
 	Back,
+	/// A bar-chart icon for Vault stats.
+	Chart,
+	/// A message bubble for Ask.
+	Chat,
+	/// A link / invitation icon.
+	Link,
 }
 
 impl Icon {
@@ -291,6 +315,14 @@ impl Icon {
 			Icon::Bell => "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 20.5a2 2 0 0 0 4 0",
 			Icon::Check => "M5 12.5l4.5 4.5L19 7.5",
 			Icon::Back => "M15 5l-7 7 7 7",
+			Icon::Chart => "M4 20h16M7 16v-5M12 16V7M17 16v-8",
+			Icon::Chat => {
+				"M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"
+			}
+			Icon::Link => {
+				"M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.22M14 11a5 5 0 0 \
+				 0-7.07 0l-2.12 2.12a5 5 0 0 0 7.07 7.07l1.41-1.41"
+			}
 		}
 	}
 }
@@ -353,6 +385,9 @@ mod tests {
 			Icon::Bell,
 			Icon::Check,
 			Icon::Back,
+			Icon::Chart,
+			Icon::Chat,
+			Icon::Link,
 		] {
 			assert!(PathData::parse(icon.path()).is_ok(), "{icon:?}");
 		}
