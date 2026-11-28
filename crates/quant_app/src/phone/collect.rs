@@ -59,6 +59,9 @@ use leptoskit_plugin_watch_sync::guest::WatchSync;
 use leptoskit_plugin_wearable as wearable;
 use leptoskit_plugin_wearable::guest::Wearable;
 use quant_model::phone::Command;
+use quant_model::phone::CompanionAgentsReply;
+use quant_model::phone::CompanionMessageReply;
+use quant_model::phone::CompanionMessagesReply;
 use quant_model::phone::HEALTH_SECONDS;
 #[cfg(any(feature = "android", feature = "ios"))]
 use quant_model::phone::LINK_NEXT;
@@ -66,9 +69,13 @@ use quant_model::phone::LINK_NEXT;
 use quant_model::phone::LINK_PLUGIN;
 use quant_model::phone::Link;
 use quant_model::phone::MAX_EVENT_PAGES;
+use quant_model::phone::MAX_STATS_STREAMS;
 use quant_model::phone::Reading;
 use quant_model::phone::ReplyData;
+use quant_model::phone::StatsAccess;
+use quant_model::phone::StatsReply;
 use quant_model::phone::Storage;
+use quant_model::phone::StreamDetailReply;
 use quant_model::phone::TICK_SECONDS;
 use quant_model::phone::USAGE_SECONDS;
 
@@ -76,6 +83,7 @@ use super::Action;
 use super::Grant;
 #[cfg(any(feature = "android", feature = "ios"))]
 use super::Invite;
+use super::Segment;
 use super::State;
 use super::Step;
 use super::bridge;
@@ -173,12 +181,38 @@ impl Running {
 	}
 }
 
+/// How often the visible Ask segment polls for replies while a message is
+/// waiting for an agent.
+const ASK_REFRESH: Duration = Duration::from_secs(10);
+
 /// Start following the service and collecting.
 pub fn start(state: &State) {
 	spawn(follow(state.clone()));
 	spawn(run(state.clone()));
+	spawn(ask_autorefresh(state.clone()));
 	#[cfg(any(feature = "android", feature = "ios"))]
 	spawn(watch_links(state.clone()));
+}
+
+/// Automatically refresh the visible Ask conversation while at least one
+/// message is waiting for an agent reply. Stops querying whenever Ask is not
+/// visible or Ask access is not Ready.
+async fn ask_autorefresh(state: State) {
+	loop {
+		if sleep(ASK_REFRESH).await.is_err() {
+			return;
+		}
+		if state.segment.get_untracked() != Segment::Ask {
+			continue;
+		}
+		if state.snapshot.get_untracked().ask.access != StatsAccess::Ready {
+			continue;
+		}
+		let ui = state.ask_ui.get_untracked();
+		if ui.has_waiting() && !ui.loading_messages {
+			state.refresh_ask_messages();
+		}
+	}
 }
 
 /// Carry out something the owner asked for on the screen.
@@ -209,6 +243,156 @@ pub fn act(state: &State, action: Action) {
 			}
 			Action::ToggleLiveWorkout => {
 				toggle_live_workout(&state).await;
+			}
+			Action::LoadVaultCatalog {
+				window,
+				offset,
+				append,
+				request_id,
+			} => {
+				let reply = bridge::send(&Command::VaultCatalog {
+					window,
+					offset,
+					limit: MAX_STATS_STREAMS,
+				})
+				.await;
+				let stats = match reply.data {
+					Some(ReplyData::VaultStats { stats }) => stats,
+					_ => {
+						StatsReply {
+							access: state.snapshot.get_untracked().stats.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not load Vault stats".to_owned())),
+							summary: None,
+						}
+					}
+				};
+				state.apply_vault_catalog(request_id, append, stats);
+			}
+			Action::LoadStreamDetail {
+				stream,
+				window,
+				channel_offset,
+				group_offset,
+				append_channels,
+				append_groups,
+				request_id,
+			} => {
+				let reply = bridge::send(&Command::VaultStreamDetail {
+					stream,
+					window,
+					channel_offset,
+					group_offset,
+				})
+				.await;
+				let detail = match reply.data {
+					Some(ReplyData::VaultStreamDetail { detail }) => detail,
+					_ => {
+						StreamDetailReply {
+							access: state.snapshot.get_untracked().stats.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not load stream detail".to_owned())),
+							window,
+							span: window.label().to_owned(),
+							from: None,
+							to: None,
+							from_ms: None,
+							to_ms: None,
+							fetched: None,
+							stream: None,
+							channel_offset: 0,
+							total_channels: 0,
+							next_channel_offset: None,
+							group_offset: 0,
+							total_groups: 0,
+							next_group_offset: None,
+						}
+					}
+				};
+				state.apply_stream_detail(request_id, append_channels, append_groups, detail);
+			}
+			Action::LoadAskAgents { request_id } => {
+				let reply = bridge::send(&Command::CompanionAgents).await;
+				let agents = match reply.data {
+					Some(ReplyData::CompanionAgents { reply }) => reply,
+					_ => {
+						CompanionAgentsReply {
+							access: state.snapshot.get_untracked().ask.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not load approved agents".to_owned())),
+							agents: Vec::new(),
+						}
+					}
+				};
+				state.apply_ask_agents(request_id, agents);
+			}
+			Action::LoadAskMessages { limit, request_id } => {
+				let reply = bridge::send(&Command::CompanionMessages { limit: Some(limit) }).await;
+				let messages = match reply.data {
+					Some(ReplyData::CompanionMessages { reply }) => reply,
+					_ => {
+						CompanionMessagesReply {
+							access: state.snapshot.get_untracked().ask.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not load agent replies".to_owned())),
+							messages: Vec::new(),
+							fetched: None,
+						}
+					}
+				};
+				state.apply_ask_messages(request_id, messages);
+			}
+			Action::SendAskMessage {
+				to,
+				question,
+				dedupe,
+				request_id,
+			} => {
+				let reply = bridge::send(&Command::SendCompanionMessage {
+					to,
+					question,
+					dedupe,
+				})
+				.await;
+				let sent = match reply.data {
+					Some(ReplyData::CompanionMessage { reply }) => reply,
+					_ => {
+						CompanionMessageReply {
+							access: state.snapshot.get_untracked().ask.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not send question".to_owned())),
+							message: None,
+						}
+					}
+				};
+				state.apply_ask_send(request_id, sent);
+			}
+			Action::CheckAskMessage { id, request_id } => {
+				let reply = bridge::send(&Command::CompanionMessage { id }).await;
+				let msg = match reply.data {
+					Some(ReplyData::CompanionMessage { reply }) => reply,
+					_ => {
+						CompanionMessageReply {
+							access: state.snapshot.get_untracked().ask.access,
+							approve: None,
+							problem: reply
+								.error
+								.or_else(|| Some("Could not check reply".to_owned())),
+							message: None,
+						}
+					}
+				};
+				state.apply_ask_message(request_id, msg);
 			}
 		}
 	});
@@ -269,7 +453,7 @@ async fn follow(state: State) {
 			Ok(snapshot) => {
 				seen = snapshot.version;
 				let now = (snapshot.collecting, snapshot.storage == Storage::Open);
-				state.snapshot.set(snapshot);
+				state.apply_snapshot(snapshot);
 				if last != Some(now) {
 					last = Some(now);
 					sync(&state);

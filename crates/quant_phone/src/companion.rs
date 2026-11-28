@@ -53,7 +53,47 @@ pub fn allows(grant: &Grant, capability: CompanionCapability) -> bool {
 				.iter()
 				.any(|scope| matches!(scope, Scope::Read { .. }))
 		}
+		CompanionCapability::AskAgents => grant.scopes.can_companion(),
 	}
+}
+
+/// Normalize a list of capabilities into canonical order without duplicates.
+pub fn normalize(capabilities: &[CompanionCapability]) -> Vec<CompanionCapability> {
+	let mut out: Vec<CompanionCapability> = capabilities.to_vec();
+	out.sort();
+	out.dedup();
+	out
+}
+
+/// Build the explicit scope list to request or re-approve for `capabilities`.
+///
+/// When updating an already active grant that retains `StatsSummary`, any
+/// read scopes the owner previously narrowed (such as `apps:summary`) are
+/// preserved instead of silently widening back to `*:summary`.
+pub fn scopes_for(capabilities: &[CompanionCapability], existing: Option<&Grant>) -> Vec<String> {
+	let capabilities = normalize(capabilities);
+	let mut scopes = Vec::new();
+	if capabilities.contains(&CompanionCapability::StatsSummary) {
+		let existing_reads: Vec<String> = existing
+			.into_iter()
+			.flat_map(|grant| grant.scopes.0.iter())
+			.filter(|scope| matches!(scope, Scope::Read { .. }))
+			.map(ToString::to_string)
+			.collect();
+		if existing_reads.is_empty() {
+			for scope in CompanionCapability::StatsSummary.scopes() {
+				scopes.push((*scope).to_owned());
+			}
+		} else {
+			scopes.extend(existing_reads);
+		}
+	}
+	if capabilities.contains(&CompanionCapability::AskAgents) {
+		for scope in CompanionCapability::AskAgents.scopes() {
+			scopes.push((*scope).to_owned());
+		}
+	}
+	scopes
 }
 
 #[cfg(test)]
@@ -66,29 +106,76 @@ mod tests {
 	fn grant(scopes: &[&str]) -> Grant {
 		Grant::new(
 			ClientId::new(),
-			"phone stats",
+			"phone companion",
 			Scopes::parse(scopes).unwrap(),
 		)
 	}
 
 	#[test]
-	fn stats_needs_a_read_scope_but_accounts_for_the_owner_over_granting() {
+	fn stats_needs_a_read_scope_and_ask_needs_companion_write() {
 		assert!(!allows(&grant(&[]), CompanionCapability::StatsSummary));
+		assert!(!allows(&grant(&[]), CompanionCapability::AskAgents));
 		assert!(!allows(
 			&grant(&["health:write", "apps:write"]),
 			CompanionCapability::StatsSummary
 		));
 		assert!(!allows(
+			&grant(&["health:write", "apps:write"]),
+			CompanionCapability::AskAgents
+		));
+		assert!(!allows(
 			&grant(&["audit:read"]),
 			CompanionCapability::StatsSummary
+		));
+		assert!(!allows(
+			&grant(&["*:raw", "audit:read"]),
+			CompanionCapability::AskAgents
 		));
 		assert!(allows(
 			&grant(&["health:summary"]),
 			CompanionCapability::StatsSummary
 		));
+		assert!(!allows(
+			&grant(&["health:summary"]),
+			CompanionCapability::AskAgents
+		));
 		assert!(allows(
 			&grant(&["apps:read"]),
 			CompanionCapability::StatsSummary
 		));
+		assert!(allows(
+			&grant(&["companion:write"]),
+			CompanionCapability::AskAgents
+		));
+		assert!(!allows(
+			&grant(&["companion:write"]),
+			CompanionCapability::StatsSummary
+		));
+		let both = grant(&["*:summary", "companion:write"]);
+		assert!(allows(&both, CompanionCapability::StatsSummary));
+		assert!(allows(&both, CompanionCapability::AskAgents));
+	}
+
+	#[test]
+	fn scopes_for_preserves_narrowed_read_scopes_when_adding_ask() {
+		let narrowed = grant(&["apps:summary"]);
+		assert_eq!(
+			scopes_for(
+				&[
+					CompanionCapability::AskAgents,
+					CompanionCapability::StatsSummary
+				],
+				Some(&narrowed)
+			),
+			vec!["apps:summary".to_owned(), "companion:write".to_owned()]
+		);
+		assert_eq!(
+			scopes_for(&[CompanionCapability::AskAgents], Some(&narrowed)),
+			vec!["companion:write".to_owned()]
+		);
+		assert_eq!(
+			scopes_for(&[CompanionCapability::StatsSummary], None),
+			vec!["*:summary".to_owned()]
+		);
 	}
 }

@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use quant_core::DeviceId;
+use quant_model::phone::CompanionCapability;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -34,6 +35,11 @@ pub struct Saved {
 	/// (Android / `HarmonyOS`), used to compute incremental deltas.
 	#[serde(default)]
 	pub pedometer_last_boot_steps: Option<u64>,
+	/// Capabilities last requested for a pending companion pairing, so a
+	/// restart while waiting for approval preserves the approval command.
+	/// Holds only capability flags, never vault stats, questions, or replies.
+	#[serde(default)]
+	pub companion_requested: Vec<CompanionCapability>,
 }
 
 fn yes() -> bool {
@@ -50,6 +56,7 @@ impl Default for Saved {
 			health_token: None,
 			health_until_ms: None,
 			pedometer_last_boot_steps: None,
+			companion_requested: Vec::new(),
 		}
 	}
 }

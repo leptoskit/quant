@@ -10,10 +10,13 @@
 //! it shows, so a new snapshot rebuilds only what changed and the pairing
 //! link being typed keeps its text.
 
+pub mod ask;
 pub mod bridge;
 #[cfg(all(target_arch = "wasm32", feature = "phone"))]
 pub mod collect;
+pub mod companion;
 pub mod splash;
+pub mod vault;
 
 use std::sync::Arc;
 
@@ -25,20 +28,31 @@ use leptoskit::prelude::ActivityIndicator;
 use leptoskit::prelude::Button;
 use leptoskit::prelude::Element;
 use leptoskit::prelude::Get;
+use leptoskit::prelude::GetUntracked;
 use leptoskit::prelude::RwSignal;
 use leptoskit::prelude::ScrollView;
 use leptoskit::prelude::Set;
 use leptoskit::prelude::Switch;
 use leptoskit::prelude::Text;
 use leptoskit::prelude::TextInput;
+use leptoskit::prelude::Update;
 use leptoskit::prelude::View;
 use leptoskit::prelude::component;
 use quant_model::phone::Command;
+use quant_model::phone::CompanionAgentsReply;
+use quant_model::phone::CompanionCapability;
+use quant_model::phone::CompanionMessageReply;
+use quant_model::phone::CompanionMessagesReply;
 use quant_model::phone::Link;
 use quant_model::phone::Snapshot;
 use quant_model::phone::Source;
 use quant_model::phone::SourceRow;
+use quant_model::phone::StatsAccess;
+use quant_model::phone::StatsDetail;
+use quant_model::phone::StatsReply;
+use quant_model::phone::StatsWindow;
 use quant_model::phone::Storage;
+use quant_model::phone::StreamDetailReply;
 
 use crate::theme;
 use crate::theme::Icon;
@@ -388,6 +402,39 @@ impl Permissions {
 	}
 }
 
+/// The three top-level segments of the paired phone companion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Segment {
+	/// Collection status, permissions, delivery, wearables, and sources.
+	#[default]
+	Phone,
+	/// Opt-in bounded Vault stats catalog and per-stream detail.
+	Vault,
+	/// Opt-in targeted Ask inbox for approved agents.
+	Ask,
+}
+
+impl Segment {
+	/// Every segment in navigation order.
+	pub const ALL: [Segment; 3] = [Segment::Phone, Segment::Vault, Segment::Ask];
+
+	fn label(self) -> &'static str {
+		match self {
+			Segment::Phone => "Phone",
+			Segment::Vault => "Vault",
+			Segment::Ask => "Ask",
+		}
+	}
+
+	fn id(self) -> &'static str {
+		match self {
+			Segment::Phone => "phone",
+			Segment::Vault => "vault",
+			Segment::Ask => "ask",
+		}
+	}
+}
+
 /// Something the owner asked for on the screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -406,6 +453,64 @@ pub enum Action {
 	/// Start or stop a continuous live wrist-sensor / workout session on a
 	/// watch target.
 	ToggleLiveWorkout,
+	/// Fetch one bounded page of the Vault stream catalog.
+	LoadVaultCatalog {
+		/// Window to summarise.
+		window: StatsWindow,
+		/// Starting catalog offset.
+		offset: usize,
+		/// Whether to append to existing pages rather than replace.
+		append: bool,
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
+	/// Fetch on-demand detail for one Vault stream.
+	LoadStreamDetail {
+		/// Stream id.
+		stream: String,
+		/// Window to read.
+		window: StatsWindow,
+		/// Starting channel offset for numeric streams.
+		channel_offset: usize,
+		/// Starting duration-group offset for event streams.
+		group_offset: usize,
+		/// Whether to append returned channels to existing ones.
+		append_channels: bool,
+		/// Whether to append returned groups to existing ones.
+		append_groups: bool,
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
+	/// Fetch approved agents from the companion directory.
+	LoadAskAgents {
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
+	/// Fetch this phone's own companion messages and actual replies.
+	LoadAskMessages {
+		/// Maximum messages to fetch.
+		limit: usize,
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
+	/// Submit a question to an approved agent with a stable idempotency key.
+	SendAskMessage {
+		/// Recipient agent id.
+		to: String,
+		/// Question text.
+		question: String,
+		/// Idempotency key retained across unresolved retries.
+		dedupe: String,
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
+	/// Refresh one companion message and any actual reply.
+	CheckAskMessage {
+		/// Message id.
+		id: String,
+		/// Request sequence number used to discard stale replies.
+		request_id: u64,
+	},
 }
 
 /// Carries out an [`Action`].
@@ -433,6 +538,23 @@ pub struct State {
 	pub splash: RwSignal<bool>,
 	/// Whether the owner has left the welcome screen to pair this phone.
 	pub pairing: RwSignal<bool>,
+	/// Which of the three companion segments is active.
+	pub segment: RwSignal<Segment>,
+	/// In-memory Vault stats session state (cleared on vault/access change).
+	pub vault_ui: RwSignal<vault::VaultUiState>,
+	/// In-memory Ask session state (cleared on vault/access change).
+	pub ask_ui: RwSignal<ask::AskUiState>,
+	/// Selected Vault stats toggle when requesting or updating companion
+	/// access.
+	pub cap_stats: RwSignal<bool>,
+	/// Selected Ask toggle when requesting or updating companion access.
+	pub cap_ask: RwSignal<bool>,
+	/// Whether the inline companion access card is open while Ready.
+	pub manage_access: RwSignal<bool>,
+	last_vault_gen: RwSignal<u64>,
+	last_vault: RwSignal<Option<String>>,
+	last_stats_access: RwSignal<StatsAccess>,
+	last_ask_access: RwSignal<StatsAccess>,
 	act: Act,
 }
 
@@ -449,6 +571,19 @@ impl State {
 			live_workout: RwSignal::new(false),
 			splash: RwSignal::new(false),
 			pairing: RwSignal::new(false),
+			segment: RwSignal::new(Segment::Phone),
+			vault_ui: RwSignal::new(vault::VaultUiState::default()),
+			ask_ui: RwSignal::new(ask::AskUiState {
+				message_limit: 50,
+				..ask::AskUiState::default()
+			}),
+			cap_stats: RwSignal::new(true),
+			cap_ask: RwSignal::new(false),
+			manage_access: RwSignal::new(false),
+			last_vault_gen: RwSignal::new(0),
+			last_vault: RwSignal::new(None),
+			last_stats_access: RwSignal::new(StatsAccess::NotRequested),
+			last_ask_access: RwSignal::new(StatsAccess::NotRequested),
 			act,
 		}
 	}
@@ -458,20 +593,715 @@ impl State {
 		(self.act)(action);
 	}
 
-	fn send(&self, command: Command) {
+	pub(crate) fn send(&self, command: Command) {
 		self.act(Action::Command(command));
+	}
+
+	/// Apply a fresh service [`Snapshot`], clearing in-memory Vault and Ask
+	/// session data whenever the vault identity or companion access changes.
+	pub fn apply_snapshot(&self, snapshot: Snapshot) {
+		let prev_gen = self.last_vault_gen.get_untracked();
+		let prev_vault = self.last_vault.get_untracked();
+		let prev_stats = self.last_stats_access.get_untracked();
+		let prev_ask = self.last_ask_access.get_untracked();
+
+		let vault_changed = (prev_gen != 0 && snapshot.vault_generation != prev_gen)
+			|| (prev_vault.is_some() && snapshot.vault != prev_vault)
+			|| matches!(snapshot.link, Link::Unpaired);
+
+		if vault_changed {
+			self.vault_ui.update(vault::VaultUiState::clear_session);
+			self.ask_ui.update(ask::AskUiState::clear_all);
+			self.manage_access.set(false);
+			if matches!(snapshot.link, Link::Unpaired) {
+				self.segment.set(Segment::Phone);
+			}
+		} else {
+			if snapshot.stats.access != StatsAccess::Ready {
+				self.vault_ui.update(vault::VaultUiState::clear_session);
+			}
+			match snapshot.ask.access {
+				StatsAccess::Ready => {}
+				StatsAccess::Unreachable { .. } => {
+					self.ask_ui.update(ask::AskUiState::clear_transient_offline);
+				}
+				_ => {
+					self.ask_ui.update(ask::AskUiState::clear_all);
+				}
+			}
+		}
+
+		let stats_became_ready =
+			prev_stats != StatsAccess::Ready && snapshot.stats.access == StatsAccess::Ready;
+		let ask_became_ready =
+			prev_ask != StatsAccess::Ready && snapshot.ask.access == StatsAccess::Ready;
+
+		self.last_vault_gen.set(snapshot.vault_generation);
+		self.last_vault.set(snapshot.vault.clone());
+		self.last_stats_access.set(snapshot.stats.access.clone());
+		self.last_ask_access.set(snapshot.ask.access.clone());
+		self.snapshot.set(snapshot);
+
+		let segment = self.segment.get_untracked();
+		if stats_became_ready && segment == Segment::Vault {
+			self.reload_vault();
+		}
+		if ask_became_ready && segment == Segment::Ask {
+			self.reload_ask();
+		}
+	}
+
+	/// Align the capability selection switches with what is already enabled
+	/// plus the focused segment's capability.
+	pub(crate) fn sync_capability_toggles(&self, focus: CompanionCapability) {
+		let s = self.snapshot.get_untracked();
+		let has_stats = s.stats.access == StatsAccess::Ready;
+		let has_ask = s.ask.access == StatsAccess::Ready;
+		self.cap_stats
+			.set(has_stats || focus == CompanionCapability::StatsSummary);
+		self.cap_ask
+			.set(has_ask || focus == CompanionCapability::AskAgents);
+	}
+
+	/// Switch between Phone, Vault, and Ask without prompting for any OS
+	/// collection permissions.
+	pub fn select_segment(&self, segment: Segment) {
+		self.segment.set(segment);
+		self.manage_access.set(false);
+		let snapshot = self.snapshot.get_untracked();
+		match segment {
+			Segment::Phone => {}
+			Segment::Vault => {
+				self.sync_capability_toggles(CompanionCapability::StatsSummary);
+				match snapshot.stats.access {
+					StatsAccess::Ready => {
+						let ui = self.vault_ui.get_untracked();
+						if !ui.loaded && !ui.loading_catalog {
+							self.reload_vault();
+						}
+					}
+					StatsAccess::Checking => self.send(Command::RefreshCompanion),
+					_ => {}
+				}
+			}
+			Segment::Ask => {
+				self.sync_capability_toggles(CompanionCapability::AskAgents);
+				match snapshot.ask.access {
+					StatsAccess::Ready => {
+						let ui = self.ask_ui.get_untracked();
+						if (!ui.agents_loaded && !ui.loading_agents)
+							|| (!ui.messages_loaded && !ui.loading_messages)
+						{
+							self.reload_ask();
+						}
+					}
+					StatsAccess::Checking => self.send(Command::RefreshCompanion),
+					_ => {}
+				}
+			}
+		}
+	}
+
+	/// Change the Vault time range, invalidating any in-flight catalog or
+	/// detail request from the previous range.
+	pub fn set_stats_window(&self, window: StatsWindow) {
+		let mut selected = None;
+		let mut catalog_req = 0;
+		let mut detail_req = 0;
+		self.vault_ui.update(|ui| {
+			ui.window = window;
+			ui.catalog_seq = ui.catalog_seq.wrapping_add(1);
+			ui.detail_seq = ui.detail_seq.wrapping_add(1);
+			catalog_req = ui.catalog_seq;
+			detail_req = ui.detail_seq;
+			ui.loading_catalog = true;
+			ui.loading_more = false;
+			ui.loaded = false;
+			ui.streams.clear();
+			ui.next_offset = None;
+			ui.error = None;
+			selected = ui.selected_stream.clone();
+			if selected.is_some() {
+				ui.loading_detail = true;
+				ui.detail = None;
+				ui.detail_error = None;
+				ui.next_channel_offset = None;
+				ui.next_group_offset = None;
+			}
+		});
+		self.act(Action::LoadVaultCatalog {
+			window,
+			offset: 0,
+			append: false,
+			request_id: catalog_req,
+		});
+		if let Some(stream) = selected {
+			self.act(Action::LoadStreamDetail {
+				stream,
+				window,
+				channel_offset: 0,
+				group_offset: 0,
+				append_channels: false,
+				append_groups: false,
+				request_id: detail_req,
+			});
+		}
+	}
+
+	/// Reload the currently visible Vault view (opened stream or catalog page
+	/// 0).
+	pub fn reload_vault(&self) {
+		let mut window = StatsWindow::Day;
+		let mut selected = None;
+		let mut req = 0;
+		self.vault_ui.update(|ui| {
+			window = ui.window;
+			selected = ui.selected_stream.clone();
+			if selected.is_some() {
+				ui.detail_seq = ui.detail_seq.wrapping_add(1);
+				req = ui.detail_seq;
+				ui.loading_detail = true;
+				ui.detail_error = None;
+			} else {
+				ui.catalog_seq = ui.catalog_seq.wrapping_add(1);
+				req = ui.catalog_seq;
+				ui.loading_catalog = true;
+				ui.loading_more = false;
+				ui.error = None;
+			}
+		});
+		if let Some(stream) = selected {
+			self.act(Action::LoadStreamDetail {
+				stream,
+				window,
+				channel_offset: 0,
+				group_offset: 0,
+				append_channels: false,
+				append_groups: false,
+				request_id: req,
+			});
+		} else {
+			self.act(Action::LoadVaultCatalog {
+				window,
+				offset: 0,
+				append: false,
+				request_id: req,
+			});
+		}
+	}
+
+	/// Load the next bounded page of permitted Vault streams.
+	pub fn load_more_vault_streams(&self, offset: usize) {
+		let mut window = StatsWindow::Day;
+		let mut req = 0;
+		let mut start = false;
+		self.vault_ui.update(|ui| {
+			if ui.loading_more {
+				return;
+			}
+			window = ui.window;
+			ui.catalog_seq = ui.catalog_seq.wrapping_add(1);
+			req = ui.catalog_seq;
+			ui.loading_more = true;
+			ui.error = None;
+			start = true;
+		});
+		if start {
+			self.act(Action::LoadVaultCatalog {
+				window,
+				offset,
+				append: true,
+				request_id: req,
+			});
+		}
+	}
+
+	/// Open one stream for on-demand detail, ignoring any earlier stream's
+	/// in-flight detail reply.
+	pub fn open_vault_stream(&self, stream: String) {
+		let mut window = StatsWindow::Day;
+		let mut req = 0;
+		self.vault_ui.update(|ui| {
+			window = ui.window;
+			ui.detail_seq = ui.detail_seq.wrapping_add(1);
+			req = ui.detail_seq;
+			ui.selected_stream = Some(stream.clone());
+			ui.loading_detail = true;
+			ui.detail = None;
+			ui.detail_from = None;
+			ui.detail_to = None;
+			ui.detail_fetched = None;
+			ui.total_channels = 0;
+			ui.next_channel_offset = None;
+			ui.total_groups = 0;
+			ui.next_group_offset = None;
+			ui.detail_error = None;
+		});
+		self.act(Action::LoadStreamDetail {
+			stream,
+			window,
+			channel_offset: 0,
+			group_offset: 0,
+			append_channels: false,
+			append_groups: false,
+			request_id: req,
+		});
+	}
+
+	/// Return from stream detail to the family-grouped catalog, invalidating
+	/// any in-flight detail reply.
+	pub fn close_vault_stream(&self) {
+		self.vault_ui.update(|ui| {
+			ui.detail_seq = ui.detail_seq.wrapping_add(1);
+			ui.selected_stream = None;
+			ui.loading_detail = false;
+			ui.detail = None;
+			ui.detail_error = None;
+		});
+	}
+
+	/// Load the next bounded page of channels for the opened numeric stream.
+	pub fn load_more_stream_channels(&self, channel_offset: usize) {
+		let mut stream = None;
+		let mut window = StatsWindow::Day;
+		let mut req = 0;
+		self.vault_ui.update(|ui| {
+			if ui.loading_detail {
+				return;
+			}
+			stream = ui.selected_stream.clone();
+			window = ui.window;
+			if stream.is_some() {
+				ui.detail_seq = ui.detail_seq.wrapping_add(1);
+				req = ui.detail_seq;
+				ui.loading_detail = true;
+				ui.detail_error = None;
+			}
+		});
+		if let Some(stream) = stream {
+			self.act(Action::LoadStreamDetail {
+				stream,
+				window,
+				channel_offset,
+				group_offset: 0,
+				append_channels: true,
+				append_groups: false,
+				request_id: req,
+			});
+		}
+	}
+
+	/// Load the next bounded page of duration groups for the opened event
+	/// stream.
+	pub fn load_more_stream_groups(&self, group_offset: usize) {
+		let mut stream = None;
+		let mut window = StatsWindow::Day;
+		let mut req = 0;
+		self.vault_ui.update(|ui| {
+			if ui.loading_detail {
+				return;
+			}
+			stream = ui.selected_stream.clone();
+			window = ui.window;
+			if stream.is_some() {
+				ui.detail_seq = ui.detail_seq.wrapping_add(1);
+				req = ui.detail_seq;
+				ui.loading_detail = true;
+				ui.detail_error = None;
+			}
+		});
+		if let Some(stream) = stream {
+			self.act(Action::LoadStreamDetail {
+				stream,
+				window,
+				channel_offset: 0,
+				group_offset,
+				append_channels: false,
+				append_groups: true,
+				request_id: req,
+			});
+		}
+	}
+
+	/// Apply a catalog page reply if its `request_id` is still current.
+	pub fn apply_vault_catalog(&self, request_id: u64, append: bool, reply: StatsReply) {
+		self.vault_ui.update(|ui| {
+			if ui.catalog_seq != request_id {
+				return;
+			}
+			ui.loading_catalog = false;
+			ui.loading_more = false;
+			if let Some(summary) = reply.summary {
+				if summary.window != ui.window {
+					return;
+				}
+				ui.loaded = true;
+				ui.from = Some(summary.from);
+				ui.to = Some(summary.to);
+				ui.fetched = Some(summary.fetched);
+				ui.total_streams = summary.total_streams.max(summary.streams.len());
+				ui.next_offset = summary.next_offset;
+				ui.error = None;
+				if append {
+					for stream in summary.streams {
+						if let Some(slot) = ui
+							.streams
+							.iter_mut()
+							.find(|existing| existing.stream == stream.stream)
+						{
+							*slot = stream;
+						} else {
+							ui.streams.push(stream);
+						}
+					}
+				} else {
+					ui.streams = summary.streams;
+				}
+			} else {
+				ui.error = reply.problem;
+			}
+		});
+	}
+
+	/// Apply a stream detail reply if its `request_id` is still current.
+	pub fn apply_stream_detail(
+		&self,
+		request_id: u64,
+		append_channels: bool,
+		append_groups: bool,
+		reply: StreamDetailReply,
+	) {
+		self.vault_ui.update(|ui| {
+			if ui.detail_seq != request_id {
+				return;
+			}
+			ui.loading_detail = false;
+			if reply.window != ui.window {
+				return;
+			}
+			if let Some(incoming) = reply.stream {
+				if ui.selected_stream.as_deref() != Some(incoming.stream.as_str()) {
+					return;
+				}
+				ui.detail_from = reply.from;
+				ui.detail_to = reply.to;
+				ui.detail_fetched = reply.fetched;
+				ui.total_channels = reply.total_channels;
+				ui.next_channel_offset = reply.next_channel_offset;
+				ui.total_groups = reply.total_groups;
+				ui.next_group_offset = reply.next_group_offset;
+				ui.detail_error = None;
+				if append_channels
+					&& let Some(existing) = ui.detail.as_mut()
+					&& let (
+						StatsDetail::Numeric {
+							channels: cur_channels,
+							channels_truncated,
+							..
+						},
+						StatsDetail::Numeric {
+							channels: new_channels,
+							channels_truncated: new_trunc,
+							..
+						},
+					) = (&mut existing.detail, &incoming.detail)
+				{
+					for ch in new_channels {
+						if !cur_channels.iter().any(|c| c.name == ch.name) {
+							cur_channels.push(ch.clone());
+						}
+					}
+					*channels_truncated = *new_trunc;
+				} else if append_groups
+					&& let Some(existing) = ui.detail.as_mut()
+					&& let (
+						StatsDetail::Durations {
+							groups: cur_groups,
+							truncated,
+							..
+						},
+						StatsDetail::Durations {
+							groups: new_groups,
+							truncated: new_trunc,
+							..
+						},
+					) = (&mut existing.detail, &incoming.detail)
+				{
+					for group in new_groups {
+						if !cur_groups.iter().any(|g| g.group == group.group) {
+							cur_groups.push(group.clone());
+						}
+					}
+					*truncated = *new_trunc;
+				} else {
+					ui.detail = Some(incoming);
+				}
+			} else {
+				ui.detail_error = reply.problem;
+			}
+		});
+	}
+
+	/// Refresh both the approved agent directory and this phone's messages.
+	pub fn reload_ask(&self) {
+		let mut agents_req = 0;
+		let mut messages_req = 0;
+		let mut limit = 50;
+		self.ask_ui.update(|ui| {
+			ui.agents_seq = ui.agents_seq.wrapping_add(1);
+			ui.messages_seq = ui.messages_seq.wrapping_add(1);
+			agents_req = ui.agents_seq;
+			messages_req = ui.messages_seq;
+			ui.loading_agents = true;
+			ui.loading_messages = true;
+			ui.load_error = None;
+			limit = ui.message_limit.max(50);
+		});
+		self.act(Action::LoadAskAgents {
+			request_id: agents_req,
+		});
+		self.act(Action::LoadAskMessages {
+			limit,
+			request_id: messages_req,
+		});
+	}
+
+	/// Refresh only this phone's messages (used by background auto-refresh
+	/// while Ask is visible and waiting on an agent reply).
+	pub fn refresh_ask_messages(&self) {
+		let mut req = 0;
+		let mut limit = 50;
+		self.ask_ui.update(|ui| {
+			ui.messages_seq = ui.messages_seq.wrapping_add(1);
+			req = ui.messages_seq;
+			ui.loading_messages = true;
+			limit = ui.message_limit.max(50);
+		});
+		self.act(Action::LoadAskMessages {
+			limit,
+			request_id: req,
+		});
+	}
+
+	/// Load more messages up to `limit` (bounded to 200 by the vault).
+	pub fn load_more_ask_messages(&self, limit: usize) {
+		let limit = limit.clamp(50, 200);
+		let mut req = 0;
+		self.ask_ui.update(|ui| {
+			ui.message_limit = limit;
+			ui.messages_seq = ui.messages_seq.wrapping_add(1);
+			req = ui.messages_seq;
+			ui.loading_messages = true;
+		});
+		self.act(Action::LoadAskMessages {
+			limit,
+			request_id: req,
+		});
+	}
+
+	/// Choose which approved agent the composer addresses.
+	pub fn select_ask_recipient(&self, id: String) {
+		self.ask_ui.update(|ui| {
+			if ui.recipient_id.as_deref() != Some(id.as_str()) {
+				ui.recipient_id = Some(id);
+				ui.draft_dedupe = None;
+				ui.send_error = None;
+			}
+		});
+	}
+
+	/// Update the editable draft question (survives segment switches; resets
+	/// any unresolved dedupe key only when the text actually changes).
+	pub fn set_ask_draft(&self, text: &str) {
+		self.ask_ui.update(|ui| {
+			if ui.draft_question != text {
+				ui.draft_question = text.to_owned();
+				ui.draft_dedupe = None;
+				ui.send_error = None;
+			}
+		});
+	}
+
+	/// Prepare the composer for a follow-up question to `agent_id`.
+	pub fn prepare_ask_followup(&self, agent_id: String) {
+		self.ask_ui.update(|ui| {
+			if ui.agents.iter().any(|agent| agent.id == agent_id) {
+				ui.recipient_id = Some(agent_id);
+			}
+			ui.draft_dedupe = None;
+			ui.send_error = None;
+		});
+	}
+
+	/// Submit the composed question, blocking duplicate taps while in flight
+	/// and reusing the same `dedupe` key across unresolved retries.
+	pub fn submit_ask_question(&self) {
+		let nonce = {
+			let raw = self.snapshot.get_untracked().session_nonce;
+			if raw.len() >= 6
+				&& raw
+					.chars()
+					.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+			{
+				raw
+			} else {
+				"session".to_owned()
+			}
+		};
+		let mut dispatch: Option<(String, String, String, u64)> = None;
+		self.ask_ui.update(|ui| {
+			if ui.sending {
+				return;
+			}
+			let Some(to) = ui.recipient_id.clone().filter(|id| !id.trim().is_empty()) else {
+				ui.send_error = Some("Choose an approved agent before sending.".to_owned());
+				return;
+			};
+			let question = ui.draft_question.trim().to_owned();
+			if question.is_empty() {
+				ui.send_error = Some("Enter a question before sending.".to_owned());
+				return;
+			}
+			let dedupe = if let Some(existing) = ui.draft_dedupe.clone() {
+				existing
+			} else {
+				ui.draft_counter = ui.draft_counter.saturating_add(1);
+				let minted = format!("m-{nonce}-{}", ui.draft_counter);
+				ui.draft_dedupe = Some(minted.clone());
+				minted
+			};
+			ui.send_seq = ui.send_seq.wrapping_add(1);
+			ui.sending = true;
+			ui.send_error = None;
+			dispatch = Some((to, question, dedupe, ui.send_seq));
+		});
+		if let Some((to, question, dedupe, request_id)) = dispatch {
+			self.act(Action::SendAskMessage {
+				to,
+				question,
+				dedupe,
+				request_id,
+			});
+		}
+	}
+
+	/// Refresh a single waiting message by id.
+	pub fn check_ask_message(&self, id: String) {
+		let mut req = 0;
+		self.ask_ui.update(|ui| {
+			ui.messages_seq = ui.messages_seq.wrapping_add(1);
+			req = ui.messages_seq;
+		});
+		self.act(Action::CheckAskMessage {
+			id,
+			request_id: req,
+		});
+	}
+
+	/// Apply an approved-agent directory reply if its `request_id` is current.
+	pub fn apply_ask_agents(&self, request_id: u64, reply: CompanionAgentsReply) {
+		self.ask_ui.update(|ui| {
+			if ui.agents_seq != request_id {
+				return;
+			}
+			ui.loading_agents = false;
+			if reply.access == StatsAccess::Ready && reply.problem.is_none() {
+				ui.agents_loaded = true;
+				ui.agents = reply.agents;
+				ui.load_error = None;
+				let still_valid = ui
+					.recipient_id
+					.as_deref()
+					.is_some_and(|id| ui.agents.iter().any(|agent| agent.id == id));
+				if !still_valid {
+					ui.recipient_id = ui.agents.first().map(|agent| agent.id.clone());
+					ui.draft_dedupe = None;
+				}
+			} else if let Some(problem) = reply.problem {
+				ui.load_error = Some(problem);
+			}
+		});
+	}
+
+	/// Apply a companion messages list reply if its `request_id` is current.
+	pub fn apply_ask_messages(&self, request_id: u64, reply: CompanionMessagesReply) {
+		self.ask_ui.update(|ui| {
+			if ui.messages_seq != request_id {
+				return;
+			}
+			ui.loading_messages = false;
+			if reply.access == StatsAccess::Ready && reply.problem.is_none() {
+				ui.messages_loaded = true;
+				ui.messages = reply.messages;
+				ui.fetched = reply.fetched;
+				ui.load_error = None;
+			} else if let Some(problem) = reply.problem {
+				ui.load_error = Some(problem);
+			}
+		});
+	}
+
+	/// Apply the result of submitting a question. On success, clears the draft
+	/// and dedupe key and inserts the message; on failure, retains both draft
+	/// and dedupe key for an idempotent retry.
+	pub fn apply_ask_send(&self, request_id: u64, reply: CompanionMessageReply) {
+		self.ask_ui.update(|ui| {
+			if ui.send_seq != request_id {
+				return;
+			}
+			ui.sending = false;
+			if let Some(message) = reply.message {
+				ui.draft_question.clear();
+				ui.draft_dedupe = None;
+				ui.send_error = None;
+				ui.messages_loaded = true;
+				if let Some(slot) = ui.messages.iter_mut().find(|m| m.id == message.id) {
+					*slot = message;
+				} else {
+					ui.messages.insert(0, message);
+				}
+			} else {
+				ui.send_error = reply
+					.problem
+					.or_else(|| Some("Could not send your question; try again.".to_owned()));
+			}
+		});
+	}
+
+	/// Apply a single-message refresh reply if its `request_id` is current.
+	pub fn apply_ask_message(&self, request_id: u64, reply: CompanionMessageReply) {
+		self.ask_ui.update(|ui| {
+			if ui.messages_seq != request_id {
+				return;
+			}
+			if let Some(message) = reply.message {
+				ui.load_error = None;
+				if let Some(slot) = ui.messages.iter_mut().find(|m| m.id == message.id) {
+					*slot = message;
+				} else {
+					ui.messages.insert(0, message);
+				}
+			} else if let Some(problem) = reply.problem {
+				ui.load_error = Some(problem);
+			}
+		});
 	}
 }
 
 /// The whole screen. One stage is built at a time, keyed so a pairing step
 /// keeps its typed link and a snapshot does not rebuild the stage beneath it.
+///
+/// When paired (`Stage::Home`), the top bar and three-segment switcher
+/// (`Phone · Vault · Ask`) stay pinned above the scroll area so navigation is
+/// always discoverable and reachable at a 390×840 viewport.
 #[component]
 pub fn Screen(state: State) -> Element {
 	let splash = state.splash;
 	View()
 		.class(theme::SCREEN)
+		.child(home_header(&state))
 		.child(
-			ScrollView().class("flex-1").child(
+			ScrollView().class("flex-1").test_id("phone-scroll").child(
 				View()
 					.class(theme::CONTENT)
 					.child(storage_card(&state))
@@ -483,6 +1313,58 @@ pub fn Screen(state: State) -> Element {
 		// zero-height region, and its `absolute inset-0` would then cover
 		// that wrapper instead of the screen.
 		.children(splash.get().then(splash::splash))
+}
+
+/// Pinned header shown only in [`Stage::Home`]: brand mark, recording pill,
+/// and the three-segment `Phone · Vault · Ask` navigation bar.
+fn home_header(state: &State) -> Element {
+	let snapshot = state.snapshot;
+	let pairing = state.pairing;
+	let state = state.clone();
+	For(
+		move || {
+			let show = stage(&snapshot.get().link, pairing.get()) == Stage::Home;
+			show.then_some(()).into_iter().collect::<Vec<_>>()
+		},
+		|()| (),
+		move |()| {
+			View()
+				.class("gap-3 px-5 pt-safe-offset-4 pb-3 border-b border-[#2A2560] bg-[#0E0C24]")
+				.child(top_bar(&state))
+				.child(segment_bar(&state))
+		},
+	)
+}
+
+/// Three-segment navigation (`Phone · Vault · Ask`), sized to fit cleanly at
+/// 390px wide without clipping or wrapping.
+fn segment_bar(state: &State) -> Element {
+	let segment = state.segment;
+	let state = state.clone();
+	For(
+		move || vec![segment.get()],
+		Clone::clone,
+		move |active| {
+			View()
+				.class("flex-row gap-1 p-1 rounded-2xl border border-[#2A2560] bg-[#17143A]")
+				.test_id("segment-bar")
+				.children(Segment::ALL.into_iter().map(|tab| {
+					let pick = state.clone();
+					let is_active = tab == active;
+					Button(tab.label())
+						.class(if is_active {
+							"flex-1 py-2.5 rounded-xl bg-[#6B5BF5] text-white text-sm \
+							 font-semibold active:bg-[#5A4AE6]"
+						} else {
+							"flex-1 py-2.5 rounded-xl text-[#A9A3D6] text-sm font-medium \
+							 active:bg-[#221E4F]"
+						})
+						.accessibility_label(format!("{} tab", tab.label()))
+						.test_id(format!("tab-{}", tab.id()))
+						.on_press(move || pick.select_segment(tab))
+				}))
+		},
+	)
 }
 
 /// Which stage the screen shows.
@@ -610,61 +1492,60 @@ fn invite_card(state: &State) -> Element {
 	)
 }
 
-/// The first thing a new owner sees: what Quant is, and the three promises
-/// that make it worth handing over a phone.
+/// The first thing a new owner sees: connecting to desktop Quant and the three
+/// promises that make it worth handing over a phone.
 fn welcome_view(state: &State) -> Element {
 	let start = state.clone();
 	View()
-		.class("gap-8 pt-6")
+		.class("gap-4 pt-1")
 		.child(
-			theme::logo("w-[88px] h-[88px]")
-				.entering(Presence::fade().scale(0.9).spring(Spring::GENTLE)),
+			theme::logo("w-14 h-14").entering(Presence::fade().scale(0.9).spring(Spring::GENTLE)),
 		)
 		.child(
 			View()
-				.class("gap-3")
+				.class("gap-2")
 				.child(Text("YOUR PRIVATE MEMORY").class(theme::EYEBROW))
 				.child(
 					Text("Measure your life. Keep it yours.")
-						.class(theme::DISPLAY)
+						.class("text-2xl font-bold leading-tight text-[#F4F1FF]")
 						.test_id("welcome"),
 				)
 				.child(
 					Text(
-						"Quant turns this phone into a quiet sensor for the encrypted vault on \
-						 your computer.",
+						"Scan desktop Quant's QR code or open a Quant link to connect to your \
+						 vault.",
 					)
-					.class(theme::BODY),
+					.class(theme::MUTED),
 				),
 		)
 		.child(
 			View()
-				.class("gap-3")
+				.class("gap-2")
 				.child(promise(
 					0,
-					Icon::Pulse,
-					"Collects quietly",
-					"Where you go, the apps you use, your battery and health readings, gathered \
-					 in the background.",
+					Icon::Link,
+					"Connect from desktop Quant",
+					"Open a Quant link or scan desktop Quant's QR code; review the vault before \
+					 connecting, or paste as fallback.",
 				))
 				.child(promise(
 					1,
 					Icon::Lock,
-					"Sealed on your computer",
-					"Readings travel encrypted to your vault. This phone can add to it, never \
-					 read it back.",
+					"Write-only by default",
+					"Recording starts with write scopes only. Vault stats and Ask stay off until \
+					 you approve them separately.",
 				))
 				.child(promise(
 					2,
-					Icon::Key,
-					"You decide who reads",
-					"AI agents see only what you grant, for as long as you allow, and every read \
-					 is logged.",
+					Icon::Pulse,
+					"Collects quietly, even offline",
+					"Collection permissions appear only when you turn sources on. Readings wait \
+					 encrypted until your vault answers.",
 				)),
 		)
 		.child(
 			View()
-				.class("gap-3")
+				.class("gap-2")
 				.child(
 					Button("Connect to my vault")
 						.class(theme::PRIMARY)
@@ -675,7 +1556,7 @@ fn welcome_view(state: &State) -> Element {
 						}),
 				)
 				.child(
-					Text("You'll need the computer where Quant keeps your vault.")
+					Text("Compare and approve the pairing code in desktop Quant on your computer.")
 						.class(theme::CAPTION),
 				),
 		)
@@ -684,7 +1565,7 @@ fn welcome_view(state: &State) -> Element {
 /// One of the welcome screen's three promises, rising into place in turn.
 fn promise(n: u8, icon: Icon, title: &'static str, text: &'static str) -> Element {
 	View()
-		.class("flex-row items-start gap-4 p-4 rounded-2xl bg-[#17143A]")
+		.class("flex-row items-start gap-3 p-3 rounded-2xl bg-[#17143A]")
 		.entering(
 			Presence::fade()
 				.slide_by(0.0, 18.0)
@@ -694,9 +1575,9 @@ fn promise(n: u8, icon: Icon, title: &'static str, text: &'static str) -> Elemen
 		.child(theme::tile(icon))
 		.child(
 			View()
-				.class("flex-1 gap-1")
+				.class("flex-1 gap-0.5")
 				.child(Text(title).class(theme::LABEL))
-				.child(Text(text).class(theme::MUTED)),
+				.child(Text(text).class(theme::CAPTION)),
 		)
 }
 
@@ -738,12 +1619,28 @@ fn pair_stage(state: &State) -> Element {
 		))
 }
 
-/// Paired: the mark, the state of the vault, and everything this phone
-/// records, in one stack.
+/// Paired: switches cleanly between Phone, Vault, and Ask.
 fn home_view(state: &State) -> Element {
+	let segment = state.segment;
+	let state = state.clone();
+	For(
+		move || vec![segment.get()],
+		Clone::clone,
+		move |active| {
+			match active {
+				Segment::Phone => phone_segment(&state),
+				Segment::Vault => vault::vault_segment(&state),
+				Segment::Ask => ask::ask_segment(&state),
+			}
+		},
+	)
+}
+
+/// The Phone segment: recording status, vault connection, permissions,
+/// delivery, wearables, and local sources.
+fn phone_segment(state: &State) -> Element {
 	View()
 		.class("gap-5")
-		.child(top_bar(state))
 		.child(hero(state))
 		.child(vault_card(state))
 		.child(permissions_card(state))
@@ -966,8 +1863,9 @@ fn vault_view(state: &State, part: &VaultPart) -> Element {
 				)
 				.child(
 					Text(
-						"On your computer, check the code matches and approve it. The phone can \
-						 then add to your vault; it can never read from it.",
+						"Open Quant on your computer, compare this code under Pending approvals, \
+						 and approve it — or run the command below. This grant is write-only; \
+						 optional Vault stats and Ask stay off until you approve them separately.",
 					)
 					.class(theme::MUTED),
 				)
@@ -1069,8 +1967,8 @@ fn vault_view(state: &State, part: &VaultPart) -> Element {
 								)
 								.child(
 									Text(format!(
-										"{place} · This phone adds to your vault and can read \
-										 nothing back."
+										"{place} · Collector is write-only. Vault stats and Ask \
+										 use a separate opt-in companion grant."
 									))
 									.class(theme::MUTED),
 								),
@@ -1081,12 +1979,13 @@ fn vault_view(state: &State, part: &VaultPart) -> Element {
 	}
 }
 
-/// The two steps that pair this phone: run the command, paste the link.
+/// Connecting: scan desktop Quant's QR code or open a Quant link first, with
+/// paste always available as a fallback.
 fn pair_view(state: &State) -> Element {
 	let link = state.link;
 	let connect = state.clone();
 	View()
-		.class("gap-2")
+		.class("gap-3")
 		.child(Text("STEP 1 OF 2").class(theme::EYEBROW))
 		.child(
 			Text("Connect to your vault")
@@ -1096,7 +1995,18 @@ fn pair_view(state: &State) -> Element {
 		.child(
 			View()
 				.class(theme::CARD)
-				.child(step(1, "On your computer, run"))
+				.child(step(
+					1,
+					"Scan the QR code in desktop Quant with your phone's camera, or open a \
+					 quant://link on this phone.",
+				))
+				.child(
+					Text(
+						"Quant shows the vault destination for review before sending a pairing \
+						 request. Or generate a link in a terminal:",
+					)
+					.class(theme::MUTED),
+				)
 				.child(Text("quant link").class(theme::CODE)),
 		)
 		.child(
@@ -1104,7 +2014,7 @@ fn pair_view(state: &State) -> Element {
 				.class(theme::CARD)
 				.child(step(
 					2,
-					"Paste the link it prints. It starts with quant://link.",
+					"Paste fallback: paste the quant://link here if you copied it instead.",
 				))
 				.child(
 					TextInput()
@@ -1871,5 +2781,670 @@ mod tests {
 		state.invite.set(Some(invite));
 		tester.pump();
 		assert_eq!(tester.query_all(&Finder::test_id("invite")).len(), 1);
+	}
+
+	fn phone_viewport(snapshot: Snapshot) -> (WidgetTester, State, Arc<Mutex<Vec<Action>>>) {
+		let owner = reactive_graph::owner::Owner::new();
+		owner.set();
+		std::mem::forget(owner);
+		let done = Arc::new(Mutex::new(Vec::new()));
+		let log = Arc::clone(&done);
+		let state = State::new(Arc::new(move |action| log.lock().unwrap().push(action)));
+		state.apply_snapshot(snapshot);
+		let view = state.clone();
+		let tester = WidgetTester::new(move || Screen(view.clone()), 390.0, 840.0).unwrap();
+		(tester, state, done)
+	}
+
+	fn ready_with_companion(stats: StatsAccess, ask: StatsAccess) -> Snapshot {
+		Snapshot {
+			stats: quant_model::phone::StatsState {
+				access: stats,
+				approve: None,
+				problem: None,
+			},
+			ask: quant_model::phone::StatsState {
+				access: ask,
+				approve: None,
+				problem: None,
+			},
+			vault_generation: 1,
+			session_nonce: "abc123def456".into(),
+			..ready()
+		}
+	}
+
+	#[test]
+	fn three_segment_navigation_works_at_390x840_and_never_prompts_permissions() {
+		let (mut tester, state, done) = phone_viewport(ready_with_companion(
+			StatsAccess::NotRequested,
+			StatsAccess::NotRequested,
+		));
+
+		// Recording-only user sees Phone · Vault · Ask at 390x840 and can
+		// continue recording without enabling either companion capability.
+		tester.get_by_text("Phone").unwrap();
+		tester.get_by_text("Vault").unwrap();
+		tester.get_by_text("Ask").unwrap();
+		tester
+			.get_by_text("Collecting · 3 readings waiting")
+			.unwrap();
+
+		// Switching to Vault and Ask never emits OS permission prompts.
+		tester.tap(&Finder::test_id("tab-vault")).unwrap();
+		tester
+			.get_by_text("View Vault stats on this phone")
+			.unwrap();
+		assert!(
+			done.lock()
+				.unwrap()
+				.iter()
+				.all(|action| !matches!(action, Action::Allow(_)))
+		);
+
+		tester.tap(&Finder::test_id("tab-ask")).unwrap();
+		tester.get_by_text("Ask your approved agents").unwrap();
+		assert!(
+			done.lock()
+				.unwrap()
+				.iter()
+				.all(|action| !matches!(action, Action::Allow(_)))
+		);
+
+		// Selecting only Ask sends one clear companion request for AskAgents.
+		tester.tap(&Finder::test_id("companion-request")).unwrap();
+		assert_eq!(
+			*done.lock().unwrap(),
+			[Action::Command(Command::RequestCompanion {
+				capabilities: vec![CompanionCapability::AskAgents],
+			})]
+		);
+
+		// Switching back to Phone keeps recording intact.
+		tester.tap(&Finder::test_id("tab-phone")).unwrap();
+		assert_eq!(state.segment.get_untracked(), Segment::Phone);
+		tester
+			.get_by_text("Collecting · 3 readings waiting")
+			.unwrap();
+	}
+
+	#[test]
+	fn first_run_leads_with_qr_and_link_with_paste_fallback() {
+		let (mut tester, ..) = phone_viewport(Snapshot {
+			headline: "Not connected to your vault".into(),
+			collecting: true,
+			sources: rows(0),
+			..Snapshot::default()
+		});
+		tester.get_by_text("Connect from desktop Quant").unwrap();
+		tester.tap(&Finder::test_id("get-started")).unwrap();
+		tester
+			.get_by_text(
+				"Scan the QR code in desktop Quant with your phone's camera, or open a \
+				 quant://link on this phone.",
+			)
+			.unwrap();
+		tester
+			.get_by_text("Paste fallback: paste the quant://link here if you copied it instead.")
+			.unwrap();
+	}
+
+	#[test]
+	#[allow(clippy::too_many_lines)]
+	fn vault_browses_paged_and_custom_streams_shows_units_and_ignores_stale_replies() {
+		use quant_model::phone::StatsChannel;
+		use quant_model::phone::StatsDuration;
+		use quant_model::phone::StatsKind;
+		use quant_model::phone::StatsStream;
+		use quant_model::phone::VaultStats;
+
+		let (mut tester, state, done) = harness(ready_with_companion(
+			StatsAccess::Ready,
+			StatsAccess::Restricted,
+		));
+		state.apply_snapshot(ready_with_companion(
+			StatsAccess::Ready,
+			StatsAccess::Restricted,
+		));
+		tester.pump();
+
+		// Opening Vault starts loading catalog page 0.
+		tester.tap(&Finder::test_id("tab-vault")).unwrap();
+		tester.get_by_text("Loading vault streams…").unwrap();
+		let first_req = match done.lock().unwrap().pop() {
+			Some(Action::LoadVaultCatalog {
+				window: StatsWindow::Day,
+				offset: 0,
+				append: false,
+				request_id,
+			}) => request_id,
+			other => panic!("expected initial catalog load, got {other:?}"),
+		};
+
+		// Page 1 arrives with heart rate + a custom stream, with more pages
+		// remaining.
+		state.apply_vault_catalog(
+			first_req,
+			false,
+			StatsReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				summary: Some(VaultStats {
+					window: StatsWindow::Day,
+					span: "Past 24 hours".into(),
+					from: "Yesterday 14:00".into(),
+					to: "Today 14:00".into(),
+					from_ms: 1,
+					to_ms: 2,
+					streams: vec![
+						StatsStream {
+							stream: "health.heart_rate".into(),
+							label: "Heart rate".into(),
+							family: "Health".into(),
+							description: "Heart rate samples.".into(),
+							kind: StatsKind::Series,
+							count: 2,
+							count_unit: "samples".into(),
+							first: Some("Today 12:00".into()),
+							last: Some("Today 13:00".into()),
+							first_ms: Some(10),
+							last_ms: Some(20),
+							detail: StatsDetail::Bounded,
+						},
+						StatsStream {
+							stream: "apps.focus".into(),
+							label: "Focus".into(),
+							family: "Apps".into(),
+							description: "Foreground apps.".into(),
+							kind: StatsKind::Event,
+							count: 3,
+							count_unit: "records".into(),
+							first: Some("Today 10:00".into()),
+							last: Some("Today 13:30".into()),
+							first_ms: Some(5),
+							last_ms: Some(25),
+							detail: StatsDetail::Bounded,
+						},
+					],
+					truncated: true,
+					details_truncated: true,
+					offset: 0,
+					total_streams: 3,
+					next_offset: Some(2),
+					fetched: "Today 14:00".into(),
+				}),
+			},
+		);
+		tester.pump();
+		tester
+			.get_by_text("Range: Yesterday 14:00 – Today 14:00")
+			.unwrap();
+		tester.get_by_text("Heart rate").unwrap();
+		tester.get_by_text("2 samples").unwrap();
+		tester
+			.get_by_text("Showing 2 of 3 permitted streams")
+			.unwrap();
+
+		// Load page 2 with a custom stream.
+		tester.tap(&Finder::test_id("vault-load-more")).unwrap();
+		let page2_req = match done.lock().unwrap().pop() {
+			Some(Action::LoadVaultCatalog {
+				offset: 2,
+				append: true,
+				request_id,
+				..
+			}) => request_id,
+			other => panic!("expected page 2 load, got {other:?}"),
+		};
+		state.apply_vault_catalog(
+			page2_req,
+			true,
+			StatsReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				summary: Some(VaultStats {
+					window: StatsWindow::Day,
+					span: "Past 24 hours".into(),
+					from: "Yesterday 14:00".into(),
+					to: "Today 14:00".into(),
+					from_ms: 1,
+					to_ms: 2,
+					streams: vec![StatsStream {
+						stream: "sensor.custom.ketones".into(),
+						label: "Ketones".into(),
+						family: "Sensors".into(),
+						description: "Custom ketone sensor.".into(),
+						kind: StatsKind::Series,
+						count: 0,
+						count_unit: "samples".into(),
+						first: None,
+						last: None,
+						first_ms: None,
+						last_ms: None,
+						detail: StatsDetail::Numeric {
+							channels: vec![],
+							buckets: vec![],
+							channels_truncated: false,
+							buckets_truncated: false,
+						},
+					}],
+					truncated: false,
+					details_truncated: false,
+					offset: 2,
+					total_streams: 3,
+					next_offset: None,
+					fetched: "Today 14:00".into(),
+				}),
+			},
+		);
+		tester.pump();
+		assert_eq!(state.vault_ui.get_untracked().streams.len(), 3);
+		assert!(
+			state
+				.vault_ui
+				.get_untracked()
+				.streams
+				.iter()
+				.any(|s| s.stream == "sensor.custom.ketones")
+		);
+
+		// Open heart rate stream detail on demand and verify bpm values/units.
+		tester
+			.tap(&Finder::test_id("stream-health.heart_rate"))
+			.unwrap();
+		let hr_req = match done.lock().unwrap().pop() {
+			Some(Action::LoadStreamDetail {
+				stream,
+				window: StatsWindow::Day,
+				request_id,
+				..
+			}) if stream == "health.heart_rate" => request_id,
+			other => panic!("expected heart_rate detail load, got {other:?}"),
+		};
+		state.apply_stream_detail(
+			hr_req,
+			false,
+			false,
+			StreamDetailReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				window: StatsWindow::Day,
+				span: "Past 24 hours".into(),
+				from: Some("Yesterday 14:00".into()),
+				to: Some("Today 14:00".into()),
+				from_ms: Some(1),
+				to_ms: Some(2),
+				fetched: Some("Today 14:00".into()),
+				stream: Some(StatsStream {
+					stream: "health.heart_rate".into(),
+					label: "Heart rate".into(),
+					family: "Health".into(),
+					description: "Heart rate samples.".into(),
+					kind: StatsKind::Series,
+					count: 2,
+					count_unit: "samples".into(),
+					first: Some("Today 12:00".into()),
+					last: Some("Today 13:00".into()),
+					first_ms: Some(10),
+					last_ms: Some(20),
+					detail: StatsDetail::Numeric {
+						channels: vec![StatsChannel {
+							name: "bpm".into(),
+							unit: "bpm".into(),
+							samples: 2,
+							min: Some(60.0),
+							max: Some(84.0),
+							mean: Some(72.0),
+						}],
+						buckets: vec![],
+						channels_truncated: false,
+						buckets_truncated: false,
+					},
+				}),
+				channel_offset: 0,
+				total_channels: 1,
+				next_channel_offset: None,
+				group_offset: 0,
+				total_groups: 0,
+				next_group_offset: None,
+			},
+		);
+		tester.pump();
+		tester
+			.get_by_text("Mean 72 bpm · Min 60 bpm · Max 84 bpm")
+			.unwrap();
+
+		// Switch range to 7 days, then deliver a STALE Day detail reply: must
+		// be ignored!
+		tester.tap(&Finder::test_id("range-week")).unwrap();
+		state.apply_stream_detail(
+			hr_req,
+			false,
+			false,
+			StreamDetailReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				window: StatsWindow::Day,
+				span: "Past 24 hours".into(),
+				from: Some("STALE_FROM".into()),
+				to: Some("STALE_TO".into()),
+				from_ms: Some(1),
+				to_ms: Some(2),
+				fetched: Some("STALE".into()),
+				stream: Some(StatsStream {
+					stream: "health.heart_rate".into(),
+					label: "Heart rate".into(),
+					family: "Health".into(),
+					description: String::new(),
+					kind: StatsKind::Series,
+					count: 99,
+					count_unit: "samples".into(),
+					first: None,
+					last: None,
+					first_ms: None,
+					last_ms: None,
+					detail: StatsDetail::Durations {
+						group_by: "app".into(),
+						groups: vec![StatsDuration {
+							group: Some("Stale".into()),
+							count: 1,
+							seconds: 60.0,
+							duration: "1m".into(),
+						}],
+						truncated: false,
+					},
+				}),
+				channel_offset: 0,
+				total_channels: 0,
+				next_channel_offset: None,
+				group_offset: 0,
+				total_groups: 0,
+				next_group_offset: None,
+			},
+		);
+		tester.pump();
+		assert!(state.vault_ui.get_untracked().detail.is_none());
+
+		// Losing Vault access clears session data immediately while recording
+		// stays on.
+		let mut revoked = ready_with_companion(StatsAccess::Revoked, StatsAccess::Revoked);
+		revoked.vault_generation = 2;
+		state.apply_snapshot(revoked);
+		tester.pump();
+		assert!(state.vault_ui.get_untracked().streams.is_empty());
+		tester.get_by_text("Companion access ended").unwrap();
+		assert!(state.snapshot.get_untracked().collecting);
+	}
+
+	#[test]
+	#[allow(clippy::too_many_lines)]
+	fn ask_ui_retains_draft_and_dedupe_across_retries_and_renders_real_cited_reply() {
+		use quant_model::phone::CompanionAgentRow;
+		use quant_model::phone::CompanionMessageRow;
+		use quant_model::phone::CompanionReplyStatus;
+
+		let (mut tester, state, done) =
+			harness(ready_with_companion(StatsAccess::Ready, StatsAccess::Ready));
+
+		tester.tap(&Finder::test_id("tab-ask")).unwrap();
+		tester.get_by_text("Targeted agent inbox").unwrap();
+		tester
+			.get_by_text(
+				"Approved agents retrieve questions when they check their Quant inbox. Replies \
+				 appear here once an agent actually answers.",
+			)
+			.unwrap();
+
+		let (agents_req, msgs_req) = {
+			let mut log = done.lock().unwrap();
+			let mut a = 0;
+			let mut m = 0;
+			for action in log.drain(..) {
+				match action {
+					Action::LoadAskAgents { request_id } => a = request_id,
+					Action::LoadAskMessages { request_id, .. } => m = request_id,
+					_ => {}
+				}
+			}
+			(a, m)
+		};
+		assert!(agents_req > 0 && msgs_req > 0);
+
+		state.apply_ask_agents(
+			agents_req,
+			CompanionAgentsReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				agents: vec![CompanionAgentRow {
+					id: "agent-coach".into(),
+					name: "Health Coach".into(),
+					detail: Some("Claude Code · claude-opus".into()),
+				}],
+			},
+		);
+		state.apply_ask_messages(
+			msgs_req,
+			CompanionMessagesReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				messages: Vec::new(),
+				fetched: Some("Today 14:00".into()),
+			},
+		);
+		tester.pump();
+		tester.get_by_text("To: Health Coach").unwrap();
+
+		// Type a question, switch to Phone and back: recipient + draft survive!
+		tester
+			.enter_text(&Finder::test_id("ask-question"), "How was my heart rate?")
+			.unwrap();
+		tester.tap(&Finder::test_id("tab-phone")).unwrap();
+		tester.tap(&Finder::test_id("tab-ask")).unwrap();
+		assert_eq!(
+			state.ask_ui.get_untracked().draft_question,
+			"How was my heart rate?"
+		);
+		assert_eq!(
+			state.ask_ui.get_untracked().recipient_id.as_deref(),
+			Some("agent-coach")
+		);
+
+		// Send once; a duplicate tap while in-flight cannot create a second
+		// request.
+		tester.tap(&Finder::test_id("ask-send")).unwrap();
+		tester.tap(&Finder::test_id("ask-send")).unwrap();
+		let (first_req, first_dedupe) = {
+			let mut log = done.lock().unwrap();
+			let sends: Vec<_> = log
+				.drain(..)
+				.filter_map(|a| {
+					match a {
+						Action::SendAskMessage {
+							to,
+							question,
+							dedupe,
+							request_id,
+						} => Some((to, question, dedupe, request_id)),
+						_ => None,
+					}
+				})
+				.collect();
+			assert_eq!(sends.len(), 1, "duplicate tap must not send twice");
+			assert_eq!(sends[0].0, "agent-coach");
+			assert_eq!(sends[0].1, "How was my heart rate?");
+			(sends[0].3, sends[0].2.clone())
+		};
+
+		// Simulate a transient network error: draft and dedupe are retained,
+		// and retrying reuses the exact same dedupe key.
+		state.apply_ask_send(
+			first_req,
+			CompanionMessageReply {
+				access: StatsAccess::Unreachable {
+					reason: "timed out".into(),
+				},
+				approve: None,
+				problem: Some("The vault is out of reach".into()),
+				message: None,
+			},
+		);
+		tester.pump();
+		tester.get_by_text("The vault is out of reach").unwrap();
+		tester.get_by_text("Retry send").unwrap();
+
+		tester.tap(&Finder::test_id("ask-send")).unwrap();
+		let (retry_req, retry_dedupe) = match done.lock().unwrap().pop() {
+			Some(Action::SendAskMessage {
+				dedupe, request_id, ..
+			}) => (request_id, dedupe),
+			other => panic!("expected retry send, got {other:?}"),
+		};
+		assert_eq!(retry_dedupe, first_dedupe);
+
+		// Vault accepts the message: shows WAITING FOR AGENT (distinct from
+		// reply).
+		state.apply_ask_send(
+			retry_req,
+			CompanionMessageReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				message: Some(CompanionMessageRow {
+					id: "msg-1".into(),
+					to_id: "agent-coach".into(),
+					to_name: "Health Coach".into(),
+					question: "How was my heart rate?".into(),
+					submitted: "Today 14:01".into(),
+					submitted_ms: 100,
+					status: CompanionReplyStatus::Waiting,
+					answer: None,
+					answered: None,
+					answered_ms: None,
+					citations: Vec::new(),
+				}),
+			},
+		);
+		tester.pump();
+		assert!(state.ask_ui.get_untracked().draft_question.is_empty());
+		tester.get_by_text("WAITING FOR AGENT").unwrap();
+
+		// Real agent replies with answer + citation.
+		tester.tap(&Finder::test_id("msg-check-msg-1")).unwrap();
+		let check_req = match done.lock().unwrap().pop() {
+			Some(Action::CheckAskMessage { id, request_id }) if id == "msg-1" => request_id,
+			other => panic!("expected check message, got {other:?}"),
+		};
+		state.apply_ask_message(
+			check_req,
+			CompanionMessageReply {
+				access: StatsAccess::Ready,
+				approve: None,
+				problem: None,
+				message: Some(CompanionMessageRow {
+					id: "msg-1".into(),
+					to_id: "agent-coach".into(),
+					to_name: "Health Coach".into(),
+					question: "How was my heart rate?".into(),
+					submitted: "Today 14:01".into(),
+					submitted_ms: 100,
+					status: CompanionReplyStatus::Answered,
+					answer: Some("Average was 72 bpm across 2 samples.".into()),
+					answered: Some("Today 14:02".into()),
+					answered_ms: Some(200),
+					citations: vec!["rec-heart-1".into()],
+				}),
+			},
+		);
+		tester.pump();
+		tester.get_by_text("REPLIED").unwrap();
+		tester
+			.get_by_text("Average was 72 bpm across 2 samples.")
+			.unwrap();
+		tester.get_by_text("1 citation").unwrap();
+		tester.get_by_text("rec-heart-1").unwrap();
+
+		// Follow-up preselects the same agent and gets a fresh dedupe key.
+		tester.tap(&Finder::test_id("msg-followup-msg-1")).unwrap();
+		state.set_ask_draft("What about sleep?");
+		state.submit_ask_question();
+		let followup_dedupe = match done.lock().unwrap().pop() {
+			Some(Action::SendAskMessage { dedupe, .. }) => dedupe,
+			other => panic!("expected follow-up send, got {other:?}"),
+		};
+		assert_ne!(followup_dedupe, first_dedupe);
+	}
+
+	#[test]
+	fn companion_access_and_error_states_render_at_390x840() {
+		let (mut tester, state, _) = phone_viewport(Snapshot {
+			stats: quant_model::phone::StatsState {
+				access: StatsAccess::Pending {
+					code: "ABCD-1234".into(),
+				},
+				approve: Some("quant approve ABCD-1234 --scope '*:summary'".into()),
+				problem: None,
+			},
+			ask: quant_model::phone::StatsState {
+				access: StatsAccess::NotRequested,
+				approve: None,
+				problem: None,
+			},
+			..ready_with_companion(StatsAccess::NotRequested, StatsAccess::NotRequested)
+		});
+
+		tester.tap(&Finder::test_id("tab-vault")).unwrap();
+		tester.get_by_text("ABCD-1234").unwrap();
+		tester
+			.get_by_text("quant approve ABCD-1234 --scope '*:summary'")
+			.unwrap();
+
+		// Unreachable / offline state shows distinct offline treatment while
+		// recording continues.
+		state.apply_snapshot(ready_with_companion(
+			StatsAccess::Unreachable {
+				reason: "The vault is out of reach".into(),
+			},
+			StatsAccess::Unreachable {
+				reason: "The vault is out of reach".into(),
+			},
+		));
+		tester.pump();
+		tester.get_by_text("Vault out of reach").unwrap();
+		tester.get_by_text("The vault is out of reach").unwrap();
+
+		// Restricted Ask on a stats-only grant explains stats-only clearly.
+		state.apply_snapshot(ready_with_companion(
+			StatsAccess::Ready,
+			StatsAccess::Restricted,
+		));
+		tester.pump();
+		tester.tap(&Finder::test_id("tab-ask")).unwrap();
+		tester.get_by_text("Ask not enabled on this grant").unwrap();
+
+		// Explicit capability change banner appears while existing access stays
+		// live.
+		let mut changing = ready_with_companion(StatsAccess::Ready, StatsAccess::Restricted);
+		changing.companion_change = Some(quant_model::phone::CompanionChange {
+			code: "ABCD-1234".into(),
+			capabilities: vec![
+				CompanionCapability::StatsSummary,
+				CompanionCapability::AskAgents,
+			],
+			approve: "quant approve ABCD-1234 --scope '*:summary' --scope companion:write".into(),
+		});
+		state.apply_snapshot(changing);
+		tester.pump();
+		tester
+			.get_by_text("Approve Stats + Ask on your computer")
+			.unwrap();
+		tester
+			.get_by_text("quant approve ABCD-1234 --scope '*:summary' --scope companion:write")
+			.unwrap();
 	}
 }
