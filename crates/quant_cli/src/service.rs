@@ -121,19 +121,41 @@ fn remove_legacy_daemon(domain: &str, legacy_plist: &Path) -> Result<()> {
 	Ok(())
 }
 
+/// Whether `launchctl` reports the job for `label` under `domain` as running.
+fn launchctl_running(domain: &str, label: &str) -> bool {
+	Command::new("launchctl")
+		.args(["print", &format!("{domain}/{label}")])
+		.output()
+		.is_ok_and(|o| {
+			o.status.success() && String::from_utf8_lossy(&o.stdout).contains("state = running")
+		})
+}
+
+/// The pre-split daemon entry under [`LEGACY_LABEL`]: whether its plist is
+/// installed, and whether its job is running.
+#[derive(Clone, Copy)]
+struct LegacyDaemon {
+	installed: bool,
+	running: bool,
+}
+
 fn format_macos_status(
 	installed: bool,
 	running: bool,
 	socket: &Path,
-	legacy_installed: bool,
+	legacy: LegacyDaemon,
 ) -> String {
 	let base = format!(
 		"label: {LABEL}\ninstalled: {installed}\nrunning: {running}\nsocket: {}",
 		socket.display()
 	);
-	if !legacy_installed {
+	if !legacy.installed {
 		return base;
 	}
+	let base = format!(
+		"{base}\nlegacy label: {LEGACY_LABEL}\nlegacy running: {}",
+		legacy.running
+	);
 	if installed {
 		format!(
 			"{base}\nnote: an old daemon entry is also installed under {LEGACY_LABEL}, so two \
@@ -219,16 +241,14 @@ fn macos(paths: &VaultPaths, action: &Action, exe: &Path) -> Result<()> {
 		Action::Status => {
 			let installed = plist.exists();
 			let legacy_installed = has_legacy_daemon_plist(&legacy_plist);
-			let running = Command::new("launchctl")
-				.args(["print", &format!("{domain}/{LABEL}")])
-				.output()
-				.is_ok_and(|o| {
-					o.status.success()
-						&& String::from_utf8_lossy(&o.stdout).contains("state = running")
-				});
+			let running = launchctl_running(&domain, LABEL);
+			let legacy = LegacyDaemon {
+				installed: legacy_installed,
+				running: legacy_installed && launchctl_running(&domain, LEGACY_LABEL),
+			};
 			println!(
 				"{}",
-				format_macos_status(installed, running, &paths.socket(), legacy_installed)
+				format_macos_status(installed, running, &paths.socket(), legacy)
 			);
 		}
 	}
@@ -276,6 +296,7 @@ mod tests {
 
 	use super::LABEL;
 	use super::LEGACY_LABEL;
+	use super::LegacyDaemon;
 	use super::format_macos_status;
 	use super::has_legacy_daemon_plist;
 	use super::is_legacy_daemon_plist;
@@ -415,26 +436,48 @@ mod tests {
 	#[test]
 	fn status_output_names_new_label_and_reports_legacy_entry() {
 		let socket = Path::new("/var/tmp/quant.sock");
+		let legacy = |running| {
+			LegacyDaemon {
+				installed: true,
+				running,
+			}
+		};
+		let absent = LegacyDaemon {
+			installed: false,
+			running: false,
+		};
 
-		let legacy_only = format_macos_status(false, false, socket, true);
+		let legacy_only = format_macos_status(false, false, socket, legacy(false));
 		assert!(legacy_only.contains(LABEL));
 		assert!(legacy_only.contains(LEGACY_LABEL));
+		assert!(legacy_only.contains("legacy running: false"));
 		assert!(legacy_only.contains("quant service install"));
 		assert!(legacy_only.contains("move it"));
 
-		let installed = format_macos_status(true, true, socket, false);
+		let legacy_running = format_macos_status(false, false, socket, legacy(true));
+		assert!(legacy_running.contains("legacy running: true"));
+		assert!(legacy_running.contains("move it"));
+
+		let installed = format_macos_status(true, true, socket, absent);
 		assert!(installed.contains(LABEL));
 		assert!(!installed.contains("quant service install"));
 		assert!(!installed.contains("note:"));
+		assert!(!installed.contains("legacy running:"));
 
-		let installed_with_legacy = format_macos_status(true, true, socket, true);
+		let installed_with_legacy = format_macos_status(true, true, socket, legacy(false));
 		assert!(installed_with_legacy.contains(LABEL));
 		assert!(installed_with_legacy.contains(LEGACY_LABEL));
+		assert!(installed_with_legacy.contains("legacy running: false"));
 		assert!(installed_with_legacy.contains("two daemons"));
 		assert!(installed_with_legacy.contains("quant service install"));
 		assert!(installed_with_legacy.contains("remove the old one"));
 
-		let neither = format_macos_status(false, false, socket, false);
+		let both_running = format_macos_status(true, true, socket, legacy(true));
+		assert!(both_running.contains("running: true"));
+		assert!(both_running.contains("legacy running: true"));
+		assert!(both_running.contains("two daemons"));
+
+		let neither = format_macos_status(false, false, socket, absent);
 		assert!(neither.contains(LABEL));
 		assert!(!neither.contains("quant service install"));
 		assert!(!neither.contains("note:"));

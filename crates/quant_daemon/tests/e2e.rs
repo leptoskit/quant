@@ -246,6 +246,34 @@ async fn unpaired_and_pending_clients_see_nothing() {
 }
 
 #[tokio::test]
+async fn repeated_pending_polls_file_one_pairing_request() {
+	let h = start().await;
+	let mut client = Client::new(h.endpoint.clone(), Identity::generate("Poller"));
+	let first = client.pair(ClientKind::Device, &[], None).await.unwrap();
+	assert_eq!(first.status, ClientStatus::Pending);
+	for _ in 0..4 {
+		let again = client.pair(ClientKind::Device, &[], None).await.unwrap();
+		assert_eq!(again.client, first.client);
+		assert_eq!(again.pairing_code, first.pairing_code);
+		assert_eq!(again.status, ClientStatus::Pending);
+	}
+	let requests = h
+		.state
+		.vault
+		.store
+		.audit_tail(100)
+		.unwrap()
+		.into_iter()
+		.filter(|entry| entry.action == "pair.request")
+		.count();
+	assert_eq!(
+		requests, 1,
+		"a waiting client is audited once, not per poll"
+	);
+	assert_eq!(h.owner().await.clients().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn owner_actions_need_the_passphrase_and_wrong_guesses_lock_out() {
 	let h = start().await;
 	let wrong = OwnerSession::open(h.endpoint.clone(), "guessing guessing")

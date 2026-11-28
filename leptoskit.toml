@@ -40,6 +40,10 @@ exclude = ["crates/landing_app/**"]
 [frontends.app.lint.rules]
 markup_style = "deny"
 component_attribute = "deny"
+redundant_view = "deny"
+spacer_view = "deny"
+children_last = "deny"
+image_label = "deny"
 
 [frontends.app.inputs]
 assets = "assets/app"
@@ -66,10 +70,20 @@ exclude = ["crates/quant_app/**"]
 [frontends.landing.lint.rules]
 markup_style = "deny"
 component_attribute = "deny"
+redundant_view = "deny"
+spacer_view = "deny"
+children_last = "deny"
+image_label = "deny"
 
 [targets.desktop]
 platform = "macos"
 frontend = "app"
+
+[targets.desktop.build]
+client_package = "quant_app"
+
+[targets.desktop.build.inputs]
+assets = "assets/app"
 
 [targets.desktop.native]
 mode = "menu-bar"
@@ -77,6 +91,7 @@ package_id = "dev.leptoskit.quant"
 viewport_width = 620.0
 viewport_height = 780.0
 plugins = ["quant", "device-keys"]
+missing-plugins = "error"
 
 [targets.landing]
 platform = "web"
@@ -101,6 +116,7 @@ package_id = "dev.leptoskit.quant"
 viewport_width = 620.0
 viewport_height = 780.0
 plugins = ["quant", "device-keys"]
+missing-plugins = "error"
 
 [targets.landing.serve]
 address = "127.0.0.1"
@@ -141,6 +157,7 @@ frontend = "app"
 
 [targets.android.native]
 package_id = "dev.leptoskit.quant"
+missing-plugins = "error"
 plugins = [
 	"quant-phone",
 	"location",
@@ -169,6 +186,7 @@ frontend = "app"
 
 [targets.ios.native]
 package_id = "dev.leptoskit.quant"
+missing-plugins = "error"
 plugins = [
 	"quant-phone",
 	"location",
@@ -200,6 +218,7 @@ assets = "assets/app"
 
 [targets.wearos.native]
 package_id = "dev.leptoskit.quant"
+missing-plugins = "error"
 plugins = [
 	"quant-phone",
 	"wearable",
@@ -237,6 +256,7 @@ assets = "assets/app"
 
 [targets.watchos.native]
 package_id = "dev.leptoskit.quant"
+missing-plugins = "error"
 plugins = [
 	"quant-phone",
 	"wearable",
@@ -349,3 +369,7 @@ exclude = ["crates/landing_app/**"]
 [lint.rules]
 markup_style = "deny"
 component_attribute = "deny"
+redundant_view = "deny"
+spacer_view = "deny"
+children_last = "deny"
+image_label = "deny"
