@@ -22,6 +22,18 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!--
+              A link `quant link` prints. The screen validates it again and
+              only offers Connect; opening one never pairs by itself. The app
+              uses no camera permission, so another app or the phone's own QR
+              reader opens it.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="quant" android:host="link"/>
+            </intent-filter>
         </activity>
     </application>
 </manifest>

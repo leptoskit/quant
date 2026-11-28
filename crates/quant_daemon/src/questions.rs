@@ -33,13 +33,13 @@ use crate::state::State;
 type Shared = AxumState<Arc<State>>;
 
 /// How long a question may be, in characters.
-pub const MAX_QUESTION: usize = 2_000;
+pub(crate) const MAX_QUESTION: usize = 2_000;
 /// How long an answer may be, in characters.
-pub const MAX_ANSWER: usize = 8_000;
+pub(crate) const MAX_ANSWER: usize = 8_000;
 /// Most citations one answer may carry.
-pub const MAX_CITATIONS: usize = 50;
+pub(crate) const MAX_CITATIONS: usize = 50;
 
-fn clean(text: &str, cap: usize) -> String {
+pub(crate) fn clean(text: &str, cap: usize) -> String {
 	redact::sanitize(text).trim().chars().take(cap).collect()
 }
 
@@ -149,7 +149,7 @@ pub async fn open(
 /// exists, its stream is in scope at read level or above, and its classes
 /// are not denied. Unreadable ids make the whole answer fail as not found,
 /// never saying which.
-fn citation_readable(
+pub(crate) fn citation_readable(
 	state: &State,
 	caller: &crate::authn::Caller,
 	id: quant_core::RecordId,

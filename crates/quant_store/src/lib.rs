@@ -18,6 +18,7 @@ mod audit;
 mod claims;
 mod embeddings;
 mod media;
+mod messages;
 mod owner_devices;
 mod questions;
 mod records;
@@ -34,7 +35,9 @@ pub use claims::*;
 pub use embeddings::*;
 use jiff::Timestamp;
 pub use media::*;
+pub use messages::*;
 pub use owner_devices::*;
+use quant_access::Denied;
 use quant_core::Family;
 use quant_core::StreamId;
 use quant_crypto::VaultKey;
@@ -65,6 +68,10 @@ pub enum StoreError {
 	/// A value was rejected.
 	#[error("invalid: {0}")]
 	Invalid(String),
+	/// A grant refused the operation: revoked, expired, out of scope, or
+	/// over its limit. The context decides how much of that to reveal.
+	#[error(transparent)]
+	Denied(#[from] Denied),
 	/// Key handling failed.
 	#[error(transparent)]
 	Crypto(#[from] quant_crypto::CryptoError),

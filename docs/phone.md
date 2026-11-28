@@ -182,8 +182,14 @@ uses the TLS bind address and port the daemon actually advertises (including
 non-default ports and bracketed IPv6 hosts), rather than guessing port 7717.
 
 **Over Wi-Fi.** With the phone on the same network, run `quant link`. It
-prints a link that starts with `quant://link`. Get that text onto the phone
-and paste it into the app, then tap Connect.
+prints a link that starts with `quant://link`. Get that text onto the phone:
+open it from a message to yourself, another app, or the phone's own camera or
+QR reader, and Quant shows what the link names. Paste it into the app if you
+prefer. Either way, tap Connect.
+
+Opening the link only offers the Connect card. Quant does not pair, replace a
+paired vault, start or stop collection, or discard readings until you tap
+Connect, and the vault still asks you to approve the phone's code.
 
 **Over the USB cable.** No shared network is needed while the cable is in.
 Tap the link field in the app, then:
@@ -275,6 +281,14 @@ guest can. So the app is three pieces.
   mode, and the background plugin's `fetch` and `processing` modes and task
   identifiers.
 
+The hosts also own the inbound-link entry points, because the pinned
+Leptoskit SDK has no mobile deep-link plugin: the Android manifest declares
+the `quant` scheme, `MainActivity` registers a small `quant-link` bridge
+plugin, and `platforms/ios/App.swift` does the same from its URL callbacks.
+That plugin holds one link until the screen takes it; it never pairs by
+itself. No camera permission is added, so a QR code is read by the phone's
+own reader or another app.
+
 The iPhone app leaves out the `notifications` plugin. Android needs a
 foreground service, announced by a notification, before it allows background
 location; iOS has no such service, and keeps an app running for as long as it
@@ -350,9 +364,10 @@ quant series device.battery --from -6h
   away ends collection until it is opened again; the notification going away
   is the sign. Collection does not restart after a reboot until you open the
   app.
-- **Pairing is by pasted link.** The desktop window can draw the same link as
-  a QR code, but the phone app cannot scan a code or open `quant://` links
-  itself yet, so paste the link into its field.
+- **The app does not scan QR codes itself.** Open a `quant://link` from another
+  app or with the phone's own camera or QR reader. Quant keeps the link behind
+  a Connect card and never pairs or replaces a vault until you tap it; pasting
+  the link remains available. No camera permission is requested.
 - **Background timers are unproven.** Location and delivery are driven by
   plugin replies and the background service's wake, so they do not depend on
   the screen's timer. The periodic app usage read does. If Android holds that

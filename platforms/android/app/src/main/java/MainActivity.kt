@@ -49,7 +49,7 @@ class MainActivity :
         content = applicationView(this)
         setContentView(content)
         noteAppShortcutLaunch(intent)
-        noteDeepLink(intent)
+        QuantLinkPlugin.noteIntentIfPresent(intent)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Android 13 and later deliver Back only here: the manifest opts in
@@ -88,7 +88,7 @@ class MainActivity :
         super.onNewIntent(intent)
         setIntent(intent)
         noteAppShortcutLaunch(intent)
-        noteDeepLink(intent)
+        QuantLinkPlugin.noteIntentIfPresent(intent)
     }
 
     override fun onSaveInstanceState(state: Bundle) {
@@ -147,6 +147,8 @@ private fun applicationView(activity: Activity): LeptosKitApplicationView {
 
     return LeptosKitApplicationView(activity, embedded, configuration) { bridge, dispatcher ->
         GeneratedPlugins.register(activity, bridge, dispatcher)
+        // App-owned: the generated plugin set has no inbound link handler.
+        dispatcher.register(bridge, QuantLinkPlugin())
     }
 }
 
@@ -156,19 +158,6 @@ private fun noteAppShortcutLaunch(intent: Intent?) {
         val plugin =
             Class.forName("dev.leptoskit.plugins.appshortcuts.AppShortcutsPlugin")
         plugin.getMethod("noteLaunchIfPresent", Intent::class.java).invoke(null, intent)
-    } catch (_: ClassNotFoundException) {
-    } catch (_: ReflectiveOperationException) {
-    }
-}
-
-/** Pushes an inbound VIEW intent into the deep-link plugin when registered. */
-private fun noteDeepLink(intent: Intent?) {
-    if (intent == null) {
-        return
-    }
-    try {
-        val plugin = Class.forName("dev.leptoskit.plugins.deeplink.DeepLinkPlugin")
-        plugin.getMethod("noteIntentIfPresent", Intent::class.java).invoke(null, intent)
     } catch (_: ClassNotFoundException) {
     } catch (_: ReflectiveOperationException) {
     }
