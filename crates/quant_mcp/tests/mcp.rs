@@ -7,6 +7,8 @@ use jiff::Timestamp;
 use quant_access::AgentIdentity;
 use quant_api::ApproveRequest;
 use quant_api::ClientKind;
+use quant_api::CompanionMessageStatus;
+use quant_api::CompanionSend;
 use quant_client::Client;
 use quant_client::Endpoint;
 use quant_client::Identity;
@@ -88,6 +90,27 @@ async fn paired(endpoint: &Endpoint, scopes: Option<&[&str]>) -> Client {
 			.await
 			.unwrap();
 	}
+	client
+}
+
+/// Pair and approve a companion device with the explicit messaging scope.
+async fn paired_phone(endpoint: &Endpoint, name: &str) -> Client {
+	let mut client = Client::new(endpoint.clone(), Identity::generate(name));
+	let pairing = client.pair(ClientKind::Device, &[], None).await.unwrap();
+	let owner = OwnerSession::open(endpoint.clone(), PASS).await.unwrap();
+	owner
+		.approve(&ApproveRequest {
+			client: pairing.pairing_code,
+			scopes: Some(vec!["companion:write".into()]),
+			label: None,
+			lookback_hours: None,
+			expires_in_hours: None,
+			limits: None,
+			unredacted: false,
+			deny_classes: None,
+		})
+		.await
+		.unwrap();
 	client
 }
 
@@ -219,6 +242,8 @@ async fn tools_follow_the_grant() {
 		tool_names(&list),
 		vec![
 			"quant_access_status",
+			"quant_inbox",
+			"quant_inbox_answer",
 			"quant_begin_question",
 			"quant_answer",
 			"quant_overview",
@@ -505,4 +530,104 @@ async fn a_question_flows_through_begin_read_and_answer() {
 			"{expected} missing from {actions:?}"
 		);
 	}
+}
+
+#[tokio::test]
+async fn companion_messages_are_pulled_and_answered_over_mcp() {
+	let (_dir, endpoint, state) = daemon().await;
+	let record = Record::new("screen.frame".parse().unwrap(), DeviceId::new())
+		.starting(Timestamp::now() - SignedDuration::from_mins(5))
+		.with_text("Wrote the release notes in Zed before noon.");
+	let cited = record.id;
+	state.record(record).unwrap();
+
+	let agent = paired(&endpoint, Some(&["screen:read"])).await;
+	let agent_id = agent.me().await.unwrap().client;
+	let phone = paired_phone(&endpoint, "Phone").await;
+	let selected = phone
+		.companion_agents()
+		.await
+		.unwrap()
+		.into_iter()
+		.find(|agent| agent.id == agent_id)
+		.expect("the approved agent is offered to the companion");
+	let sent = phone
+		.send_companion_message(&CompanionSend {
+			to: selected.id,
+			question: "Was I writing before noon?".into(),
+			purpose: Some("the owner asked from their phone".into()),
+			dedupe: "phone-mcp-0001".into(),
+		})
+		.await
+		.unwrap();
+
+	// The inbox and its answer tool are discoverable for an approved agent.
+	let mut server = Server::new(agent, setup());
+	let list = call(&mut server, 1, "tools/list", json!({})).await;
+	let names = tool_names(&list);
+	assert!(names.contains(&"quant_inbox".to_owned()));
+	assert!(names.contains(&"quant_inbox_answer".to_owned()));
+
+	// Pulling twice is still a pull: the message stays open and unread.
+	for id in [2, 3] {
+		let inbox = call(
+			&mut server,
+			id,
+			"tools/call",
+			json!({ "name": "quant_inbox", "arguments": {} }),
+		)
+		.await;
+		assert_eq!(inbox["result"]["isError"], false);
+		let rows: Value =
+			serde_json::from_str(inbox["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+		assert_eq!(rows.as_array().unwrap().len(), 1);
+		assert_eq!(rows[0]["id"], sent.id.0.to_string());
+		assert_eq!(rows[0]["status"], "open");
+		assert_eq!(rows[0]["answer"], json!(null));
+	}
+
+	// The agent records its actual reply, citing a record it can read.
+	let answered = call(
+		&mut server,
+		4,
+		"tools/call",
+		json!({ "name": "quant_inbox_answer", "arguments": {
+			"message_id": sent.id.0.to_string(),
+			"answer": "Yes: the release notes were written in Zed before noon.",
+			"citations": [cited.0.to_string()],
+		} }),
+	)
+	.await;
+	assert_eq!(answered["result"]["isError"], false);
+	let view: Value =
+		serde_json::from_str(answered["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+	assert_eq!(view["status"], "answered");
+	assert_eq!(view["citations"][0], cited.0.to_string());
+
+	// The companion reads the same persisted reply over its typed client.
+	let read = phone.companion_message(sent.id).await.unwrap();
+	assert_eq!(read.status, CompanionMessageStatus::Answered);
+	assert_eq!(
+		read.answer.as_deref(),
+		Some("Yes: the release notes were written in Zed before noon.")
+	);
+	// The inbox is now empty, and another agent never saw it.
+	let inbox = call(
+		&mut server,
+		5,
+		"tools/call",
+		json!({ "name": "quant_inbox", "arguments": {} }),
+	)
+	.await;
+	assert_eq!(inbox["result"]["content"][0]["text"], "[]");
+
+	let mut other = Server::new(paired(&endpoint, Some(&["screen:read"])).await, setup());
+	let other_inbox = call(
+		&mut other,
+		1,
+		"tools/call",
+		json!({ "name": "quant_inbox", "arguments": {} }),
+	)
+	.await;
+	assert_eq!(other_inbox["result"]["content"][0]["text"], "[]");
 }

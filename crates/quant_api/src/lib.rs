@@ -95,6 +95,21 @@ pub mod routes {
 	/// [`QuestionAnswer`](super::QuestionAnswer): record the answer and its
 	/// citations.
 	pub const QUESTION_ANSWER: &str = "/v1/questions/{id}/answer";
+	/// `GET`: approved agents a companion client may address.
+	pub const COMPANION_AGENTS: &str = "/v1/companion/agents";
+	/// `POST` [`CompanionSend`](super::CompanionSend) and `GET` the
+	/// requester's own messages.
+	pub const COMPANION_MESSAGES: &str = "/v1/companion/messages";
+	/// `GET /v1/companion/messages/{id}`: one of the requester's messages
+	/// and its actual reply.
+	pub const COMPANION_MESSAGE: &str = "/v1/companion/messages/{id}";
+	/// `GET`: open messages addressed to the agent, oldest first. A pull:
+	/// listing marks nothing read.
+	pub const INBOX: &str = "/v1/inbox";
+	/// `POST /v1/inbox/{id}/answer`
+	/// [`CompanionAnswer`](super::CompanionAnswer): record the addressed
+	/// agent's actual reply.
+	pub const INBOX_ANSWER: &str = "/v1/inbox/{id}/answer";
 	/// `POST` [`QuestionListRequest`](super::QuestionListRequest): every
 	/// question, recent first (owner).
 	pub const OWNER_QUESTIONS: &str = "/v1/owner/questions";
@@ -1305,6 +1320,103 @@ pub struct QuestionTrail {
 	pub question: QuestionView,
 	/// The audit entries for it, oldest first.
 	pub entries: Vec<AuditEntry>,
+}
+
+/// A companion message id. It shares the questions ledger's id type, which
+/// serialises as a bare UUID and accepts the `ques_` prefix when parsing, but
+/// companion messages live in their own mailbox: they never appear in
+/// [`routes::QUESTIONS_MINE`], and a message id is not a question id on any
+/// data route.
+pub type CompanionMessageId = QuestionId;
+
+/// One approved agent a companion client may address, as the companion sees
+/// it: no scopes, limits, or history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompanionAgent {
+	/// The agent client's id.
+	pub id: ClientId,
+	/// The name the owner approved.
+	pub name: String,
+	/// What the agent said it was when it paired.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub agent: Option<AgentIdentity>,
+}
+
+/// `POST` [`routes::COMPANION_MESSAGES`]: ask one approved agent a question.
+/// Only a client paired as a device or app, holding the explicit
+/// `companion:write` scope, may send.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionSend {
+	/// The approved agent to ask.
+	pub to: ClientId,
+	/// The question, 1 to 2,000 characters.
+	pub question: String,
+	/// Why the companion is asking, 8 to 500 characters when present.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub purpose: Option<String>,
+	/// An idempotency key, 8 to 64 characters of `[A-Za-z0-9._:-]`. Generate
+	/// one when composing and reuse it when retrying: the vault returns the
+	/// original message instead of creating a second question.
+	pub dedupe: String,
+}
+
+/// `POST` [`routes::INBOX_ANSWER`]: the addressed agent's actual reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionAnswer {
+	/// The answer, 1 to 8,000 characters.
+	pub answer: String,
+	/// Records the answer rests on, each readable by the agent's grant.
+	#[serde(default)]
+	pub citations: Vec<RecordId>,
+}
+
+/// Where a companion message stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionMessageStatus {
+	/// Waiting for the addressed agent to pull it.
+	Open,
+	/// Answered by the addressed agent.
+	Answered,
+	/// Left unanswered for seven days, or closed because either side's
+	/// grant was revoked or the companion lost `companion:write`.
+	Abandoned,
+}
+
+/// A companion message as served. The requester sees its own submissions
+/// and replies; the addressed agent sees open messages in its inbox. Nobody
+/// else sees either side of the conversation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionMessageView {
+	/// The message's id.
+	pub id: CompanionMessageId,
+	/// The companion client that asked.
+	pub from: ClientId,
+	/// Its name.
+	pub from_name: String,
+	/// The approved agent addressed.
+	pub to: ClientId,
+	/// Its name.
+	pub to_name: String,
+	/// When it was submitted.
+	pub submitted_at: Timestamp,
+	/// The question, sanitised and redacted for the reader.
+	pub question: String,
+	/// The purpose the companion gave, when it gave one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub purpose: Option<String>,
+	/// Where it stands.
+	pub status: CompanionMessageStatus,
+	/// The agent's actual reply, once it answered. A missing answer means
+	/// no agent has replied; the vault never invents one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub answer: Option<String>,
+	/// When the agent answered.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub answered_at: Option<Timestamp>,
+	/// Records the reply cites.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub citations: Vec<RecordId>,
 }
 
 #[cfg(test)]

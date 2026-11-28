@@ -38,6 +38,11 @@ use quant_api::ClaimCorrectRequest;
 use quant_api::ClaimListRequest;
 use quant_api::ClientKind;
 use quant_api::ClientView;
+use quant_api::CompanionAgent;
+use quant_api::CompanionAnswer;
+use quant_api::CompanionMessageId;
+use quant_api::CompanionMessageView;
+use quant_api::CompanionSend;
 use quant_api::Context;
 use quant_api::ContextRequest;
 use quant_api::DenyRequest;
@@ -764,6 +769,75 @@ impl Client {
 			.await
 	}
 
+	/// Approved agents a companion (a device or app holding
+	/// `companion:write`) may address.
+	pub async fn companion_agents(&self) -> Result<Vec<CompanionAgent>> {
+		self.signed::<(), _>(Method::GET, routes::COMPANION_AGENTS, None, &no_purpose())
+			.await
+	}
+
+	/// Ask one approved agent a question. Reuse the request's `dedupe` key
+	/// when retrying: the daemon returns the original message instead of
+	/// creating a second one.
+	pub async fn send_companion_message(
+		&self,
+		request: &CompanionSend,
+	) -> Result<CompanionMessageView> {
+		self.signed(
+			Method::POST,
+			routes::COMPANION_MESSAGES,
+			Some(request),
+			&no_purpose(),
+		)
+		.await
+	}
+
+	/// This companion's own submissions and their actual replies, newest
+	/// first.
+	pub async fn companion_messages(
+		&self,
+		limit: Option<usize>,
+	) -> Result<Vec<CompanionMessageView>> {
+		self.signed::<(), _>(
+			Method::GET,
+			&list_path(routes::COMPANION_MESSAGES, limit),
+			None,
+			&no_purpose(),
+		)
+		.await
+	}
+
+	/// One of this companion's own messages, with any actual reply.
+	pub async fn companion_message(&self, id: CompanionMessageId) -> Result<CompanionMessageView> {
+		let path = format!("/v1/companion/messages/{id}");
+		self.signed::<(), _>(Method::GET, &path, None, &no_purpose())
+			.await
+	}
+
+	/// Open messages addressed to this agent, oldest first. This is a pull:
+	/// listing marks nothing read.
+	pub async fn inbox(&self, limit: Option<usize>) -> Result<Vec<CompanionMessageView>> {
+		self.signed::<(), _>(
+			Method::GET,
+			&list_path(routes::INBOX, limit),
+			None,
+			&no_purpose(),
+		)
+		.await
+	}
+
+	/// Record this agent's actual reply to an addressed message, with
+	/// citations. Retrying the same reply returns the stored one.
+	pub async fn answer_message(
+		&self,
+		id: CompanionMessageId,
+		request: &CompanionAnswer,
+	) -> Result<CompanionMessageView> {
+		let path = format!("/v1/inbox/{id}/answer");
+		self.signed(Method::POST, &path, Some(request), &no_purpose())
+			.await
+	}
+
 	/// Open an owner session with the passphrase.
 	pub async fn unlock(&self, passphrase: &str) -> Result<OwnerSession> {
 		OwnerSession::open(self.endpoint.clone(), passphrase).await
@@ -1125,6 +1199,14 @@ impl OwnerSession {
 
 /// The default client id type, re-exported for callers.
 pub type Id = ClientId;
+
+/// A list route path, carrying the limit in the signed query string.
+fn list_path(base: &str, limit: Option<usize>) -> String {
+	match limit {
+		Some(limit) => format!("{base}?limit={}", limit.clamp(1, 200)),
+		None => base.to_owned(),
+	}
+}
 
 /// An empty request meta, for calls that carry no purpose.
 fn no_purpose() -> RequestMeta {

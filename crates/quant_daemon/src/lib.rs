@@ -11,6 +11,7 @@ pub mod audio_save;
 mod authn;
 pub mod capture;
 mod claims;
+mod companion;
 mod error;
 mod ingest;
 pub mod learning;
@@ -100,6 +101,14 @@ pub fn router(state: Arc<State>) -> Router {
 		.route(routes::QUESTIONS, post(questions::open))
 		.route(routes::QUESTIONS_MINE, get(questions::mine))
 		.route(routes::QUESTION_ANSWER, post(questions::answer))
+		.route(routes::COMPANION_AGENTS, get(companion::agents))
+		.route(
+			routes::COMPANION_MESSAGES,
+			get(companion::sent).post(companion::send),
+		)
+		.route(routes::COMPANION_MESSAGE, get(companion::message))
+		.route(routes::INBOX, get(companion::inbox))
+		.route(routes::INBOX_ANSWER, post(companion::answer))
 		.route(routes::OWNER_QUESTIONS, post(questions::owner_list))
 		.route(routes::OWNER_QUESTION_TRAIL, post(questions::owner_trail))
 		.route(routes::OWNER_CLAIMS, post(claims::tell))
