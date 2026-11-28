@@ -30,6 +30,8 @@ use leptoskit::guest::spawn;
 use leptoskit::prelude::GetUntracked;
 use leptoskit::prelude::Set;
 use leptoskit_bridge::Error;
+#[cfg(any(feature = "android", feature = "ios"))]
+use leptoskit_bridge::MethodId;
 use leptoskit_bridge::guest::Client;
 use leptoskit_plugin_app_usage as app_usage;
 use leptoskit_plugin_app_usage::guest::AppUsage;
@@ -58,6 +60,10 @@ use leptoskit_plugin_wearable as wearable;
 use leptoskit_plugin_wearable::guest::Wearable;
 use quant_model::phone::Command;
 use quant_model::phone::HEALTH_SECONDS;
+#[cfg(any(feature = "android", feature = "ios"))]
+use quant_model::phone::LINK_NEXT;
+#[cfg(any(feature = "android", feature = "ios"))]
+use quant_model::phone::LINK_PLUGIN;
 use quant_model::phone::Link;
 use quant_model::phone::MAX_EVENT_PAGES;
 use quant_model::phone::Reading;
@@ -68,6 +74,8 @@ use quant_model::phone::USAGE_SECONDS;
 
 use super::Action;
 use super::Grant;
+#[cfg(any(feature = "android", feature = "ios"))]
+use super::Invite;
 use super::State;
 use super::Step;
 use super::bridge;
@@ -80,6 +88,10 @@ const LOCATION_INTERVAL_MS: u32 = 60_000;
 const LOCATION_DISTANCE_M: f64 = 25.0;
 /// How long to wait before asking a plugin again after it failed.
 const RETRY: Duration = Duration::from_secs(30);
+/// How long to wait before asking for an inbound link again after a plugin
+/// failure or an empty answer.
+#[cfg(any(feature = "android", feature = "ios"))]
+const LINK_RETRY: Duration = Duration::from_secs(5);
 /// How often battery and thermal are read when the plugin can't wait for a
 /// change.
 const POWER_POLL: Duration = Duration::from_mins(5);
@@ -165,6 +177,8 @@ impl Running {
 pub fn start(state: &State) {
 	spawn(follow(state.clone()));
 	spawn(run(state.clone()));
+	#[cfg(any(feature = "android", feature = "ios"))]
+	spawn(watch_links(state.clone()));
 }
 
 /// Carry out something the owner asked for on the screen.
@@ -198,6 +212,51 @@ pub fn act(state: &State, action: Action) {
 			}
 		}
 	});
+}
+
+/// Wait for a link the operating system opened, and put it in front of the
+/// owner.
+///
+/// The platform host holds the link until the guest takes it, so a cold
+/// launch is not lost. Taking one changes no collection state: the card's
+/// Connect action is the only thing that sends [`Command::Pair`], and Not now
+/// drops the link. A host that has no link plugin answers `Unavailable`, and
+/// the guest simply carries on with the paste field.
+#[cfg(any(feature = "android", feature = "ios"))]
+async fn watch_links(state: State) {
+	loop {
+		let client = match Client::new(LINK_PLUGIN) {
+			Ok(client) => client,
+			Err(Error::Unavailable) => return,
+			Err(_) => {
+				let _ = sleep(LINK_RETRY).await;
+				continue;
+			}
+		};
+		let call = match client.call(MethodId(LINK_NEXT), &[]) {
+			Ok(call) => call.await,
+			Err(error) => Err(error),
+		};
+		match call {
+			// The host is closing this guest's plugin.
+			Ok(bytes) if bytes.is_empty() => return,
+			Ok(bytes) => {
+				match std::str::from_utf8(&bytes).ok().and_then(Invite::parse) {
+					Some(invite) => state.invite.set(Some(invite)),
+					None => {
+						state.problem.set(Some(
+							"That link can't be used. Paste the link `quant link` shows instead."
+								.to_owned(),
+						))
+					}
+				}
+			}
+			Err(Error::Cancelled | Error::Unavailable) => return,
+			Err(_) => {
+				let _ = sleep(LINK_RETRY).await;
+			}
+		}
+	}
 }
 
 /// Follow the service's snapshots, and start or stop the plugins when the

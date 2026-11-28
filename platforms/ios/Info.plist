@@ -13,6 +13,15 @@
 <key>CFBundleDisplayName</key><string>Quant</string>
 <key>CFBundleExecutable</key><string>App</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<!--
+  A link `quant link` prints. Opening one only offers Connect; it never pairs
+  or replaces a vault by itself. No camera permission is used.
+-->
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleTypeRole</key><string>Viewer</string>
+<key>CFBundleURLName</key><string>dev.leptoskit.quant.link</string>
+<key>CFBundleURLSchemes</key><array><string>quant</string></array>
+</dict></array>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>UILaunchScreen</key><dict/>
