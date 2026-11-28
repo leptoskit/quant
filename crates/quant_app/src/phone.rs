@@ -1441,7 +1441,6 @@ fn invite_card(state: &State) -> Element {
 			};
 			View()
 				.class(theme::CARD)
-				.child(Text("LINK RECEIVED").class(theme::EYEBROW))
 				.child(
 					Text(if part.replace {
 						"Connect to another vault?"
@@ -1453,9 +1452,9 @@ fn invite_card(state: &State) -> Element {
 				)
 				.child(
 					Text(format!(
-						"A link opened Quant for the vault {route}. Quant checks the certificate \
-						 it pinned, then asks your computer to approve this phone. Nothing is \
-						 sent until you tap Connect, so only connect if you just ran `quant link` \
+						"This link points to the vault {route}. Quant checks the vault's \
+						 certificate, then asks your computer to approve this phone. Nothing is \
+						 sent until you tap Connect. Only connect if you just ran `quant link` \
 						 yourself."
 					))
 					.class(theme::MUTED),
@@ -1532,8 +1531,8 @@ fn welcome_view(state: &State) -> Element {
 					1,
 					Icon::Lock,
 					"Write-only by default",
-					"Recording starts with write scopes only. Vault stats and Ask stay off until \
-					 you approve them separately.",
+					"Recording starts with write-only access. Stats and Ask stay off until you \
+					 approve them on your computer.",
 				))
 				.child(promise(
 					2,
@@ -1863,9 +1862,9 @@ fn vault_view(state: &State, part: &VaultPart) -> Element {
 				)
 				.child(
 					Text(
-						"Open Quant on your computer, compare this code under Pending approvals, \
-						 and approve it — or run the command below. This grant is write-only; \
-						 optional Vault stats and Ask stay off until you approve them separately.",
+						"In desktop Quant, open Agents → Waiting for approval and approve this \
+						 code — or run the command below. Pairing stays write-only; Stats and Ask \
+						 stay off until you approve them separately.",
 					)
 					.class(theme::MUTED),
 				)
@@ -1967,8 +1966,8 @@ fn vault_view(state: &State, part: &VaultPart) -> Element {
 								)
 								.child(
 									Text(format!(
-										"{place} · Collector is write-only. Vault stats and Ask \
-										 use a separate opt-in companion grant."
+										"{place} · Recording is write-only. Stats and Ask use \
+										 separate access you approve."
 									))
 									.class(theme::MUTED),
 								),
@@ -2001,11 +2000,8 @@ fn pair_view(state: &State) -> Element {
 					 quant://link on this phone.",
 				))
 				.child(
-					Text(
-						"Quant shows the vault destination for review before sending a pairing \
-						 request. Or generate a link in a terminal:",
-					)
-					.class(theme::MUTED),
+					Text("Review the vault before connecting. Or generate a link in a terminal:")
+						.class(theme::MUTED),
 				)
 				.child(Text("quant link").class(theme::CODE)),
 		)
@@ -2014,7 +2010,7 @@ fn pair_view(state: &State) -> Element {
 				.class(theme::CARD)
 				.child(step(
 					2,
-					"Paste fallback: paste the quant://link here if you copied it instead.",
+					"Paste the quant://link here if you copied it instead.",
 				))
 				.child(
 					TextInput()
@@ -2832,8 +2828,9 @@ mod tests {
 
 		// Switching to Vault and Ask never emits OS permission prompts.
 		tester.tap(&Finder::test_id("tab-vault")).unwrap();
+		tester.get_by_text("View stats on this phone").unwrap();
 		tester
-			.get_by_text("View Vault stats on this phone")
+			.get_by_text("Counts, averages, and durations. Never raw records, text, or media.")
 			.unwrap();
 		assert!(
 			done.lock()
@@ -2844,6 +2841,9 @@ mod tests {
 
 		tester.tap(&Finder::test_id("tab-ask")).unwrap();
 		tester.get_by_text("Ask your approved agents").unwrap();
+		tester
+			.get_by_text("Send questions to your approved agents. Their replies appear here.")
+			.unwrap();
 		assert!(
 			done.lock()
 				.unwrap()
@@ -2885,7 +2885,7 @@ mod tests {
 			)
 			.unwrap();
 		tester
-			.get_by_text("Paste fallback: paste the quant://link here if you copied it instead.")
+			.get_by_text("Paste the quant://link here if you copied it instead.")
 			.unwrap();
 	}
 
@@ -2982,9 +2982,7 @@ mod tests {
 			.unwrap();
 		tester.get_by_text("Heart rate").unwrap();
 		tester.get_by_text("2 samples").unwrap();
-		tester
-			.get_by_text("Showing 2 of 3 permitted streams")
-			.unwrap();
+		tester.get_by_text("Showing 2 of 3 streams").unwrap();
 
 		// Load page 2 with a custom stream.
 		tester.tap(&Finder::test_id("vault-load-more")).unwrap();
@@ -3176,7 +3174,7 @@ mod tests {
 		state.apply_snapshot(revoked);
 		tester.pump();
 		assert!(state.vault_ui.get_untracked().streams.is_empty());
-		tester.get_by_text("Companion access ended").unwrap();
+		tester.get_by_text("Access ended").unwrap();
 		assert!(state.snapshot.get_untracked().collecting);
 	}
 
@@ -3191,11 +3189,11 @@ mod tests {
 			harness(ready_with_companion(StatsAccess::Ready, StatsAccess::Ready));
 
 		tester.tap(&Finder::test_id("tab-ask")).unwrap();
-		tester.get_by_text("Targeted agent inbox").unwrap();
+		tester.get_by_text("Ask an agent").unwrap();
 		tester
 			.get_by_text(
-				"Approved agents retrieve questions when they check their Quant inbox. Replies \
-				 appear here once an agent actually answers.",
+				"A question waits until the chosen agent checks its Quant inbox. Its saved reply \
+				 appears here when it answers.",
 			)
 			.unwrap();
 
@@ -3401,6 +3399,12 @@ mod tests {
 		tester.tap(&Finder::test_id("tab-vault")).unwrap();
 		tester.get_by_text("ABCD-1234").unwrap();
 		tester
+			.get_by_text(
+				"In desktop Quant, open Agents → Waiting for approval and approve this code. \
+				 Recording keeps working. Or run this in a terminal on your computer:",
+			)
+			.unwrap();
+		tester
 			.get_by_text("quant approve ABCD-1234 --scope '*:summary'")
 			.unwrap();
 
@@ -3425,7 +3429,7 @@ mod tests {
 		));
 		tester.pump();
 		tester.tap(&Finder::test_id("tab-ask")).unwrap();
-		tester.get_by_text("Ask not enabled on this grant").unwrap();
+		tester.get_by_text("Ask isn't on for this phone").unwrap();
 
 		// Explicit capability change banner appears while existing access stays
 		// live.
@@ -3442,6 +3446,12 @@ mod tests {
 		tester.pump();
 		tester
 			.get_by_text("Approve Stats + Ask on your computer")
+			.unwrap();
+		tester
+			.get_by_text(
+				"Your current access stays on until you approve this change for code ABCD-1234. \
+				 Run this in a terminal on your computer, then tap I approved it:",
+			)
 			.unwrap();
 		tester
 			.get_by_text("quant approve ABCD-1234 --scope '*:summary' --scope companion:write")

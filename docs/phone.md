@@ -243,19 +243,18 @@ collection permission prompts.
 
 To enable **Vault**, **Ask**, or both:
 
-1. Open **Vault** or **Ask**, select the capabilities you want, and tap
-   **Request companion access**. Quant generates a separate companion signing
-   key and shows one pairing code and approval command.
-2. On your computer, compare the code in desktop Quant under Pending approvals
-   (or run the printed `quant approve ...` command) with the scopes you want to
-   grant:
+1. Open **Vault** or **Ask**, turn on **View stats** or **Ask agents**, and tap
+   **Request access**. Quant generates a separate companion signing key and
+   shows one pairing code and approval command.
+2. On your computer, open **Agents** → **Waiting for approval** in desktop Quant
+   and approve the code with the scopes you want (or run the printed
+   `quant approve ...` command):
    - `*:summary` (or narrower stream/family summary scopes) for **Vault**.
    - `companion:write` for **Ask**.
 3. Tap **I approved it** on the phone.
 
-Changing capabilities later on an active companion identity prepares an explicit
-`quant approve` update for that same companion code so existing access stays
-intact until you approve the change.
+Changing access later prepares an explicit `quant approve` update for that same
+companion code so existing access stays on until you approve the change.
 
 - **Vault** pages through every permitted stream in the vault catalog (including
   custom streams) and loads per-stream numeric channels, units, buckets, or

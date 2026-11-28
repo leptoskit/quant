@@ -81,14 +81,10 @@ fn render_access(state: &State, part: &AccessPart) -> Element {
 		StatsAccess::Unpaired => {
 			View()
 				.class(theme::CARD)
-				.child(Text("COMPANION ACCESS").class(theme::EYEBROW))
 				.child(Text("Connect to your vault first").class(theme::HEADING))
 				.child(
-					Text(
-						"Pair this phone with your vault before requesting optional Vault stats \
-						 or Ask access.",
-					)
-					.class(theme::MUTED),
+					Text("Pair this phone with your vault before choosing what it can use.")
+						.class(theme::MUTED),
 				)
 		}
 		StatsAccess::Checking => {
@@ -100,15 +96,12 @@ fn render_access(state: &State, part: &AccessPart) -> Element {
 						.class("flex-row items-center gap-3")
 						.child(ActivityIndicator(true))
 						.child(
-							Text("Checking companion access…")
+							Text("Checking access…")
 								.class(theme::HEADING)
 								.test_id(format!("companion-checking-{}", cap_id(part.focus))),
 						),
 				)
-				.child(
-					Text("Verifying this phone's companion grant with your vault.")
-						.class(theme::MUTED),
-				)
+				.child(Text("Confirming what this phone can use.").class(theme::MUTED))
 				.child(
 					Button("Check now")
 						.class(theme::SECONDARY)
@@ -152,8 +145,8 @@ fn render_access(state: &State, part: &AccessPart) -> Element {
 				)
 				.child(
 					Text(
-						"Recording continues offline on this phone. Vault stats and Ask need your \
-						 vault to answer.",
+						"Recording continues on this phone. Stats and Ask need your vault to \
+						 answer.",
 					)
 					.class(theme::CAPTION),
 				)
@@ -185,18 +178,18 @@ fn capability_toggles(state: &State, part: &AccessPart) -> Element {
 					.child(
 						View()
 							.class("flex-1 gap-1")
-							.child(Text("Vault stats").class(theme::LABEL))
+							.child(Text("View stats").class(theme::LABEL))
 							.child(
 								Text(
-									"Bounded stream counts, units, averages, and durations \
-									 (*:summary). Never raw records, text, or media.",
+									"Counts, averages, and durations. Never raw records, text, or \
+									 media.",
 								)
 								.class(theme::CAPTION),
 							),
 					)
 					.child(
 						Switch(part.cap_stats)
-							.accessibility_label("Select Vault stats capability")
+							.accessibility_label("Select stats access")
 							.test_id("cap-stats")
 							.on_toggle(move |on| stats_sig.set(on)),
 					),
@@ -209,18 +202,18 @@ fn capability_toggles(state: &State, part: &AccessPart) -> Element {
 					.child(
 						View()
 							.class("flex-1 gap-1")
-							.child(Text("Ask approved agents").class(theme::LABEL))
+							.child(Text("Ask agents").class(theme::LABEL))
 							.child(
 								Text(
-									"Send questions to approved agents and read their actual \
-									 replies (companion:write).",
+									"Send questions to your approved agents. Their replies appear \
+									 here.",
 								)
 								.class(theme::CAPTION),
 							),
 					)
 					.child(
 						Switch(part.cap_ask)
-							.accessibility_label("Select Ask agents capability")
+							.accessibility_label("Select Ask agents")
 							.test_id("cap-ask")
 							.on_toggle(move |on| ask_sig.set(on)),
 					),
@@ -244,36 +237,25 @@ fn request_card(state: &State, part: &AccessPart, managing: bool) -> Element {
 	let close = state.clone();
 	let forget = state.clone();
 	let title = if managing {
-		"Companion access"
+		"Change access"
 	} else {
 		match part.focus {
-			CompanionCapability::StatsSummary => "View Vault stats on this phone",
+			CompanionCapability::StatsSummary => "View stats on this phone",
 			CompanionCapability::AskAgents => "Ask your approved agents",
 		}
 	};
 	let intro = if managing {
-		"Change which capabilities this phone's companion identity holds. Any change waits for \
-		 explicit approval on your computer."
+		"Choose what this phone can use. Changes wait for your approval on your computer."
 	} else {
-		match part.focus {
-			CompanionCapability::StatsSummary => {
-				"Recording is write-only and keeps working either way. Request an opt-in companion \
-				 grant to browse bounded stream stats with no owner passphrase."
-			}
-			CompanionCapability::AskAgents => {
-				"Recording is write-only and keeps working either way. Request an opt-in companion \
-				 grant to message approved agents and read their actual replies."
-			}
-		}
+		"Recording stays write-only and keeps working. Choose what you want, then request access."
 	};
 	let button_label = if managing {
-		"Request capability change"
+		"Request change"
 	} else {
-		"Request companion access"
+		"Request access"
 	};
 	View()
 		.class(theme::CARD)
-		.child(Text("OPTIONAL COMPANION ACCESS").class(theme::EYEBROW))
 		.child(
 			Text(title)
 				.class(theme::HEADING)
@@ -292,7 +274,7 @@ fn request_card(state: &State, part: &AccessPart, managing: bool) -> Element {
 							let capabilities = selected_capabilities(&request);
 							if capabilities.is_empty() {
 								request.problem.set(Some(
-									"Select at least Vault stats or Ask agents first.".to_owned(),
+									"Select at least View stats or Ask agents first.".to_owned(),
 								));
 							} else {
 								request.send(Command::RequestCompanion { capabilities });
@@ -300,7 +282,7 @@ fn request_card(state: &State, part: &AccessPart, managing: bool) -> Element {
 						}),
 				)
 				.children(managing.then(|| {
-					Button("Remove companion access")
+					Button("Remove access")
 						.class(theme::SECONDARY)
 						.test_id("companion-forget")
 						.on_press(move || {
@@ -325,32 +307,31 @@ fn pending_card(
 ) -> Element {
 	let check = state.clone();
 	let forget = state.clone();
+	let detail = if approve.is_some() {
+		"In desktop Quant, open Agents → Waiting for approval and approve this code. Recording \
+		 keeps working. Or run this in a terminal on your computer:"
+	} else {
+		"In desktop Quant, open Agents → Waiting for approval and approve this code. Recording \
+		 keeps working."
+	};
 	View()
 		.class(theme::CARD)
-		.child(Text("WAITING FOR OWNER APPROVAL").class(theme::EYEBROW))
 		.child(
-			Text("Approve this phone's companion access")
+			Text("Waiting for approval")
 				.class(theme::HEADING)
 				.test_id(format!("companion-pending-{}", cap_id(focus))),
 		)
 		.child(
 			View()
 				.class(format!("{} items-center", theme::HERO))
-				.child(Text("COMPANION CODE").class(theme::CAPTION))
+				.child(Text("CODE").class(theme::CAPTION))
 				.child(
 					Text(code.to_owned())
 						.class("text-3xl font-bold text-[#F4F1FF]")
 						.test_id("companion-code"),
 				),
 		)
-		.child(
-			Text(
-				"Compare this code in desktop Quant under Pending approvals and approve the \
-				 scopes you want, or run the command below on your computer. Recording continues \
-				 separately.",
-			)
-			.class(theme::MUTED),
-		)
+		.child(Text(detail).class(theme::MUTED))
 		.children(approve.map(|command| {
 			Text(command.to_owned())
 				.class(theme::CODE)
@@ -386,12 +367,11 @@ fn pending_other_card(
 	let check = state.clone();
 	View()
 		.class(theme::CARD)
-		.child(Text("COMPANION REQUEST PENDING").class(theme::EYEBROW))
-		.child(Text("A companion request is already waiting").class(theme::HEADING))
+		.child(Text("This phone is waiting for approval").class(theme::HEADING))
 		.child(
 			Text(format!(
-				"Code {code} is waiting for approval on your computer without this capability \
-				 selected. Select the capabilities you want below to update the approval command."
+				"Code {code} is already waiting. Choose what you want below, then approve the \
+				 updated code in desktop Quant under Agents → Waiting for approval."
 			))
 			.class(theme::MUTED),
 		)
@@ -405,14 +385,14 @@ fn pending_other_card(
 			View()
 				.class("gap-2")
 				.child(
-					Button("Update requested capabilities")
+					Button("Update request")
 						.class(theme::PRIMARY)
 						.test_id("companion-request")
 						.on_press(move || {
 							let capabilities = selected_capabilities(&update);
 							if capabilities.is_empty() {
 								update.problem.set(Some(
-									"Select at least Vault stats or Ask agents first.".to_owned(),
+									"Select at least View stats or Ask agents first.".to_owned(),
 								));
 							} else {
 								update.send(Command::RequestCompanion { capabilities });
@@ -440,7 +420,6 @@ fn pending_change_card(state: &State, change: &CompanionChange, part: &AccessPar
 		.join(" + ");
 	View()
 		.class(theme::CARD)
-		.child(Text("APPROVE CAPABILITY CHANGE").class(theme::EYEBROW))
 		.child(
 			Text(format!("Approve {labels} on your computer"))
 				.class(theme::HEADING)
@@ -448,8 +427,8 @@ fn pending_change_card(state: &State, change: &CompanionChange, part: &AccessPar
 		)
 		.child(
 			Text(format!(
-				"Your current companion grant stays active until you approve this change on your \
-				 computer for code {}. Run the command below, then tap I approved it.",
+				"Your current access stays on until you approve this change for code {}. Run this \
+				 in a terminal on your computer, then tap I approved it:",
 				change.code
 			))
 			.class(theme::MUTED),
@@ -492,30 +471,30 @@ fn restricted_card(state: &State, part: &AccessPart) -> Element {
 	let (heading, detail) = match part.focus {
 		CompanionCapability::StatsSummary if part.other_state.access == StatsAccess::Ready => {
 			(
-				"Vault stats not enabled on this grant",
-				"This phone's companion grant currently allows Ask only. Select Vault stats below \
-				 to prepare an updated approval command for your computer.",
+				"Stats aren't on for this phone",
+				"This phone can ask agents but not view stats. Request a change below; your \
+				 current access stays on until your computer approves it.",
 			)
 		}
 		CompanionCapability::AskAgents if part.other_state.access == StatsAccess::Ready => {
 			(
-				"Ask not enabled on this grant",
-				"This phone's companion grant currently allows Vault stats only. Select Ask below \
-				 to prepare an updated approval command for your computer.",
+				"Ask isn't on for this phone",
+				"This phone can view stats but not ask agents. Request a change below; your \
+				 current access stays on until your computer approves it.",
 			)
 		}
 		CompanionCapability::StatsSummary => {
 			(
-				"No streams shared with this phone",
-				"Your companion grant is active, but it does not share any readable streams. \
-				 Update the grant on your computer or request a capability change below.",
+				"No streams are shared with this phone",
+				"Access is approved, but your vault shares no streams. Change what is shared on \
+				 your computer, or request a change below.",
 			)
 		}
 		CompanionCapability::AskAgents => {
 			(
-				"Ask not granted by your vault",
-				"Your companion grant is active, but it does not include companion:write. Request \
-				 an updated grant below and approve it on your computer.",
+				"Ask isn't on for this phone",
+				"Access is approved, but Ask is not included. Request a change below; your \
+				 computer approves the new access.",
 			)
 		}
 	};
@@ -541,14 +520,14 @@ fn restricted_card(state: &State, part: &AccessPart) -> Element {
 			View()
 				.class("gap-2 pt-2")
 				.child(
-					Button("Prepare approval update")
+					Button("Request change")
 						.class(theme::PRIMARY)
 						.test_id("companion-request")
 						.on_press(move || {
 							let capabilities = selected_capabilities(&request);
 							if capabilities.is_empty() {
 								request.problem.set(Some(
-									"Select at least Vault stats or Ask agents first.".to_owned(),
+									"Select at least View stats or Ask agents first.".to_owned(),
 								));
 							} else {
 								request.send(Command::RequestCompanion { capabilities });
@@ -556,7 +535,7 @@ fn restricted_card(state: &State, part: &AccessPart) -> Element {
 						}),
 				)
 				.child(
-					Button("Remove companion access")
+					Button("Remove access")
 						.class(theme::QUIET)
 						.test_id("companion-forget")
 						.on_press(move || forget.send(Command::ForgetCompanion)),
@@ -567,9 +546,7 @@ fn restricted_card(state: &State, part: &AccessPart) -> Element {
 fn revoked_card(state: &State, part: &AccessPart) -> Element {
 	let request = state.clone();
 	let reason = part.this_state.problem.clone().unwrap_or_else(|| {
-		"This phone's companion grant was denied, revoked, or expired. Recording continues \
-		 separately."
-			.to_owned()
+		"This phone's access was denied, revoked, or expired. Recording keeps working.".to_owned()
 	});
 	View()
 		.class(theme::CARD)
@@ -581,7 +558,7 @@ fn revoked_card(state: &State, part: &AccessPart) -> Element {
 					View()
 						.class("flex-1 gap-1")
 						.child(
-							Text("Companion access ended")
+							Text("Access ended")
 								.class(theme::HEADING)
 								.test_id(format!("companion-revoked-{}", cap_id(part.focus))),
 						)
@@ -590,21 +567,21 @@ fn revoked_card(state: &State, part: &AccessPart) -> Element {
 		)
 		.child(
 			Text(
-				"Quant cleared cached session data and will not re-pair automatically. Choose \
+				"Cached data was cleared, and this phone will not reconnect on its own. Choose \
 				 what you want to request again below.",
 			)
 			.class(theme::CAPTION),
 		)
 		.child(capability_toggles(state, part))
 		.child(
-			Button("Request companion access again")
+			Button("Request access again")
 				.class(theme::PRIMARY)
 				.test_id("companion-request")
 				.on_press(move || {
 					let capabilities = selected_capabilities(&request);
 					if capabilities.is_empty() {
 						request.problem.set(Some(
-							"Select at least Vault stats or Ask agents first.".to_owned(),
+							"Select at least View stats or Ask agents first.".to_owned(),
 						));
 					} else {
 						request.send(Command::RequestCompanion { capabilities });

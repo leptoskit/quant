@@ -181,11 +181,11 @@ fn ask_ready_view(state: &State, ui: &AskUiState) -> Element {
 	let mut root = View().class("gap-3").child(
 		View()
 			.class("gap-2.5 p-4 rounded-3xl border border-[#2A2560] bg-[#17143A]")
-			.child(Text("Targeted agent inbox").class(theme::HEADING))
+			.child(Text("Ask an agent").class(theme::HEADING))
 			.child(
 				Text(
-					"Approved agents retrieve questions when they check their Quant inbox. \
-					 Replies appear here once an agent actually answers.",
+					"A question waits until the chosen agent checks its Quant inbox. Its saved \
+					 reply appears here when it answers.",
 				)
 				.class(theme::CAPTION)
 				.test_id("ask-inbox-note"),
@@ -258,7 +258,7 @@ fn agent_directory_card(state: &State, ui: &AskUiState) -> Element {
 				.class("flex-row items-center gap-3")
 				.child(ActivityIndicator(true))
 				.child(
-					Text("Loading approved agents…")
+					Text("Loading agents…")
 						.class(theme::MUTED)
 						.test_id("ask-agents-loading"),
 				),
@@ -268,8 +268,8 @@ fn agent_directory_card(state: &State, ui: &AskUiState) -> Element {
 	if ui.agents.is_empty() {
 		return card.child(
 			Text(
-				"No approved agents are available in your vault yet. Approve an agent on your \
-				 computer to send it questions here.",
+				"No agents are approved yet. Approve one in desktop Quant to ask it questions \
+				 here.",
 			)
 			.class(theme::MUTED)
 			.test_id("ask-agents-empty"),
@@ -318,7 +318,7 @@ fn composer_card(state: &State, ui: &AskUiState) -> Element {
 		.as_deref()
 		.and_then(|id| ui.agents.iter().find(|agent| agent.id == id));
 	let recipient_text = chosen.map_or_else(
-		|| "Recipient: choose an approved agent above".to_owned(),
+		|| "To: choose an agent above".to_owned(),
 		|agent| format!("To: {}", agent.name),
 	);
 	let typing = state.clone();
@@ -333,7 +333,7 @@ fn composer_card(state: &State, ui: &AskUiState) -> Element {
 
 	View()
 		.class(theme::CARD)
-		.child(Text("New question").class(theme::HEADING))
+		.child(Text("Ask a question").class(theme::HEADING))
 		.child(
 			Text(recipient_text)
 				.class(theme::LABEL)
@@ -364,7 +364,7 @@ fn composer_card(state: &State, ui: &AskUiState) -> Element {
 fn messages_card(state: &State, ui: &AskUiState) -> Element {
 	let mut card = View()
 		.class(theme::CARD)
-		.child(Text("Your agent replies").class(theme::HEADING));
+		.child(Text("Your questions and replies").class(theme::HEADING));
 
 	if ui.loading_messages && !ui.messages_loaded {
 		return card.child(
@@ -381,7 +381,7 @@ fn messages_card(state: &State, ui: &AskUiState) -> Element {
 
 	if ui.messages.is_empty() {
 		return card.child(
-			Text("Questions you send from this phone and their actual agent replies appear here.")
+			Text("Questions you send from this phone and the replies you get appear here.")
 				.class(theme::MUTED)
 				.test_id("ask-messages-empty"),
 		);
@@ -438,7 +438,8 @@ fn message_row(state: &State, msg: &CompanionMessageRow) -> Element {
 			row = row
 				.child(
 					Text(format!(
-						"Waiting in {}'s Quant inbox. No reply has arrived yet.",
+						"Waiting for {} to check its Quant inbox. The saved reply appears here \
+						 when it answers.",
 						msg.to_name
 					))
 					.class(theme::MUTED),
@@ -507,10 +508,7 @@ fn message_row(state: &State, msg: &CompanionMessageRow) -> Element {
 		}
 		CompanionReplyStatus::Closed => {
 			row = row
-				.child(
-					Text("Closed without an answer (expired or access changed).")
-						.class(theme::MUTED),
-				)
+				.child(Text("No reply arrived before this question closed.").class(theme::MUTED))
 				.child(
 					Button("Ask again")
 						.class(theme::COMPACT)

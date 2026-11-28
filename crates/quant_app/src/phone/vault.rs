@@ -320,10 +320,8 @@ fn catalog_view(state: &State, ui: &VaultUiState) -> Element {
 						.test_id("vault-empty"),
 				)
 				.child(
-					Text(
-						"No readable streams are available in your companion grant for this range.",
-					)
-					.class(theme::MUTED),
+					Text("No streams are shared with this phone for this range.")
+						.class(theme::MUTED),
 				),
 		);
 	}
@@ -354,7 +352,7 @@ fn catalog_view(state: &State, ui: &VaultUiState) -> Element {
 			View()
 				.class(theme::CARD)
 				.child(
-					Text(format!("Showing {shown} of {total} permitted streams"))
+					Text(format!("Showing {shown} of {total} streams"))
 						.class(theme::CAPTION)
 						.test_id("vault-page-count"),
 				)
@@ -458,7 +456,6 @@ fn detail_view(state: &State, ui: &VaultUiState) -> Element {
 		.child(
 			View()
 				.class(theme::CARD)
-				.child(Text("STREAM DETAIL").class(theme::EYEBROW))
 				.child(Text(title).class(theme::TITLE).test_id("detail-title"))
 				.child(Text(stream_id).class(theme::CAPTION).test_id("detail-id"))
 				.child(range_toolbar(state, ui.window, false))
